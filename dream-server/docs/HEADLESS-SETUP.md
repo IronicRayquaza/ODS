@@ -15,16 +15,19 @@ The headless setup stack is implemented on `main` across the setup-card script,
 dashboard, dashboard API, host agent, mDNS announcer, AP-mode script, and Caddy
 proxy extensions.
 
-Status is **deployed in code, tested in pieces, and awaiting full end-to-end
-hardware validation** for a packaged appliance flow. In particular:
+Status is **deployed in code and partially validated on the real hardware
+fleet** for the LAN, mDNS, dashboard, magic-link, and Hermes access paths. The
+packaged appliance handoff still needs per-image validation because routers,
+Wi-Fi chipsets, AP-mode behavior, and client devices vary. In particular:
 
 - Magic-link generation, QR rendering, first-run state, and dashboard flows have
   unit/integration coverage.
 - Wi-Fi management is implemented for Linux hosts with NetworkManager / `nmcli`.
 - AP mode is available but intentionally disabled by default because it takes
   over a wireless interface.
-- mDNS plus `dream-proxy` provide the friendly LAN URLs, but local network
-  behavior should be validated on each hardware image and router environment.
+- mDNS plus `dream-proxy` provide the friendly LAN URLs. Fleet validation
+  covers representative LAN behavior, but each packaged hardware image should
+  still be validated on its target router/client environment.
 
 ## User Journey
 
@@ -93,5 +96,5 @@ Use this checklist for each target hardware profile:
 - AP mode is disabled by default because it is intentionally disruptive to a
   wireless interface.
 - mDNS behavior varies by client OS, router, VPN, and enterprise network policy.
-- The complete appliance flow still needs repeated end-to-end testing on target
-  packaged hardware.
+- The complete AP-mode appliance handoff still needs repeated end-to-end
+  testing on each target packaged hardware image.

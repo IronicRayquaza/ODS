@@ -38,7 +38,9 @@ If AI is becoming critical infrastructure, it shouldn’t be rented. Self-hostin
 >
 > **macOS:** Requires Apple Silicon (M1+) and Docker Desktop. llama-server runs natively with Metal GPU acceleration; all other services run in Docker.
 >
-> See the [Support Matrix](dream-server/docs/SUPPORT-MATRIX.md) for details.
+> See the [Support Matrix](dream-server/docs/SUPPORT-MATRIX.md) for supported
+> platform claims and the [Validation Matrix](dream-server/docs/VALIDATION-MATRIX.md)
+> for the real hardware fleet used to test those claims.
 
 ---
 
@@ -356,6 +358,7 @@ Other tools get you part of the way. Dream Server gets you the whole way.
 | [Build On Dream Server](dream-server/docs/BUILD-ON-DREAM-SERVER.md) | Forking, custom editions, extension templates, and downstream validation |
 | [Headless Setup](dream-server/docs/HEADLESS-SETUP.md) | QR onboarding, first-boot setup, AP mode, mDNS, and local agent access |
 | [Support Matrix](dream-server/docs/SUPPORT-MATRIX.md) | Current platform and GPU support status |
+| [Validation Matrix](dream-server/docs/VALIDATION-MATRIX.md) | Sanitized real-hardware fleet coverage and release-readiness evidence |
 | [Model Management](dream-server/docs/MODEL-MANAGEMENT.md) | Dashboard model downloads, switching, and manual GGUF workflows |
 | [Hardware Guide](dream-server/docs/HARDWARE-GUIDE.md) | What to buy, tier recommendations |
 | [FAQ](dream-server/FAQ.md) | Common questions and configuration |

@@ -7,11 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Sanitized real-hardware validation matrix documenting the fleet surface,
+  tested phases, release-readiness receipt, and current evidence boundaries.
 - AMD runtime diagnostics endpoint (`/api/gpu/amd-runtime`) reports Lemonade vs llama-server, host vs container, accelerator backend, and health from explicit installer state.
 - Explicit AMD inference env contract (`AMD_INFERENCE_RUNTIME`, `AMD_INFERENCE_BACKEND`, `AMD_INFERENCE_LOCATION`, `AMD_INFERENCE_PORT`) for Linux, Windows, and WSL/Docker Desktop installs.
 - AMD runtime capability metadata (`AMD_INFERENCE_SUPPORTED_BACKENDS`, `AMD_INFERENCE_RUNTIME_MODE`, `AMD_INFERENCE_MANAGED`) for dashboard diagnostics and `dream doctor`.
 
 ### Changed
+- Linked public support, testing, and platform-claim docs to the validation
+  matrix so release claims point at real hardware evidence.
 - Updated Dream Proxy and Hermes Proxy to `caddy:2.11.3-alpine`.
 - Centralized AMD Lemonade runtime metadata in `config/backends/amd.json` and aligned the Linux Docker image pin to `ghcr.io/lemonade-sdk/lemonade-server:v10.2.0`.
 

@@ -2,10 +2,44 @@
 
 Dream Server supports multiple Linux distributions. This guide covers how to test across distros efficiently.
 
+## Real Hardware Fleet Validation
+
+Dream Server also uses a private real-hardware fleet for release-readiness
+evidence. CI and distrobox are useful for fast installer logic checks, but the
+fleet is where fresh installs, Docker startup, GPU runtime behavior, dashboard
+flows, Hermes auth, model switching, extension install paths, and agent
+capabilities are exercised on real machines.
+
+The sanitized public coverage is maintained in
+[VALIDATION-MATRIX.md](VALIDATION-MATRIX.md). Release notes should cite the
+fleet run date, hardware classes covered, regression replay result, and any
+blocked, deferred, skipped, or not-run phases.
+
+Volunteer and community testers are important for broader distro, GPU, driver,
+and network coverage. Treat those reports as complementary breadth evidence;
+the fleet is the repeatable parallel gate that can run whenever code changes.
+
+Fleet phases currently include:
+
+- regression replay for previously fixed fleet bugs;
+- a constrained Apple Silicon smoke gate before parallel installs;
+- read-only preflight snapshots for OS, RAM, disk, Docker, firewall, ports, and
+  prior install state;
+- non-interactive fresh installs from the public bootstrap path;
+- core HTTP verification for dashboard-api, dashboard UI, llama-server, and
+  Hermes proxy;
+- dashboard model and extension flows;
+- Hermes magic-link auth and seeded chat checks;
+- Playwright dashboard UI checks;
+- agent capability probes for chat, web search, files, code, skills, and model
+  identity;
+- opt-in lifecycle checks for reinstall, restart, and doctor behavior.
+
 ## Quick Reference
 
 | Method | Speed | GPU Testing | Kernel Testing | Best For |
 |--------|-------|-------------|----------------|----------|
+| **Fleet harness** | 15-75 min | Yes | Yes | Release readiness on real heterogeneous hardware |
 | **Distrobox** | Instant (2s) | Yes | No | Daily dev, package manager validation |
 | **Ventoy USB** | 5-10 min boot | Yes | Yes | Weekly full-stack validation |
 | **CI Matrix** | Automatic | No | No | Every PR, syntax + detection checks |

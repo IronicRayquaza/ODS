@@ -22,6 +22,7 @@ echo "[gate] compatibility + claims"
 bash scripts/check-compatibility.sh
 "$PYTHON_CMD" scripts/check-version-consistency.py
 bash scripts/check-release-claims.sh
+"$PYTHON_CMD" scripts/validate-golden-paths.py
 
 echo "[gate] contracts"
 bash tests/contracts/test-installer-contracts.sh

@@ -30,7 +30,7 @@ _SETTINGS_APPLY_ALLOWED_SERVICES = frozenset({
     "llama-server", "open-webui", "litellm", "langfuse", "n8n",
     "hermes", "hermes-proxy", "openclaw", "opencode", "perplexica", "searxng", "qdrant",
     "tts", "whisper", "embeddings", "token-spy", "comfyui",
-    "ape", "privacy-shield",
+    "ape", "privacy-shield", "dream-proxy",
 })
 _LLAMA_APPLY_KEYS = {
     "CTX_SIZE", "MAX_CONTEXT", "GGUF_FILE", "GGUF_URL", "GGUF_SHA256",
@@ -249,6 +249,8 @@ def _serialize_form_values(
 def _match_apply_service(key: str) -> Optional[str]:
     if key in _LLAMA_APPLY_KEYS or key.startswith(("LLAMA_", "GGUF_")):
         return "llama-server"
+    if key == "SEARXNG_URL":
+        return "hermes"
     if (
         key in _OPEN_WEBUI_APPLY_KEYS
         or key.startswith("WEBUI_")
@@ -268,8 +270,12 @@ def _match_apply_service(key: str) -> Optional[str]:
         return "n8n"
     if key == "DREAM_AUTH_UPSTREAM" or key.startswith("HERMES_PROXY_"):
         return "hermes-proxy"
-    if key.startswith("HERMES_"):
+    if key.startswith("HERMES_") or key.startswith("WHATSAPP_"):
         return "hermes"
+    if key.startswith("DREAM_PROXY_"):
+        return "dream-proxy"
+    if key.startswith("OPENCLAW_"):
+        return "openclaw"
     if key.startswith("COMFYUI_"):
         return "comfyui"
     if key.startswith("WHISPER_"):

@@ -69,6 +69,7 @@ _LLM_HEALTH="${SERVICE_HEALTH[llama-server]:-/health}"
 
 "$PYTHON_CMD" - "$HARDWARE_JSON" "$OUTPUT_FILE" "$ENV_MODE" "${HW_CLASS_ID:-unknown}" "${HW_CLASS_LABEL:-Unknown}" "${HW_REC_BACKEND:-cpu}" "${HW_REC_TIER:-T1}" "${HW_REC_COMPOSE_OVERLAYS:-}" "$_LLM_PORT" "$_LLM_HEALTH" <<'PY'
 import json
+import os
 import pathlib
 import sys
 
@@ -99,6 +100,7 @@ gpu_name = gpu.get("name") or "None"
 memory_type = (gpu.get("memory_type") or "none").lower()
 vram_mb = int(gpu.get("vram_mb") or 0)
 gpu_count = int(gpu.get("count") or (1 if gpu_type not in {"none", ""} else 0))
+experimental_jetson = os.environ.get("DREAM_ENABLE_EXPERIMENTAL_JETSON") == "1"
 
 llm_health_url = f"http://localhost:{llm_port}{llm_health}"
 llm_api_port = llm_port
@@ -109,7 +111,7 @@ if gpu_type == "amd" and memory_type == "unified":
 elif gpu_type == "nvidia":
     llm_backend = "nvidia"
     overlays = ["docker-compose.base.yml", "docker-compose.nvidia.yml"]
-elif gpu_type == "jetson":
+elif gpu_type == "jetson" and experimental_jetson:
     # Jetson is Tegra (arm64 + iGPU + unified memory). The dedicated overlay
     # docker-compose.jetson.yml lands in milestone 1 phase 3; until then fall
     # back to the cpu overlay so the installer pipeline stays valid on Jetson

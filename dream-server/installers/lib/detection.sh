@@ -291,7 +291,7 @@ detect_gpu() {
     local _gpu0_sysfs="${DREAM_GPU0_SYSFS:-/sys/devices/gpu.0}"
     local _uname_m="${DREAM_UNAME_M:-$(uname -m)}"
     local _is_jetson=false
-    if [[ "$_uname_m" == "aarch64" ]]; then
+    if [[ "${DREAM_ENABLE_EXPERIMENTAL_JETSON:-0}" == "1" && "$_uname_m" == "aarch64" ]]; then
         if [[ -f "$_tegra_release" ]]; then
             _is_jetson=true
         elif [[ -f "$_dt_compat" ]] && tr -d '\0' < "$_dt_compat" 2>/dev/null | grep -q "nvidia,tegra"; then

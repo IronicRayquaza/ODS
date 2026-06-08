@@ -132,7 +132,13 @@ else
             intel)  GPU_BACKEND="intel" ;;
             cpu)    GPU_BACKEND="cpu" ;;
             apple)  GPU_BACKEND="apple" ;;
-            jetson) GPU_BACKEND="jetson" ;;
+            jetson)
+                if [[ "${DREAM_ENABLE_EXPERIMENTAL_JETSON:-0}" == "1" ]]; then
+                    GPU_BACKEND="jetson"
+                else
+                    GPU_BACKEND="cpu"
+                fi
+                ;;
             *) GPU_BACKEND="nvidia" ;;
         esac
         [[ -n "${CAP_GPU_MEMORY_TYPE:-}" ]] && GPU_MEMORY_TYPE="${CAP_GPU_MEMORY_TYPE}"

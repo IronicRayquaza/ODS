@@ -305,6 +305,8 @@ detect_amd() {
 # Test hooks: DREAM_NV_TEGRA_RELEASE, DREAM_DEVICE_TREE_COMPATIBLE,
 #             DREAM_DEVICE_TREE_MODEL, DREAM_GPU0_SYSFS, DREAM_UNAME_M
 detect_jetson() {
+    [[ "${DREAM_ENABLE_EXPERIMENTAL_JETSON:-0}" == "1" ]] || return 1
+
     local tegra_release="${DREAM_NV_TEGRA_RELEASE:-/etc/nv_tegra_release}"
     local dt_compat="${DREAM_DEVICE_TREE_COMPATIBLE:-/proc/device-tree/compatible}"
     local dt_model="${DREAM_DEVICE_TREE_MODEL:-/proc/device-tree/model}"

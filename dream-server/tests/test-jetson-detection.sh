@@ -3,9 +3,11 @@
 # Test: Jetson detection — detection.sh + detect-hardware.sh
 # ============================================================================
 # Builds a fake /etc/nv_tegra_release + /proc/device-tree/* tree and verifies:
-#   1. installers/lib/detection.sh::detect_gpu() sets GPU_BACKEND=jetson with
+#   1. installers/lib/detection.sh::detect_gpu() only sets GPU_BACKEND=jetson
+#      when DREAM_ENABLE_EXPERIMENTAL_JETSON=1, with
 #      unified-memory layout and a parsed JETSON_L4T_RELEASE.
-#   2. scripts/detect-hardware.sh emits gpu.type=jetson in --json output.
+#   2. scripts/detect-hardware.sh only emits gpu.type=jetson in --json output
+#      when DREAM_ENABLE_EXPERIMENTAL_JETSON=1.
 #
 # Run: bash tests/test-jetson-detection.sh
 # ============================================================================
@@ -57,6 +59,17 @@ assert_match() {
     fi
 }
 
+assert_no_match() {
+    local label="$1" pattern="$2" actual="$3"
+    if [[ "$actual" =~ $pattern ]]; then
+        echo "  FAIL: $label (unexpected match /$pattern/, got '$actual')"
+        FAIL=$((FAIL + 1))
+    else
+        echo "  PASS: $label (no match /$pattern/)"
+        PASS=$((PASS + 1))
+    fi
+}
+
 # ----------------------------------------------------------------------------
 # Build a minimal Jetson fixture tree
 # ----------------------------------------------------------------------------
@@ -74,12 +87,35 @@ printf 'nvidia,p3768-0000+p3767-0005\0nvidia,p3768-0000+p3767-0005\0nvidia,tegra
 
 mkdir -p "$FIXTURE_DIR/gpu.0"
 
-echo "=== Testing detect_gpu() against Jetson fixture ==="
+echo "=== Testing detect_gpu() against Jetson fixture with opt-in disabled ==="
 echo ""
 
 # Reset relevant globals before each invocation.
 unset GPU_BACKEND GPU_NAME GPU_VRAM GPU_COUNT GPU_DEVICE_ID GPU_MEMORY_TYPE JETSON_L4T_RELEASE
 
+DREAM_UNAME_M="aarch64" \
+DREAM_NV_TEGRA_RELEASE="$FIXTURE_DIR/nv_tegra_release" \
+DREAM_DEVICE_TREE_COMPATIBLE="$FIXTURE_DIR/dt_compatible" \
+DREAM_DEVICE_TREE_MODEL="$FIXTURE_DIR/dt_model" \
+DREAM_GPU0_SYSFS="$FIXTURE_DIR/gpu.0" \
+DREAM_DRM_SYS="$FIXTURE_DIR/empty-drm" \
+    detect_gpu || true
+
+if [[ "${GPU_BACKEND:-}" == "jetson" ]]; then
+    echo "  FAIL: default-off fixture wrongly detected as jetson"
+    FAIL=$((FAIL + 1))
+else
+    echo "  PASS: default-off fixture did not claim jetson (backend=${GPU_BACKEND:-unset})"
+    PASS=$((PASS + 1))
+fi
+
+echo ""
+echo "=== Testing detect_gpu() against Jetson fixture with opt-in enabled ==="
+echo ""
+
+unset GPU_BACKEND GPU_NAME GPU_VRAM GPU_COUNT GPU_DEVICE_ID GPU_MEMORY_TYPE JETSON_L4T_RELEASE
+
+DREAM_ENABLE_EXPERIMENTAL_JETSON=1 \
 DREAM_UNAME_M="aarch64" \
 DREAM_NV_TEGRA_RELEASE="$FIXTURE_DIR/nv_tegra_release" \
 DREAM_DEVICE_TREE_COMPATIBLE="$FIXTURE_DIR/dt_compatible" \
@@ -131,6 +167,7 @@ echo "=== Testing scripts/detect-hardware.sh --json with Jetson fixture ==="
 echo ""
 
 JSON_OUT=$(
+    DREAM_ENABLE_EXPERIMENTAL_JETSON=1 \
     DREAM_UNAME_M="aarch64" \
     DREAM_NV_TEGRA_RELEASE="$FIXTURE_DIR/nv_tegra_release" \
     DREAM_DEVICE_TREE_COMPATIBLE="$FIXTURE_DIR/dt_compatible" \
@@ -143,6 +180,21 @@ assert_match "gpu.type=jetson"        '"type":[[:space:]]*"jetson"'           "$
 assert_match "gpu.architecture=tegra" '"architecture":[[:space:]]*"tegra"'    "$JSON_OUT"
 assert_match "gpu.memory_type=unified" '"memory_type":[[:space:]]*"unified"'  "$JSON_OUT"
 assert_match "gpu.name=Orin Nano"     'NVIDIA Jetson Orin Nano'               "$JSON_OUT"
+
+echo ""
+echo "=== Testing scripts/detect-hardware.sh --json default-off against Jetson fixture ==="
+echo ""
+
+JSON_OUT_DEFAULT_OFF=$(
+    DREAM_UNAME_M="aarch64" \
+    DREAM_NV_TEGRA_RELEASE="$FIXTURE_DIR/nv_tegra_release" \
+    DREAM_DEVICE_TREE_COMPATIBLE="$FIXTURE_DIR/dt_compatible" \
+    DREAM_DEVICE_TREE_MODEL="$FIXTURE_DIR/dt_model" \
+    DREAM_GPU0_SYSFS="$FIXTURE_DIR/gpu.0" \
+        bash "$SCRIPT_DIR/scripts/detect-hardware.sh" --json-compact 2>/dev/null
+)
+
+assert_no_match "default-off gpu.type is not jetson" '"type":[[:space:]]*"jetson"' "$JSON_OUT_DEFAULT_OFF"
 
 # ----------------------------------------------------------------------------
 echo ""

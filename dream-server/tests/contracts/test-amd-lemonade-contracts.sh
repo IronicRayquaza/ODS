@@ -177,6 +177,24 @@ if python3 scripts/render-runtime-configs.py \
 else
     fail "LiteLLM Lemonade config must map selected GGUF to openai/extra.\${GGUF_FILE}"
 fi
+if python3 scripts/render-runtime-configs.py \
+        --surface litellm-lemonade \
+        --dream-mode lemonade \
+        --gpu-backend amd \
+        --gguf-file contract-selected.gguf \
+        --lemonade-api-base http://llama-server:8080/api/v1 \
+    | grep -q 'request_timeout: 900' \
+    && python3 scripts/render-runtime-configs.py \
+        --surface litellm-lemonade \
+        --dream-mode lemonade \
+        --gpu-backend amd \
+        --gguf-file contract-selected.gguf \
+        --lemonade-api-base http://llama-server:8080/api/v1 \
+    | grep -q 'stream_timeout: 900'; then
+    pass "LiteLLM Lemonade config keeps long-model proxy timeouts at 900s"
+else
+    fail "LiteLLM Lemonade config must set request_timeout and stream_timeout to 900s"
+fi
 if grep -q '_prewarm_model="extra.${GGUF_FILE}"' installers/phases/12-health.sh; then
     pass "Phase 12 prewarms AMD Lemonade using extra.\${GGUF_FILE}"
 else

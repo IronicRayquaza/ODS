@@ -3,6 +3,8 @@
 Dream Server's Linux installer can wrap an existing Lemonade SDK install instead
 of starting its own managed Lemonade runtime. This is intended for AMD Linux
 systems where Lemonade is already installed, configured, and serving models.
+The longer-term contract for making Lemonade a supported provider mode across
+platforms is defined in [Engine Provider Modes](ENGINE-PROVIDER-MODES.md).
 
 ## Install Around Existing Lemonade
 

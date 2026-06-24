@@ -4747,6 +4747,22 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
 
+def _request_server_shutdown(server, signum=None):
+    """Ask serve_forever() to exit from a helper thread.
+
+    HTTPServer.shutdown() deadlocks when called from the same thread that is
+    running serve_forever(). Python signal handlers run on the main thread, so
+    the SIGTERM path must bounce the shutdown request to another thread.
+    """
+    if signum is not None:
+        logger.info("Received signal %s; shutting down", signum)
+    threading.Thread(
+        target=server.shutdown,
+        name="dream-host-agent-shutdown",
+        daemon=True,
+    ).start()
+
+
 def main():
     global INSTALL_DIR, DATA_DIR, AGENT_API_KEY, GPU_BACKEND, TIER, GPU_COUNT, CORE_SERVICE_IDS
     global USER_EXTENSIONS_DIR, EXTENSIONS_DIR, DREAM_VERSION
@@ -4818,7 +4834,8 @@ def main():
     bind_addr = _resolve_agent_bind_addr(env)
 
     server = ThreadedHTTPServer((bind_addr, port), AgentHandler)
-    signal.signal(signal.SIGTERM, lambda *_: server.shutdown())
+    signal.signal(signal.SIGTERM, lambda signum, _frame: _request_server_shutdown(server, signum))
+    signal.signal(signal.SIGINT, lambda signum, _frame: _request_server_shutdown(server, signum))
     logger.info("Dream Host Agent v%s listening on %s:%d", VERSION, bind_addr, port)
     if bind_addr == "0.0.0.0":
         logger.info(

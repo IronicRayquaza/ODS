@@ -1261,7 +1261,10 @@ else
         [[ -n "$_spec_type" ]] && _llama_args+=(--spec-type "$_spec_type")
         [[ -n "$_spec_draft_n_max" ]] && _llama_args+=(--spec-draft-n-max "$_spec_draft_n_max")
 
-        "$LLAMA_SERVER_BIN" "${_llama_args[@]}" > "$LLAMA_SERVER_LOG" 2>&1 &
+        (
+            cd "$INSTALL_DIR" || exit 1
+            exec "$LLAMA_SERVER_BIN" "${_llama_args[@]}"
+        ) > "$LLAMA_SERVER_LOG" 2>&1 &
         LLAMA_PID=$!
         echo "$LLAMA_PID" > "$LLAMA_SERVER_PID_FILE"
 
@@ -1478,6 +1481,13 @@ else
     # here guarantees a clean slate regardless of what happens below.
     launchctl bootout "gui/$(id -u)/${DREAM_AGENT_PLIST_LABEL}" 2>/dev/null || true
     launchctl bootout "gui/$(id -u)/${OPENCODE_PLIST_LABEL}" 2>/dev/null || true
+    for _legacy_plist_label in \
+        com.dreamserver.llama-server \
+        com.dreamserver.full-model-download; do
+        launchctl bootout "gui/$(id -u)/${_legacy_plist_label}" 2>/dev/null || true
+        rm -f "$HOME/Library/LaunchAgents/${_legacy_plist_label}.plist" 2>/dev/null || true
+    done
+    unset _legacy_plist_label
 
     # ── Start Docker services ──
     chapter "STARTING SERVICES"

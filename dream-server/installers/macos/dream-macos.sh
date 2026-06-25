@@ -349,7 +349,10 @@ start_native_llama() {
     [[ -n "${ENV_LLAMA_ARG_SPEC_TYPE:-}" ]] && llama_args+=(--spec-type "$ENV_LLAMA_ARG_SPEC_TYPE")
     [[ -n "${ENV_LLAMA_ARG_SPEC_DRAFT_N_MAX:-}" ]] && llama_args+=(--spec-draft-n-max "$ENV_LLAMA_ARG_SPEC_DRAFT_N_MAX")
 
-    "$LLAMA_SERVER_BIN" "${llama_args[@]}" > "$LLAMA_SERVER_LOG" 2>&1 &
+    (
+        cd "$INSTALL_DIR" || exit 1
+        exec "$LLAMA_SERVER_BIN" "${llama_args[@]}"
+    ) > "$LLAMA_SERVER_LOG" 2>&1 &
     local pid=$!
     echo "$pid" > "$LLAMA_SERVER_PID_FILE"
 

@@ -35,14 +35,27 @@ FULL_LLM_MODEL="$5"
 FULL_MAX_CONTEXT="$6"
 BOOTSTRAP_GGUF_FILE="${7:-Qwen3.5-2B-Q4_K_M.gguf}"
 
-MODELS_DIR="$INSTALL_DIR/data/models"
-ENV_FILE="$INSTALL_DIR/.env"
-MODELS_INI="$INSTALL_DIR/config/llama-server/models.ini"
 LOG_TAG="[BOOTSTRAP-UPGRADE]"
 
 log()  { echo "$LOG_TAG $(date '+%H:%M:%S') $*"; }
 fail() { log "ERROR: $*"; release_upgrade_lock; exit 1; }
 
+if [[ -z "$INSTALL_DIR" || ! -d "$INSTALL_DIR" ]]; then
+    log "ERROR: install directory does not exist: ${INSTALL_DIR:-<empty>}"
+    exit 1
+fi
+if ! INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd -P)"; then
+    log "ERROR: could not resolve install directory: $INSTALL_DIR"
+    exit 1
+fi
+cd "$INSTALL_DIR" || {
+    log "ERROR: could not enter install directory: $INSTALL_DIR"
+    exit 1
+}
+
+MODELS_DIR="$INSTALL_DIR/data/models"
+ENV_FILE="$INSTALL_DIR/.env"
+MODELS_INI="$INSTALL_DIR/config/llama-server/models.ini"
 STATUS_FILE="$INSTALL_DIR/data/bootstrap-status.json"
 UPGRADE_LOCK_DIR=""
 
@@ -1779,7 +1792,10 @@ elif [[ -f "$INSTALL_DIR/data/.llama-server.pid" ]]; then
 
             # Relaunch with new model
             log "Starting native llama-server with ${_gguf_file}..."
-            "$LLAMA_SERVER_BIN" "${_llama_args[@]}" > "$LLAMA_SERVER_LOG" 2>&1 &
+            (
+                cd "$INSTALL_DIR" || exit 1
+                exec "$LLAMA_SERVER_BIN" "${_llama_args[@]}"
+            ) > "$LLAMA_SERVER_LOG" 2>&1 &
             _new_pid=$!
             echo "$_new_pid" > "$LLAMA_SERVER_PID_FILE"
 
@@ -1805,14 +1821,16 @@ elif [[ -f "$INSTALL_DIR/data/.llama-server.pid" ]]; then
                     kill -9 "$_new_pid" 2>/dev/null || true
                 fi
                 if [[ -n "${_old_model_path:-}" && -f "$_old_model_path" ]]; then
-                    "$LLAMA_SERVER_BIN" \
-                        --host "$_bind" --port 8080 \
-                        --model "$_old_model_path" \
-                        --ctx-size "$_ctx_size" \
-                        --n-gpu-layers 999 \
-                        --reasoning-format "${_reasoning_fmt:-none}" \
-                        --metrics \
-                        > "$LLAMA_SERVER_LOG" 2>&1 &
+                    (
+                        cd "$INSTALL_DIR" || exit 1
+                        exec "$LLAMA_SERVER_BIN" \
+                            --host "$_bind" --port 8080 \
+                            --model "$_old_model_path" \
+                            --ctx-size "$_ctx_size" \
+                            --n-gpu-layers 999 \
+                            --reasoning-format "${_reasoning_fmt:-none}" \
+                            --metrics
+                    ) > "$LLAMA_SERVER_LOG" 2>&1 &
                     _rollback_pid=$!
                     echo "$_rollback_pid" > "$LLAMA_SERVER_PID_FILE"
                     log "Rolled back to previous model: $(basename "$_old_model_path") (PID $_rollback_pid)"
@@ -1820,6 +1838,9 @@ elif [[ -f "$INSTALL_DIR/data/.llama-server.pid" ]]; then
                     log "WARNING: Could not rollback — previous model not found."
                     log "Run './dream-macos.sh restart' to manually recover."
                 fi
+                write_status "failed" 100 "$TOTAL_BYTES" "$TOTAL_BYTES" 0 \
+                    "Full model downloaded and verified, but native macOS llama-server did not load it after swap. Bootstrap model kept; run './dream-macos.sh restart' or re-run to retry."
+                exit 1
             fi
         fi
     fi

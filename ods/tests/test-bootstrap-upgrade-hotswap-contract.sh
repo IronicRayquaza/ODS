@@ -27,12 +27,27 @@ pass "llama-server hot-swap uses force-recreate/no-deps"
 llama_recreate_block="$(awk '
     /Restarting llama-server container/ { in_block=1 }
     in_block { print }
-    in_block && /up -d --force-recreate --no-deps llama-server/ { exit }
+    in_block && /compose_recreate_llama_server_with_retry/ { exit }
 ' "$TARGET" | grep -v '^[[:space:]]*#')"
 
-grep -qF 'env -u GGUF_FILE -u LLM_MODEL -u MAX_CONTEXT -u CTX_SIZE' <<<"$llama_recreate_block" \
+grep -qF 'compose_recreate_llama_server_with_retry "${COMPOSE_ARGS[@]}"' <<<"$llama_recreate_block" \
+    || fail "llama-server hot-swap must use the retrying compose recreate helper"
+pass "llama-server hot-swap uses retrying compose recreate helper"
+
+compose_retry_block="$(awk '
+    /^compose_recreate_llama_server_with_retry\(\)/ { in_block=1 }
+    in_block { print }
+    in_block && /^}/ { exit }
+' "$TARGET" | grep -v '^[[:space:]]*#')"
+
+grep -qF 'env -u GGUF_FILE -u LLM_MODEL -u MAX_CONTEXT -u CTX_SIZE' <<<"$compose_retry_block" \
     || fail "llama-server recreate must strip model vars so .env wins compose interpolation"
 pass "llama-server recreate strips model env before compose"
+grep -qF 'ODS_BOOTSTRAP_COMPOSE_RETRY_ATTEMPTS' <<<"$compose_retry_block" \
+    || fail "llama-server recreate must expose a retry attempt override"
+grep -qF 'No such container' <<<"$compose_retry_block" \
+    || fail "llama-server recreate must retry Docker's missing-container race"
+pass "llama-server recreate retries transient compose races"
 
 if grep -qE '\brestart[[:space:]]+(llama-server|ods-llama-server)\b' <<<"$active_code"; then
     fail "llama-server hot-swap must not use restart; recreate is required so updated env lands"

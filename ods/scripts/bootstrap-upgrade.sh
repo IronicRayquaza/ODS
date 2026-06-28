@@ -117,6 +117,34 @@ write_failed_download_status() {
     write_status "failed" "$percent" "$downloaded" "$total" 0 "$message"
 }
 
+compose_recreate_llama_server_with_retry() {
+    local -a compose_args=("$@")
+    local max_attempts="${ODS_BOOTSTRAP_COMPOSE_RETRY_ATTEMPTS:-3}"
+    if ! [[ "$max_attempts" =~ ^[0-9]+$ ]] || (( max_attempts < 1 )); then
+        max_attempts=3
+    fi
+
+    local attempt=1
+    local retries=$(( max_attempts - 1 ))
+    local output rc
+    while true; do
+        output=$(env -u GGUF_FILE -u LLM_MODEL -u MAX_CONTEXT -u CTX_SIZE \
+            $DOCKER_COMPOSE_CMD "${compose_args[@]}" up -d --force-recreate --no-deps llama-server 2>&1)
+        rc=$?
+        [[ -n "$output" ]] && printf '%s\n' "$output"
+        (( rc == 0 )) && return 0
+
+        if (( attempt >= max_attempts )) || \
+           ! grep -Eiq 'dependency failed to start|No such container|container .* (exited|is unhealthy)|service .* failed to start|failed to start.*container' <<<"$output"; then
+            return "$rc"
+        fi
+
+        log "Docker reported a transient llama-server recreate failure; waiting briefly and retrying (${attempt}/${retries})."
+        sleep "${ODS_BOOTSTRAP_COMPOSE_RETRY_DELAY:-15}"
+        attempt=$(( attempt + 1 ))
+    done
+}
+
 release_upgrade_lock() {
     if [[ -n "${UPGRADE_LOCK_DIR:-}" && -d "$UPGRADE_LOCK_DIR" ]]; then
         rm -rf "$UPGRADE_LOCK_DIR"
@@ -1338,8 +1366,8 @@ elif [[ -n "$DOCKER_CMD" ]] && $DOCKER_CMD ps --filter name=ods-llama-server --f
     # "AMD uses restart to preserve cached binary" comment was wrong —
     # named volumes are decoupled from the container lifecycle.
     if [[ ${#COMPOSE_ARGS[@]} -gt 0 && -n "$DOCKER_COMPOSE_CMD" ]]; then
-        env -u GGUF_FILE -u LLM_MODEL -u MAX_CONTEXT -u CTX_SIZE \
-            $DOCKER_COMPOSE_CMD "${COMPOSE_ARGS[@]}" up -d --force-recreate --no-deps llama-server 2>&1 || true
+        compose_recreate_llama_server_with_retry "${COMPOSE_ARGS[@]}" || \
+            log "WARNING: llama-server recreate command failed after retries; continuing to health check before declaring failure."
     else
         # No reliable compose stack is available. Do NOT stop/remove the
         # currently-running bootstrap container here: leaving an old but

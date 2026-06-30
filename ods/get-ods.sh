@@ -48,6 +48,21 @@ success() { echo -e "${GREEN}[  ok ]${NC} $1"; }
 warn()    { echo -e "${YELLOW}[warn ]${NC} $1"; }
 error()   { echo -e "${RED}[error]${NC} $1"; exit 1; }
 
+remove_install_dir() {
+    local target_dir="$1"
+
+    if rm -rf -- "$target_dir" 2>/dev/null; then
+        return 0
+    fi
+
+    if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+        warn "Normal removal failed; retrying with sudo for root-owned container data."
+        sudo -n rm -rf -- "$target_dir" && return 0
+    fi
+
+    return 1
+}
+
 is_truthy() {
     case "${1:-}" in
         1|true|TRUE|yes|YES|y|Y) return 0 ;;
@@ -254,7 +269,7 @@ if [[ -d "$INSTALL_DIR" ]]; then
         echo ""
         if [[ "$BOOTSTRAP_FORCE" == "true" ]]; then
             echo "  Removing incomplete install because --force was provided."
-            rm -rf "$INSTALL_DIR" || error "Failed to remove incomplete install at $INSTALL_DIR"
+            remove_install_dir "$INSTALL_DIR" || error "Failed to remove incomplete install at $INSTALL_DIR. Try: sudo rm -rf \"$INSTALL_DIR\""
         elif [[ "$BOOTSTRAP_NON_INTERACTIVE" == "true" ]]; then
             echo "  Aborting. Re-run with --force to remove it automatically, or remove manually with: rm -rf $INSTALL_DIR"
             exit 1
@@ -262,7 +277,7 @@ if [[ -d "$INSTALL_DIR" ]]; then
             echo -n "  Remove and reinstall? [y/N] "
             read -r response
             if [[ "$response" =~ ^[Yy]$ ]]; then
-                rm -rf "$INSTALL_DIR" || error "Failed to remove incomplete install at $INSTALL_DIR"
+                remove_install_dir "$INSTALL_DIR" || error "Failed to remove incomplete install at $INSTALL_DIR. Try: sudo rm -rf \"$INSTALL_DIR\""
             else
                 echo "  Aborting. Remove manually with: rm -rf $INSTALL_DIR"
                 exit 1

@@ -134,6 +134,9 @@ assert_contains "$bootstrap" 'BOOTSTRAP_FORCE=false' "bootstrap should parse --f
 assert_contains "$bootstrap" 'BOOTSTRAP_NON_INTERACTIVE=false' "bootstrap should parse --non-interactive before incomplete install prompts"
 assert_contains "$bootstrap" 'Removing incomplete install because --force was provided' "bootstrap --force should remove incomplete install dirs without prompting"
 assert_contains "$bootstrap" 'Re-run with --force to remove it automatically' "bootstrap --non-interactive should fail with a force hint instead of prompting"
+assert_contains "$bootstrap" 'remove_install_dir()' "bootstrap should centralize incomplete install cleanup"
+assert_contains "$bootstrap" 'sudo -n rm -rf -- "\$target_dir"' "bootstrap --force should retry root-owned container data cleanup with sudo -n"
+assert_contains "$bootstrap" 'root-owned container data' "bootstrap sudo fallback should explain root-owned Docker data cleanup"
 
 echo "[contract] runtime dispatcher supports non-gnu Linux OSTYPE"
 dispatcher_common="installers/common.sh"

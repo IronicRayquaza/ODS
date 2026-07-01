@@ -614,6 +614,27 @@ fi
 
 rm -f "$TEMP_DIR/docker-compose.cloud.yml"
 
+# ============================================================================
+# 25. Test that direct LLM consumers have host.docker.internal:host-gateway mapping
+# ============================================================================
+consumers_ok=true
+for file in "$ROOT_DIR/docker-compose.base.yml" \
+            "$ROOT_DIR/extensions/services/hermes/compose.yaml" \
+            "$ROOT_DIR/extensions/services/perplexica/compose.yaml" \
+            "$ROOT_DIR/extensions/services/privacy-shield/compose.yaml" \
+            "$ROOT_DIR/extensions/services/token-spy/compose.yaml" \
+            "$ROOT_DIR/extensions/services/openclaw/compose.yaml"; do
+    if [[ -f "$file" ]]; then
+        if ! grep -q "host.docker.internal:host-gateway" "$file"; then
+            fail "Service compose file $(basename "$file") is missing host.docker.internal:host-gateway mapping"
+            consumers_ok=false
+        fi
+    fi
+done
+if $consumers_ok; then
+    pass "Direct LLM consumers have host.docker.internal:host-gateway mapping in compose configuration"
+fi
+
 echo ""
 echo "Result: $PASSED passed, $FAILED failed"
 [[ $FAILED -eq 0 ]]

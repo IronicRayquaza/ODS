@@ -466,14 +466,22 @@ raise SystemExit(1)' 2>/dev/null && return 0
     ODS_MODE_VALUE="$(if [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "lemonade"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "lemonade"; else echo "${ODS_MODE:-local}"; fi)"
 
     if [[ -n "$EXTERNAL_LLM_URL" ]]; then
-        _default_llm_api_url="$EXTERNAL_LLM_URL"
+        # Normalize loopback values (localhost, 127.0.0.1, [::1]) to host.docker.internal for container-facing variables
+        _normalized_ext_url="$EXTERNAL_LLM_URL"
+        if [[ "$_normalized_ext_url" =~ ^http://(localhost|127\.0\.0\.1|\[::1\])(:|/|$) ]]; then
+            _normalized_ext_url=$(echo "$_normalized_ext_url" | sed -E 's/localhost|127\.0\.0\.1|\[::1\]/host.docker.internal/')
+        fi
+        _default_llm_api_url="$_normalized_ext_url"
     else
         _default_llm_api_url="$(if [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "http://litellm:4000"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "http://litellm:4000"; elif [[ "${ODS_MODE:-local}" == "local" ]]; then echo "http://llama-server:8080"; else echo "http://litellm:4000"; fi)"
     fi
     LLM_API_URL_VALUE=$(_env_get LLM_API_URL "$_default_llm_api_url")
+    if [[ -n "${EXTERNAL_LLM_URL:-}" ]] && [[ "$LLM_API_URL_VALUE" =~ ^http://(localhost|127\.0\.0\.1|\[::1\])(:|/|$) ]]; then
+        LLM_API_URL_VALUE=$(echo "$LLM_API_URL_VALUE" | sed -E 's/localhost|127\.0\.0\.1|\[::1\]/host.docker.internal/')
+    fi
 
     if [[ -n "$EXTERNAL_LLM_URL" ]]; then
-        _default_hermes_base_url="${EXTERNAL_LLM_URL}/v1"
+        _default_hermes_base_url="${_normalized_ext_url}/v1"
         _default_hermes_api_key=""
     elif [[ "${ODS_MODE:-local}" == "cloud" ]]; then
         _default_hermes_base_url="http://litellm:4000/v1"
@@ -486,6 +494,9 @@ raise SystemExit(1)' 2>/dev/null && return 0
         _default_hermes_api_key="sk-ods-hermes-local"
     fi
     HERMES_LLM_BASE_URL_VALUE=$(_env_get HERMES_LLM_BASE_URL "$_default_hermes_base_url")
+    if [[ -n "${EXTERNAL_LLM_URL:-}" ]] && [[ "$HERMES_LLM_BASE_URL_VALUE" =~ ^http://(localhost|127\.0\.0\.1|\[::1\])(:|/|$) ]]; then
+        HERMES_LLM_BASE_URL_VALUE=$(echo "$HERMES_LLM_BASE_URL_VALUE" | sed -E 's/localhost|127\.0\.0\.1|\[::1\]/host.docker.internal/')
+    fi
     HERMES_LLM_API_KEY_VALUE=$(_env_get HERMES_LLM_API_KEY "$_default_hermes_api_key")
     LLM_API_URL="$LLM_API_URL_VALUE"
     HERMES_LLM_BASE_URL="$HERMES_LLM_BASE_URL_VALUE"

@@ -10,13 +10,13 @@
 #           SKIP_MODEL_DOWNLOAD
 # ============================================================================
 
-[[ -f "${SCRIPT_DIR:-}/lib/safe-env.sh" ]] && . "$SCRIPT_DIR/lib/safe-env.sh"
+[[ -f "${SCRIPT_DIR:-}/lib/safe-env.sh" ]] && . "${SCRIPT_DIR:-}/lib/safe-env.sh"
 
 ods_progress 15 "detection" "Detecting external LLM services"
 chapter "EXTERNAL SERVICE DETECTION"
 
 # Guard: if external LLM is already configured (e.g. from existing .env on upgrade), preserve and set skip model download
-if [[ -n "$EXTERNAL_LLM_URL" ]]; then
+if [[ -n "${EXTERNAL_LLM_URL:-}" ]]; then
     # Don't assume — re-probe even on rerun
     _probe_url="${EXTERNAL_LLM_URL/host.docker.internal/127.0.0.1}"
     if ! curl -sf --max-time 2 "${_probe_url}/api/tags" > /dev/null 2>&1 && \
@@ -39,10 +39,10 @@ fi
 
 # Ensure library functions are available
 if ! declare -f detect_ollama >/dev/null; then
-    if [[ -f "$SCRIPT_DIR/installers/lib/external-services.sh" ]]; then
-        source "$SCRIPT_DIR/installers/lib/external-services.sh"
-    elif [[ -f "$SCRIPT_DIR/lib/external-services.sh" ]]; then
-        source "$SCRIPT_DIR/lib/external-services.sh"
+    if [[ -f "${SCRIPT_DIR:-}/installers/lib/external-services.sh" ]]; then
+        source "${SCRIPT_DIR:-}/installers/lib/external-services.sh"
+    elif [[ -f "${SCRIPT_DIR:-}/lib/external-services.sh" ]]; then
+        source "${SCRIPT_DIR:-}/lib/external-services.sh"
     fi
 fi
 
@@ -61,7 +61,7 @@ provider=""
 api_url=""
 
 if [[ -n "$ollama_models" ]]; then
-    matched_model=$(find_matching_external_model "$GGUF_FILE" "$ollama_models") || matched_model=""
+    matched_model=$(find_matching_external_model "${GGUF_FILE:-}" "$ollama_models") || matched_model=""
     if [[ -n "$matched_model" ]]; then
         provider="ollama"
         api_url="http://host.docker.internal:11434"
@@ -69,7 +69,7 @@ if [[ -n "$ollama_models" ]]; then
 fi
 
 if [[ -z "$matched_model" && -n "$lmstudio_models" ]]; then
-    matched_model=$(find_matching_external_model "$GGUF_FILE" "$lmstudio_models") || matched_model=""
+    matched_model=$(find_matching_external_model "${GGUF_FILE:-}" "$lmstudio_models") || matched_model=""
     if [[ -n "$matched_model" ]]; then
         provider="lmstudio"
         api_url="http://host.docker.internal:1234"
@@ -80,7 +80,7 @@ if [[ -n "$matched_model" ]]; then
     ai_ok "Detected active external LLM service: $provider"
     ai "Found matching model: $matched_model"
 
-    if $INTERACTIVE && ! $DRY_RUN; then
+    if [[ "${INTERACTIVE:-false}" == "true" ]] && [[ "${DRY_RUN:-false}" != "true" ]]; then
         echo
         ai "ODS can reuse this service instead of running a local llama-server."
         ai "This will skip the 5GB+ model download and save system memory/GPU resources."
@@ -110,5 +110,5 @@ if [[ -n "$matched_model" ]]; then
         resolve_compose_config
     fi
 else
-    log "No active Ollama or LM Studio service with a matching model ($GGUF_FILE) was found."
+    log "No active Ollama or LM Studio service with a matching model (${GGUF_FILE:-}) was found."
 fi

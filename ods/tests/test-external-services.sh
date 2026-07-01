@@ -48,5 +48,35 @@ _assert_eq "$result" "qwen3:8b" "find match in list"
 result=$(find_matching_external_model "gemma2:9b" "$model_list") || result=""
 _assert_eq "$result" "" "no match returns empty"
 
+# Regression test: source 02b-external-services.sh under set -u with stubs and unset variables
+(
+    set -u
+    # Stub required functions and variables
+    ods_progress() { :; }
+    chapter() { :; }
+    log() { :; }
+    warn() { :; }
+    ai() { :; }
+    ai_ok() { :; }
+    resolve_compose_config() { :; }
+
+    SCRIPT_DIR="$ROOT_DIR"
+    INTERACTIVE=false
+    DRY_RUN=false
+    ODS_MODE=local
+    GGUF_FILE="qwen3:8b"
+
+    # Ensure EXTERNAL_LLM_URL is NOT set/bound
+    unset EXTERNAL_LLM_URL
+    unset EXTERNAL_LLM_PROVIDER
+    unset EXTERNAL_LLM_MODEL
+    unset SKIP_MODEL_DOWNLOAD
+    unset LEMONADE_EXTERNAL
+
+    # Source the phase — this should not crash with unbound variable error
+    source "$ROOT_DIR/installers/phases/02b-external-services.sh"
+    echo "[PASS] Sourced 02b-external-services.sh with unset variables under set -u"
+)
+
 echo ""
 echo "[PASS] All external-services tests passed"

@@ -196,13 +196,21 @@ else
         ods_progress 86 "health" "Verifying external LLM service"
         _external_host_url="${EXTERNAL_LLM_URL/host.docker.internal/127.0.0.1}"
         printf "  ${GRN}...${NC} Probing external LLM service at %-20s " "$_external_host_url"
-        # Try a simple models check (standard for both Ollama and LM Studio OpenAI compat endpoints)
-        if curl -sf --max-time 5 "${_external_host_url}/v1/models" >/dev/null; then
+        # Try a simple models check (standard for both Ollama and LM Studio OpenAI compat endpoints, or Ollama tags endpoint)
+        if curl -sf --max-time 5 "${_external_host_url}/v1/models" >/dev/null || \
+           curl -sf --max-time 5 "${_external_host_url}/api/tags" >/dev/null; then
             printf "\r  ${BGRN}OK${NC} External LLM service healthy (%s)\n" "${EXTERNAL_LLM_PROVIDER:-service}"
         else
-            printf "\r  ${AMB}WARN${NC} External LLM service unreachable at %s\n" "$_external_host_url"
-            ai_warn "External LLM service (${EXTERNAL_LLM_PROVIDER:-service}) at ${_external_host_url} is not responding."
-            ai_warn "Please ensure it is running and accessible."
+            printf "\r  ${RED}FAIL${NC} External LLM service unreachable at %s\n" "$_external_host_url"
+            echo
+            warn "External LLM service (${EXTERNAL_LLM_PROVIDER:-service}) at ${_external_host_url} is not responding."
+            warn "Since ODS is configured to reuse this external service, the local llama-server is disabled and model downloads were skipped."
+            echo
+            ai "To recover:"
+            ai "  1. Ensure your external LLM service (Ollama or LM Studio) is running and accessible at ${_external_host_url}."
+            ai "  2. Or, revert to local mode by removing EXTERNAL_LLM_URL from your .env file and re-running the installer."
+            echo
+            exit 1
         fi
     else
         # Format: _check_health "name" "url" max_attempts timeout_per_request

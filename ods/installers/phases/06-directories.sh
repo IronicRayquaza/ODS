@@ -464,14 +464,14 @@ raise SystemExit(1)' 2>/dev/null && return 0
 
     MODEL_PROFILE_VALUE=$(_env_get MODEL_PROFILE "${MODEL_PROFILE_REQUESTED:-${MODEL_PROFILE:-qwen}}")
     ODS_MODE_VALUE="$(if [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "lemonade"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "lemonade"; else echo "${ODS_MODE:-local}"; fi)"
-    
+
     if [[ -n "$EXTERNAL_LLM_URL" ]]; then
         _default_llm_api_url="$EXTERNAL_LLM_URL"
     else
         _default_llm_api_url="$(if [[ "$LEMONADE_EXTERNAL_VALUE" == "true" ]]; then echo "http://litellm:4000"; elif [[ "$GPU_BACKEND" == "amd" && "${ODS_MODE:-local}" == "local" ]]; then echo "http://litellm:4000"; elif [[ "${ODS_MODE:-local}" == "local" ]]; then echo "http://llama-server:8080"; else echo "http://litellm:4000"; fi)"
     fi
     LLM_API_URL_VALUE=$(_env_get LLM_API_URL "$_default_llm_api_url")
-    
+
     if [[ -n "$EXTERNAL_LLM_URL" ]]; then
         _default_hermes_base_url="${EXTERNAL_LLM_URL}/v1"
         _default_hermes_api_key=""

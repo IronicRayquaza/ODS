@@ -635,6 +635,52 @@ if $consumers_ok; then
     pass "Direct LLM consumers have host.docker.internal:host-gateway mapping in compose configuration"
 fi
 
+# ============================================================================
+# 26. Test that external-LLM stack is a valid compose project (no undefined depends_on)
+# ============================================================================
+real_ext_stdout=$(EXTERNAL_LLM_URL="http://host.docker.internal:11434" \
+    bash "$ROOT_DIR/scripts/resolve-compose-stack.sh" \
+    --script-dir "$ROOT_DIR" --tier 1 --gpu-backend nvidia --skip-broken \
+    2>/dev/null) || true
+
+# Verify compose.local.yaml is excluded when EXTERNAL_LLM_URL is set
+if echo "$real_ext_stdout" | grep -q "compose.local.yaml"; then
+    fail "External-LLM stack unexpectedly included compose.local.yaml overlays: $real_ext_stdout"
+else
+    pass "External-LLM stack correctly excludes compose.local.yaml overlays"
+fi
+
+# Verify docker-compose.cloud.yml is included
+if echo "$real_ext_stdout" | grep -q "docker-compose.cloud.yml"; then
+    pass "External-LLM stack contains docker-compose.cloud.yml"
+else
+    fail "External-LLM stack missing docker-compose.cloud.yml: $real_ext_stdout"
+fi
+
+# Optionally run docker compose config validation if docker is installed
+if command -v docker &>/dev/null; then
+    (
+        export WEBUI_SECRET="${WEBUI_SECRET:-test-secret}"
+        export N8N_USER="${N8N_USER:-admin@example.invalid}"
+        export N8N_PASS="${N8N_PASS:-test-password}"
+        export OPENCLAW_TOKEN="${OPENCLAW_TOKEN:-test-openclaw-token}"
+        export SEARXNG_SECRET="${SEARXNG_SECRET:-test-searxng-secret}"
+        export EXTERNAL_LLM_URL="http://host.docker.internal:11434"
+        export OLLAMA_URL="http://host.docker.internal:11434"
+        export LLM_API_URL="http://host.docker.internal:11434"
+
+        eval "docker compose $real_ext_stdout config --quiet"
+    )
+    compose_status=$?
+    if [[ $compose_status -eq 0 ]]; then
+        pass "Resolved external-LLM stack passes docker compose config validation"
+    else
+        fail "Resolved external-LLM stack failed docker compose config validation (exit code: $compose_status)"
+    fi
+else
+    skip "docker command not available to run docker compose config validation"
+fi
+
 echo ""
 echo "Result: $PASSED passed, $FAILED failed"
 [[ $FAILED -eq 0 ]]

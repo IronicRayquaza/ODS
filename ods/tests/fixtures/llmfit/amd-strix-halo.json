@@ -6,7 +6,7 @@
   },
   "recommendations": [
     {
-      "model_id": "Qwen/Qwen3-14B-GGUF",
+      "model_id": "Qwen/Qwen3-30B-A3B-GGUF",
       "quantization": "Q4_K_M",
       "estimated_tokens_per_sec": 28.3,
       "score": 0.88,

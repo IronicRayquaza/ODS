@@ -44,6 +44,12 @@ if $DRY_RUN; then
     [[ "$ENABLE_OPENCLAW" == "true" ]] && log "[DRY RUN] Would configure OpenClaw (model: $LLM_MODEL, config: ${OPENCLAW_CONFIG:-default})"
     log "[DRY RUN] Would validate .env against schema"
 else
+    # Source rootless-Docker ownership helper (no-op when not rootless)
+    if [[ -f "$SCRIPT_DIR/lib/rootless-fix.sh" ]]; then
+        # shellcheck source=lib/rootless-fix.sh
+        . "$SCRIPT_DIR/lib/rootless-fix.sh"
+    fi
+
     # Create directories
     _phase06_step "create-directories"
     ods_progress 38 "directories" "Creating directory structure"
@@ -239,6 +245,17 @@ Fix with: sudo chown -R \$(id -u):\$(id -g) $INSTALL_DIR/config $INSTALL_DIR/dat
     # token-spy container runs as uid 1000 (baked in Dockerfile) — fix ownership
     _phase06_step "prepare-service-permissions"
     chown -R 1000:1000 "$INSTALL_DIR/data/token-spy" || warn "Failed to chown data/token-spy to 1000:1000 (non-fatal); container may crash if installer ran as a different uid"
+
+    # Docker rootless mode: container UIDs are shifted by subuid offset
+    # (typically 100000).  Non-root container users (node=1000, hermes=10000,
+    # nextjs=1001, ape=100, etc.) map to host UIDs outside the host user's
+    # range, so the directories above are unwritable to them.  Fix this by
+    # running short-lived Alpine containers as root (uid 0 = host user in
+    # rootless mode) to chown each affected data directory.
+    _phase06_step "rootless-ownership-fix"
+    if declare -f ods_fix_rootless_ownership >/dev/null 2>&1; then
+        ods_fix_rootless_ownership "$INSTALL_DIR"
+    fi
 
     # ── .env merge logic: preserve user-configured values on re-install ──
     _phase06_step "generate-env"

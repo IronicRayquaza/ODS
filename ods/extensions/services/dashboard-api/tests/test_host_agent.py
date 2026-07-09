@@ -3313,6 +3313,31 @@ class TestModelDownloadFileIntegrity:
         assert status["status"] == "complete"
         assert status["model"] == "test-model.gguf"
 
+    def test_status_marks_dead_active_download_failed(self, tmp_path, monkeypatch):
+        install_dir = self._setup_env(tmp_path, monkeypatch)
+        status_path = install_dir / "data" / "model-download-status.json"
+        status_path.write_text(
+            json.dumps({
+                "status": "downloading",
+                "model": "test-model.gguf",
+                "bytesDownloaded": 0,
+                "bytesTotal": 123456,
+            }),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(_mod, "_model_download_thread", None)
+
+        handler = _FakeHandler(b"")
+        _mod.AgentHandler._handle_model_status(handler)
+
+        assert handler.response_code == 200
+        body = handler.parse_response()
+        assert body["status"] == "failed"
+        assert body["model"] == "test-model.gguf"
+        assert "not running" in body["error"]
+        persisted = json.loads(status_path.read_text(encoding="utf-8"))
+        assert persisted["status"] == "failed"
+
     def test_empty_finished_download_is_failed_not_complete(self, tmp_path, monkeypatch):
         install_dir = self._setup_env(tmp_path, monkeypatch)
         self._patch_curl_download(monkeypatch, b"")

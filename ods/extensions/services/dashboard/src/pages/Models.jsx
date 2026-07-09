@@ -250,15 +250,15 @@ export default function Models() {
         >
           <div className="min-w-full overflow-x-auto">
             <div className="min-w-[1020px]">
-              <div className="grid grid-cols-[minmax(280px,1.7fr)_90px_130px_150px_110px_150px_130px_36px] gap-5 border-b border-white/[0.055] px-5 py-3 text-[9px] font-semibold uppercase tracking-[0.18em] text-theme-text-muted/55">
+              <div className="grid grid-cols-[minmax(280px,1.7fr)_130px_36px_90px_130px_150px_110px_150px] gap-5 border-b border-white/[0.055] px-5 py-3 text-[9px] font-semibold uppercase tracking-[0.18em] text-theme-text-muted/55">
                 <span>Model</span>
+                <span>Action</span>
+                <span />
                 <span>Size</span>
                 <span>VRAM</span>
                 <span>Speed</span>
                 <span>Context</span>
                 <span>Compatibility</span>
-                <span>Action</span>
-                <span />
               </div>
 
               <div className="divide-y divide-white/[0.04]">
@@ -537,7 +537,7 @@ function ModelTableRow({
   const performanceBadge = getPerformanceBadge(model)
 
   return (
-    <div className="grid grid-cols-[minmax(280px,1.7fr)_90px_130px_150px_110px_150px_130px_36px] gap-5 px-5 py-3.5 transition-colors hover:bg-white/[0.025]">
+    <div className="grid grid-cols-[minmax(280px,1.7fr)_130px_36px_90px_130px_150px_110px_150px] gap-5 px-5 py-3.5 transition-colors hover:bg-white/[0.025]">
       <div className="min-w-0">
         <div className="flex min-w-0 items-start gap-3">
           <div className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border ${iconTone.border} ${iconTone.bg}`}>
@@ -557,6 +557,51 @@ function ModelTableRow({
             </div>
           </div>
         </div>
+      </div>
+
+      <div className="self-center">
+        <PrimaryAction
+          model={model}
+          isLoaded={isLoaded}
+          isDownloaded={isDownloaded}
+          isLoading={isLoading}
+          loadBusy={loadBusy}
+          downloadBusy={downloadBusy}
+          downloadStarting={downloadStarting}
+          onDownload={onDownload}
+          onLoad={onLoad}
+          onBenchmark={onBenchmark}
+        />
+      </div>
+
+      <div className="relative flex items-center justify-end self-center" data-model-menu>
+        <button
+          type="button"
+          onClick={onToggleMenu}
+          className="flex h-8 w-8 items-center justify-center rounded-lg text-theme-text-muted transition-colors hover:bg-white/[0.05] hover:text-theme-text"
+          title="Model actions"
+        >
+          <MoreVertical size={15} />
+        </button>
+        {menuOpen && (
+          <div className="absolute left-0 top-9 z-30 w-44 overflow-hidden rounded-lg border border-white/[0.08] bg-[#101018] py-1 shadow-2xl">
+            {isLoaded && (
+              <MenuButton onClick={onBenchmark} icon={RefreshCw}>Benchmark</MenuButton>
+            )}
+            {isDownloaded && !isLoaded && (
+              <MenuButton onClick={onLoad} icon={Play} disabled={!model.fitsVram || loadBusy}>Run model</MenuButton>
+            )}
+            {model.status === 'available' && (
+              <MenuButton onClick={onDownload} icon={Download} disabled={downloadBusy}>Download</MenuButton>
+            )}
+            {(isDownloaded || isLoaded) && (
+              <MenuButton onClick={onDelete} icon={Trash2} danger>Delete file</MenuButton>
+            )}
+            {!isLoaded && !isDownloaded && model.status !== 'available' && (
+              <div className="px-3 py-2 text-xs text-theme-text-muted">No local action</div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="self-center font-mono text-xs text-theme-text-secondary">{model.size || '--'}</div>
@@ -584,51 +629,6 @@ function ModelTableRow({
       <div className="self-center">
         <Badge tone={compatibility.tone}>{compatibility.label}</Badge>
         <p className="mt-1 text-[10px] text-theme-text-muted">{compatibility.detail}</p>
-      </div>
-
-      <div className="self-center">
-        <PrimaryAction
-          model={model}
-          isLoaded={isLoaded}
-          isDownloaded={isDownloaded}
-          isLoading={isLoading}
-          loadBusy={loadBusy}
-          downloadBusy={downloadBusy}
-            downloadStarting={downloadStarting}
-            onDownload={onDownload}
-            onLoad={onLoad}
-            onBenchmark={onBenchmark}
-          />
-      </div>
-
-      <div className="relative flex items-center justify-end self-center" data-model-menu>
-        <button
-          type="button"
-          onClick={onToggleMenu}
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-theme-text-muted transition-colors hover:bg-white/[0.05] hover:text-theme-text"
-          title="Model actions"
-        >
-          <MoreVertical size={15} />
-        </button>
-        {menuOpen && (
-          <div className="absolute right-0 top-9 z-30 w-44 overflow-hidden rounded-lg border border-white/[0.08] bg-[#101018] py-1 shadow-2xl">
-            {isLoaded && (
-              <MenuButton onClick={onBenchmark} icon={RefreshCw}>Benchmark</MenuButton>
-            )}
-            {isDownloaded && !isLoaded && (
-              <MenuButton onClick={onLoad} icon={Play} disabled={!model.fitsVram || loadBusy}>Run model</MenuButton>
-            )}
-            {model.status === 'available' && (
-              <MenuButton onClick={onDownload} icon={Download} disabled={downloadBusy}>Download</MenuButton>
-            )}
-            {(isDownloaded || isLoaded) && (
-              <MenuButton onClick={onDelete} icon={Trash2} danger>Delete file</MenuButton>
-            )}
-            {!isLoaded && !isDownloaded && model.status !== 'available' && (
-              <div className="px-3 py-2 text-xs text-theme-text-muted">No local action</div>
-            )}
-          </div>
-        )}
       </div>
     </div>
   )

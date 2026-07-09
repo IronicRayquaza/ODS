@@ -580,6 +580,35 @@ def test_local_gguf_scan_keeps_mixed_case_and_skips_empty(monkeypatch, tmp_path)
     }
 
 
+def test_download_status_prefers_host_agent_normalized_status(test_client, monkeypatch, tmp_path):
+    models_router, _install_dir, data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
+    status_path = data_dir / "model-download-status.json"
+    status_path.write_text(
+        json.dumps({
+            "status": "downloading",
+            "model": "Phi-4-mini-instruct-Q4_K_M.gguf",
+            "bytesDownloaded": 0,
+            "bytesTotal": 2491874272,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        models_router,
+        "_get_agent_model_status",
+        lambda: {
+            "status": "failed",
+            "model": "Phi-4-mini-instruct-Q4_K_M.gguf",
+            "error": "Model download is not running; previous download was interrupted.",
+        },
+    )
+
+    resp = test_client.get("/api/models/download-status", headers=test_client.auth_headers)
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "failed"
+    assert "not running" in resp.json()["error"]
+
+
 def test_load_model_resolves_local_gguf_by_stem_with_mixed_case_extension(
     test_client,
     monkeypatch,

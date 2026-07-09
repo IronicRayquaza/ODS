@@ -218,6 +218,37 @@ _update_usable_bash: str | bool | None = None
 _usable_bash: str | bool | None = None
 
 
+def _model_download_thread_alive() -> bool:
+    thread = _model_download_thread
+    return bool(thread is not None and thread.is_alive())
+
+
+def _normalize_model_download_status(status_path: Path, data: dict) -> dict:
+    status = str(data.get("status") or "")
+    if status not in {"downloading", "verifying"}:
+        return data
+    if _model_download_thread_alive():
+        return data
+
+    model = str(data.get("model") or "").split(" (", 1)[0]
+    models_dir = INSTALL_DIR / "data" / "models"
+    if model and _model_file_ready(models_dir / model):
+        _write_model_status(status_path, "complete", model, 0, 0)
+    else:
+        _write_model_status(
+            status_path,
+            "failed",
+            model,
+            int(data.get("bytesDownloaded") or 0),
+            int(data.get("bytesTotal") or 0),
+            data.get("error") or "Model download is not running; previous download was interrupted.",
+        )
+    try:
+        return json.loads(status_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"status": "idle"}
+
+
 def load_env(env_path: Path) -> dict:
     """Parse .env file, return dict of key=value pairs."""
     env = {}
@@ -3132,6 +3163,7 @@ class AgentHandler(BaseHTTPRequestHandler):
             return
         try:
             data = json.loads(status_path.read_text(encoding="utf-8"))
+            data = _normalize_model_download_status(status_path, data)
             json_response(self, 200, data)
         except (json.JSONDecodeError, OSError):
             json_response(self, 200, {"status": "idle"})

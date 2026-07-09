@@ -342,6 +342,10 @@ async def list_models(api_key: str = Depends(verify_api_key)):
 @router.get("/api/models/download-status")
 def model_download_status(api_key: str = Depends(verify_api_key)):
     """Get current model download progress (if any)."""
+    agent_status = _get_agent_model_status()
+    if agent_status and agent_status.get("status") != "idle":
+        return agent_status
+
     status_path = Path(DATA_DIR) / "model-download-status.json"
     if not status_path.exists():
         bootstrap_info = get_bootstrap_status()
@@ -362,6 +366,20 @@ def model_download_status(api_key: str = Depends(verify_api_key)):
         return json.loads(status_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return {"status": "idle"}
+
+
+def _get_agent_model_status(timeout: int = 5) -> Optional[dict]:
+    """Return host-agent-normalized model download status when reachable."""
+    req = urllib.request.Request(
+        f"{AGENT_URL}/v1/model/status",
+        method="GET",
+        headers={"Authorization": f"Bearer {ODS_AGENT_KEY}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode())
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError, json.JSONDecodeError):
+        return None
 
 
 def _call_agent_model(path: str, body: dict, timeout: int = 30) -> dict:

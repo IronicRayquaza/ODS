@@ -2,29 +2,38 @@
 # =============================================================================
 # ODS — lib/rootless-fix.sh
 # =============================================================================
-# Helpers for detecting Docker rootless mode and correcting data-directory
-# ownership so non-root container users can write their bind-mount paths.
+# Helpers for detecting Docker rootless mode and correcting two classes of
+# problems that affect rootless Docker installs:
 #
-# In Docker rootless mode the UID namespace is shifted by the host user's
-# subuid offset (typically 100000). Containers that run as UID 0 map to the
-# host user (fine), but containers that run as a non-root UID N map to host
-# UID (100000 + N - 1). The installer creates data directories owned by the
-# host user (UID 1000), so those non-root containers hit EACCES on startup.
+# 1. Data-directory ownership
+#    In Docker rootless mode the UID namespace is shifted by the host user's
+#    subuid offset (typically 100000).  Containers that run as UID 0 map to
+#    the host user (fine), but containers that run as a non-root UID N map to
+#    host UID (100000 + N - 1).  The installer creates data directories owned
+#    by the host user (UID 1000), so those non-root containers hit EACCES.
 #
-# The only reliable way to chown without sudo is to start a short-lived
-# Alpine container as UID 0 (which maps to the host user in rootless mode)
-# and run `chown` inside that container — exactly what the issue author's
-# workaround does.
+# 2. Host-agent network reachability
+#    In rootless mode, `host.docker.internal` is NOT automatically registered
+#    in the container's /etc/hosts (unlike Docker Desktop / rootful mode).
+#    dashboard-api inside the compose network cannot reach the ODS host agent
+#    unless:
+#      a) ODS_AGENT_BIND=0.0.0.0  (agent listens on all interfaces, not just
+#         the Docker gateway)
+#      b) ODS_AGENT_HOST=<LAN IP>  (containers address the agent via the host's
+#         LAN IP, which IS routable from the compose network)
 #
 # Public API
 # ----------
-#   ods_is_rootless_docker     → exit 0 if rootless, exit 1 otherwise
-#   ods_fix_rootless_ownership → chown all affected dirs; idempotent / safe
-#   ods_warn_rootless_docker   → print a human-readable warning block
+#   ods_is_rootless_docker          → exit 0 if rootless, exit 1 otherwise
+#   ods_fix_rootless_ownership      → chown all affected dirs; idempotent/safe
+#   ods_fix_rootless_agent_network  → set ODS_AGENT_BIND + ODS_AGENT_HOST in
+#                                     .env; idempotent/safe
+#   ods_warn_rootless_docker        → print a human-readable warning block
 #
 # Caller requirements
 # -------------------
-#   INSTALL_DIR must be set before calling ods_fix_rootless_ownership.
+#   INSTALL_DIR must be set before calling ods_fix_rootless_ownership or
+#   ods_fix_rootless_agent_network.
 #   docker must be in PATH.
 #   The functions are deliberately side-effect-free when rootless is not
 #   detected; they are always safe to call unconditionally.
@@ -151,4 +160,135 @@ ods_fix_rootless_ownership() {
     fi
 
     echo "[ods] Rootless ownership fix complete."
+}
+
+# ---------------------------------------------------------------------------
+# _ods_env_set KEY VALUE ENV_FILE
+# Write/update a key=value pair in an .env file without sourcing it.
+# Safe against values containing special characters.
+# ---------------------------------------------------------------------------
+_ods_env_set() {
+    local key="$1" val="$2" file="${3:-${INSTALL_DIR}/.env}"
+    [[ -f "$file" ]] || return 1
+    if grep -q "^${key}=" "$file" 2>/dev/null; then
+        # Replace existing value using awk (avoids sed delimiter collisions)
+        awk -v k="$key" -v v="$val" '{
+            if (index($0, k "=") == 1) print k "=" v; else print
+        }' "$file" > "${file}.tmp" && cat "${file}.tmp" > "$file" && rm -f "${file}.tmp"
+    else
+        printf '%s=%s\n' "$key" "$val" >> "$file"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# _ods_env_get KEY ENV_FILE
+# Read a key's value from .env without sourcing it.
+# ---------------------------------------------------------------------------
+_ods_env_get() {
+    local key="$1" file="${2:-${INSTALL_DIR}/.env}"
+    local val=""
+    if grep -q "^${key}=" "$file" 2>/dev/null; then
+        val=$(grep -m1 "^${key}=" "$file" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'")
+    fi
+    printf '%s' "$val"
+}
+
+# ---------------------------------------------------------------------------
+# _ods_detect_lan_ip
+# Print the first non-loopback, non-Docker IPv4 address, or empty string.
+# ---------------------------------------------------------------------------
+_ods_detect_lan_ip() {
+    local ip=""
+    # Prefer ip(8) with scope global (excludes loopback + link-local)
+    if command -v ip >/dev/null 2>&1; then
+        ip=$(ip -4 addr show scope global 2>/dev/null \
+            | grep -oP 'inet \K[\d.]+' \
+            | grep -v '^172\.\(1[6-9]\|2[0-9]\|3[01]\)\.' \
+            | head -1)
+    fi
+    # Fallback: hostname -I (GNU), skip docker/loopback subnets
+    if [[ -z "$ip" ]] && command -v hostname >/dev/null 2>&1; then
+        ip=$(hostname -I 2>/dev/null \
+            | tr ' ' '\n' \
+            | grep -v '^127\.' \
+            | grep -v '^172\.\(1[6-9]\|2[0-9]\|3[01]\)\.' \
+            | grep -v '^::' \
+            | head -1)
+    fi
+    printf '%s' "$ip"
+}
+
+# ---------------------------------------------------------------------------
+# ods_fix_rootless_agent_network [INSTALL_DIR]
+# Ensure ODS_AGENT_BIND=0.0.0.0 and ODS_AGENT_HOST=<LAN IP> are set in
+# .env for Docker rootless installs.
+#
+# Why both vars are needed in rootless mode:
+#   • host.docker.internal is NOT registered in rootless containers
+#     (it is only set by Docker Desktop / rootful daemon on Linux).
+#   • The ODS host agent defaults to binding on the Docker network gateway
+#     only, so containers on the bridge cannot reach it on the LAN IP.
+#   • Setting BIND=0.0.0.0 makes the agent listen on all interfaces.
+#   • Setting HOST=<LAN IP> tells dashboard-api which address to use.
+#
+# Idempotent: skips vars that already have the correct value.
+# Only activates when rootless mode is detected.
+# ---------------------------------------------------------------------------
+ods_fix_rootless_agent_network() {
+    local install_dir="${1:-${INSTALL_DIR:-}}"
+    local env_file="${install_dir}/.env"
+
+    if [[ -z "$install_dir" ]]; then
+        echo "[warn] rootless-fix: INSTALL_DIR not set — skipping agent network fix" >&2
+        return 0
+    fi
+
+    if ! ods_is_rootless_docker; then
+        return 0    # not rootless — nothing to do
+    fi
+
+    if [[ ! -f "$env_file" ]]; then
+        echo "[warn] rootless-fix: .env not found at $env_file — skipping agent network fix" >&2
+        return 0
+    fi
+
+    echo "[ods] Configuring host-agent network for Docker rootless mode..."
+
+    # ── ODS_AGENT_BIND ────────────────────────────────────────────────────────
+    local current_bind
+    current_bind=$(_ods_env_get "ODS_AGENT_BIND" "$env_file")
+    if [[ "$current_bind" == "0.0.0.0" ]]; then
+        echo "[ods]   ODS_AGENT_BIND already 0.0.0.0 — no change"
+    else
+        _ods_env_set "ODS_AGENT_BIND" "0.0.0.0" "$env_file"
+        echo "[ods]   ODS_AGENT_BIND set to 0.0.0.0 (was: '${current_bind:-unset}')"
+    fi
+
+    # ── ODS_AGENT_HOST ────────────────────────────────────────────────────────
+    local current_host
+    current_host=$(_ods_env_get "ODS_AGENT_HOST" "$env_file")
+
+    # If already set to a real IP (not host.docker.internal), leave it alone
+    # so manual overrides are respected.
+    if [[ -n "$current_host" && "$current_host" != "host.docker.internal" ]]; then
+        echo "[ods]   ODS_AGENT_HOST already set to '$current_host' — no change"
+        echo "[ods] Agent network fix complete."
+        return 0
+    fi
+
+    local lan_ip
+    lan_ip=$(_ods_detect_lan_ip)
+
+    if [[ -z "$lan_ip" ]]; then
+        echo "[warn] rootless-fix: could not auto-detect LAN IP for ODS_AGENT_HOST." >&2
+        echo "[warn]   Set it manually: ods config edit  →  ODS_AGENT_HOST=<your VM/host IP>" >&2
+        echo "[ods] Agent network fix complete (with warnings)."
+        return 0
+    fi
+
+    _ods_env_set "ODS_AGENT_HOST" "$lan_ip" "$env_file"
+    echo "[ods]   ODS_AGENT_HOST set to $lan_ip (was: '${current_host:-unset}')"
+    echo "[ods]   (containers will now reach the host agent via $lan_ip)"
+    echo "[ods] Agent network fix complete."
+    echo "[ods] Run 'ods restart' to apply the new agent network config."
 }

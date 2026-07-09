@@ -4323,12 +4323,10 @@ cmd_repair() {
             success "Voice repair complete"
             ;;
         rootless-ownership|rootless)
-            # Fix data-directory ownership for Docker rootless mode.
-            # Containers running as non-root UIDs map to remapped host UIDs
-            # (subuid offset, typically 100000+N) and cannot write to directories
-            # created by the installer as the host user.  This sub-command runs
-            # short-lived Alpine containers as UID 0 (=host user in rootless mode)
-            # to chown each affected data directory to its container UID.
+            # Fix two rootless-mode issues:
+            #  1. Data-directory ownership (EACCES for non-root container users)
+            #  2. Host-agent network (host.docker.internal not resolvable in
+            #     rootless; needs ODS_AGENT_BIND=0.0.0.0 + ODS_AGENT_HOST=LAN IP)
             local rootless_lib="$SCRIPT_DIR/lib/rootless-fix.sh"
             if [[ ! -f "$rootless_lib" ]]; then
                 log_error "rootless-fix.sh not found at $rootless_lib"
@@ -4337,6 +4335,7 @@ cmd_repair() {
             # shellcheck source=lib/rootless-fix.sh
             . "$rootless_lib"
             ods_fix_rootless_ownership "$INSTALL_DIR"
+            ods_fix_rootless_agent_network "$INSTALL_DIR"
             ;;
         *)
             log "Usage: ods repair [voice|hermes-workers|rootless-ownership]"

@@ -1341,10 +1341,11 @@ if runtime["docker_daemon"] and not runtime["dashboard_http"]:
     fix_hints.append(f"Run installer/start command, then verify dashboard on http://127.0.0.1:{dashboard_port}.")
 if runtime["docker_rootless"]:
     fix_hints.append(
-        "Docker rootless mode detected: non-root container users (n8n, hermes, tts, whisper, "
-        "token-spy, privacy-shield, ape, langfuse) may fail to start with EACCES errors "
-        "because data directories are owned by host UID which maps differently in rootless mode. "
-        "Run 'ods repair rootless-ownership' to fix data-directory permissions."
+        "Docker rootless mode detected: (1) Non-root container users (n8n, hermes, tts, whisper, "
+        "token-spy, privacy-shield, ape, langfuse) may fail with EACCES because data-directory UIDs "
+        "are shifted in rootless mode. (2) host.docker.internal is not registered in rootless "
+        "containers — ODS_AGENT_BIND and ODS_AGENT_HOST must be set so dashboard-api can reach "
+        "the host agent. Run 'ods repair rootless-ownership' to fix both issues automatically."
     )
 if runtime["docker_daemon"] and not runtime["webui_http"]:
     fix_hints.append(f"Verify Open WebUI container and port {webui_port} mapping.")

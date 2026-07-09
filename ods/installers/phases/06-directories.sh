@@ -252,9 +252,12 @@ Fix with: sudo chown -R \$(id -u):\$(id -g) $INSTALL_DIR/config $INSTALL_DIR/dat
     # range, so the directories above are unwritable to them.  Fix this by
     # running short-lived Alpine containers as root (uid 0 = host user in
     # rootless mode) to chown each affected data directory.
+    # Also fix ODS_AGENT_BIND / ODS_AGENT_HOST so dashboard-api can reach the
+    # host agent (host.docker.internal is not registered in rootless mode).
     _phase06_step "rootless-ownership-fix"
     if declare -f ods_fix_rootless_ownership >/dev/null 2>&1; then
         ods_fix_rootless_ownership "$INSTALL_DIR"
+        ods_fix_rootless_agent_network "$INSTALL_DIR"
     fi
 
     # ── .env merge logic: preserve user-configured values on re-install ──

@@ -60,8 +60,9 @@ pass "chown helper uses --user 0:0"
 info "Static: chown helper uses alpine container (not sudo)"
 grep -q 'alpine' "$LIB" \
     || fail "chown helper does not use alpine container"
-grep -v 'sudo' "$LIB" | grep -q 'chown -R' \
-    || fail "chown is being done without alpine/docker (unexpected)"
+# Confirm the chown helper function itself references alpine (not raw chown)
+awk '/^_ods_rootless_chown_dir\(\)/,/^}/' "$LIB" | grep -q 'alpine' \
+    || fail "_ods_rootless_chown_dir does not use alpine container"
 pass "chown uses alpine container (no sudo)"
 
 info "Static: detection uses docker info --format SecurityOptions"
@@ -158,9 +159,6 @@ grep '\[langfuse\]=1001' "$LIB" || fail "langfuse UID is not 1001"
 pass "langfuse UID = 1001 (nextjs)"
 
 # ── Filesystem simulation: ods_fix_rootless_ownership logic ────────────────────
-# We can't run docker in CI without a daemon, so we stub the Docker call and
-# test that the fix correctly iterates directories, skips missing ones, and
-# calls the helper for each present service directory.
 
 info "Filesystem: ods_fix_rootless_ownership iterates all affected dirs"
 TMP="$(mktemp -d)"
@@ -171,53 +169,39 @@ mkdir -p "$INSTALL/data/n8n"
 mkdir -p "$INSTALL/data/hermes"
 mkdir -p "$INSTALL/data/tts"
 mkdir -p "$INSTALL/data/whisper"
-# Leave ape, token-spy, privacy-shield, langfuse absent (should be skipped)
 
 CHOWN_LOG="$TMP/chown.log"
 > "$CHOWN_LOG"
 
-# Stub docker command and ods_is_rootless_docker
 stub_simulate() {
-    # Source the library, then stub the internal functions
     # shellcheck disable=SC1090
     . "$LIB"
-
-    # Override detection to always return rootless=yes
     ods_is_rootless_docker() { return 0; }
-
-    # Override the chown helper to just log calls instead of running docker
     _ods_rootless_chown_dir() {
         local dir="$1" uid="$2"
         [[ -d "$dir" ]] || return 0
         echo "${uid}:${dir##*/}" >> "$CHOWN_LOG"
     }
-
     ods_fix_rootless_ownership "$INSTALL"
 }
-
 stub_simulate
 
-# Only dirs that exist should have been processed
-grep -q '^1000:n8n$' "$CHOWN_LOG"    || fail "n8n not chowned (present dir)"
+grep -q '^1000:n8n$'    "$CHOWN_LOG" || fail "n8n not chowned (present dir)"
 grep -q '^10000:hermes$' "$CHOWN_LOG" || fail "hermes not chowned (present dir)"
-grep -q '^1000:tts$' "$CHOWN_LOG"    || fail "tts not chowned (present dir)"
+grep -q '^1000:tts$'    "$CHOWN_LOG" || fail "tts not chowned (present dir)"
 grep -q '^1000:whisper$' "$CHOWN_LOG" || fail "whisper not chowned (present dir)"
-
-# Absent dirs must NOT have been processed
-grep -q ':ape$' "$CHOWN_LOG"         && fail "ape was processed but dir does not exist"
-grep -q ':langfuse$' "$CHOWN_LOG"    && fail "langfuse was processed but dir does not exist"
+grep -q ':ape$'         "$CHOWN_LOG" && fail "ape was processed but dir does not exist"
+grep -q ':langfuse$'    "$CHOWN_LOG" && fail "langfuse was processed but dir does not exist"
 pass "ods_fix_rootless_ownership only processes existing directories"
 
-info "Filesystem: fix is no-op when not rootless"
+info "Filesystem: ownership fix is no-op when not rootless"
 CHOWN_LOG2="$TMP/chown2.log"
 > "$CHOWN_LOG2"
 
 stub_no_rootless() {
     . "$LIB"
-    ods_is_rootless_docker() { return 1; }   # not rootless
-    _ods_rootless_chown_dir() {
-        echo "${2}:${1##*/}" >> "$CHOWN_LOG2"
-    }
+    ods_is_rootless_docker() { return 1; }
+    _ods_rootless_chown_dir() { echo "${2}:${1##*/}" >> "$CHOWN_LOG2"; }
     ods_fix_rootless_ownership "$INSTALL"
 }
 stub_no_rootless
@@ -225,6 +209,112 @@ stub_no_rootless
 [[ ! -s "$CHOWN_LOG2" ]] \
     || fail "ods_fix_rootless_ownership ran chown even when not rootless"
 pass "ods_fix_rootless_ownership is a no-op in standard (non-rootless) mode"
+
+# ── Agent network tests ────────────────────────────────────────────────────────
+
+info "Static: ods-cli repair rootless-ownership calls ods_fix_rootless_agent_network"
+awk '/rootless-ownership\|rootless\)/,/;;/' "$ODS_CLI" \
+    | grep -q 'ods_fix_rootless_agent_network' \
+    || fail "repair rootless-ownership does not call ods_fix_rootless_agent_network"
+pass "repair rootless-ownership calls ods_fix_rootless_agent_network"
+
+info "Static: ods_fix_rootless_agent_network function defined in lib"
+grep -q 'ods_fix_rootless_agent_network()' "$LIB" \
+    || fail "ods_fix_rootless_agent_network not found in rootless-fix.sh"
+pass "ods_fix_rootless_agent_network defined"
+
+info "Static: agent network fix sets ODS_AGENT_BIND to 0.0.0.0"
+grep -q 'ODS_AGENT_BIND.*0\.0\.0\.0\|0\.0\.0\.0.*ODS_AGENT_BIND' "$LIB" \
+    || fail "rootless-fix.sh does not set ODS_AGENT_BIND=0.0.0.0"
+pass "Agent network fix sets ODS_AGENT_BIND=0.0.0.0"
+
+info "Static: agent network fix sets ODS_AGENT_HOST"
+grep -q 'ODS_AGENT_HOST' "$LIB" \
+    || fail "rootless-fix.sh does not reference ODS_AGENT_HOST"
+pass "Agent network fix handles ODS_AGENT_HOST"
+
+info "Static: agent network fix auto-detects LAN IP"
+grep -q '_ods_detect_lan_ip' "$LIB" \
+    || fail "rootless-fix.sh does not call _ods_detect_lan_ip"
+pass "Agent network fix auto-detects LAN IP"
+
+info "Static: agent network fix does NOT overwrite a user-set IP (idempotency)"
+grep -q 'host\.docker\.internal' "$LIB" \
+    || fail "rootless-fix.sh does not check for host.docker.internal default"
+pass "Agent network fix skips already-set non-default ODS_AGENT_HOST"
+
+info "Static: 06-directories.sh calls ods_fix_rootless_agent_network"
+grep -q 'ods_fix_rootless_agent_network' "$ROOT_DIR/installers/phases/06-directories.sh" \
+    || fail "06-directories.sh does not call ods_fix_rootless_agent_network"
+pass "06-directories.sh calls ods_fix_rootless_agent_network"
+
+info "Static: doctor hint mentions ODS_AGENT_BIND and ODS_AGENT_HOST"
+grep -q 'ODS_AGENT_BIND\|ODS_AGENT_HOST' "$ODS_DOCTOR" \
+    || fail "ods-doctor.sh autofix hint does not mention ODS_AGENT_BIND/ODS_AGENT_HOST"
+pass "Doctor hint mentions ODS_AGENT_BIND and ODS_AGENT_HOST"
+
+# ── Filesystem simulation: ods_fix_rootless_agent_network ─────────────────────
+
+info "Filesystem: ods_fix_rootless_agent_network sets BIND and HOST in .env"
+TMP_NET="$(mktemp -d)"
+INSTALL_NET="$TMP_NET/ods"
+mkdir -p "$INSTALL_NET"
+printf "ODS_VERSION=2.5.3\n# ODS_AGENT_BIND=\n# ODS_AGENT_HOST=host.docker.internal\n" \
+    > "$INSTALL_NET/.env"
+
+stub_agent_net() {
+    # shellcheck disable=SC1090
+    . "$LIB"
+    ods_is_rootless_docker() { return 0; }   # simulate rootless
+    _ods_detect_lan_ip() { echo "192.168.2.22"; }   # stub LAN IP
+    ods_fix_rootless_agent_network "$INSTALL_NET"
+}
+stub_agent_net
+
+grep -q '^ODS_AGENT_BIND=0\.0\.0\.0$' "$INSTALL_NET/.env" \
+    || fail "ODS_AGENT_BIND=0.0.0.0 not written to .env (contents: $(cat "$INSTALL_NET/.env"))"
+grep -q '^ODS_AGENT_HOST=192\.168\.2\.22$' "$INSTALL_NET/.env" \
+    || fail "ODS_AGENT_HOST=192.168.2.22 not written to .env (contents: $(cat "$INSTALL_NET/.env"))"
+pass "ods_fix_rootless_agent_network writes BIND=0.0.0.0 and HOST=<LAN IP>"
+rm -rf "$TMP_NET"
+
+info "Filesystem: agent network fix is no-op when not rootless"
+TMP_NORL="$(mktemp -d)"
+INSTALL_NORL="$TMP_NORL/ods"
+mkdir -p "$INSTALL_NORL"
+printf "ODS_VERSION=2.5.3\n" > "$INSTALL_NORL/.env"
+
+stub_agent_norl() {
+    . "$LIB"
+    ods_is_rootless_docker() { return 1; }   # not rootless
+    _ods_env_set() { echo "UNEXPECTED _ods_env_set call: $*" >&2; exit 1; }
+    ods_fix_rootless_agent_network "$INSTALL_NORL"
+}
+stub_agent_norl
+
+grep -q 'ODS_AGENT_BIND' "$INSTALL_NORL/.env" \
+    && fail "ODS_AGENT_BIND was set when Docker is not rootless"
+pass "ods_fix_rootless_agent_network is a no-op in non-rootless mode"
+rm -rf "$TMP_NORL"
+
+info "Filesystem: agent network fix respects existing manual ODS_AGENT_HOST override"
+TMP_MANUAL="$(mktemp -d)"
+INSTALL_MANUAL="$TMP_MANUAL/ods"
+mkdir -p "$INSTALL_MANUAL"
+printf "ODS_VERSION=2.5.3\nODS_AGENT_HOST=10.0.0.5\nODS_AGENT_BIND=0.0.0.0\n" > "$INSTALL_MANUAL/.env"
+
+stub_agent_manual() {
+    . "$LIB"
+    ods_is_rootless_docker() { return 0; }   # rootless
+    _ods_detect_lan_ip() { echo "192.168.2.22"; }   # would change if not guarded
+    ods_fix_rootless_agent_network "$INSTALL_MANUAL"
+}
+stub_agent_manual
+
+grep -q '^ODS_AGENT_HOST=10\.0\.0\.5$' "$INSTALL_MANUAL/.env" \
+    || fail "Manually-set ODS_AGENT_HOST=10.0.0.5 was overwritten"
+pass "Existing manual ODS_AGENT_HOST is not overwritten"
+rm -rf "$TMP_MANUAL"
 
 echo ""
 echo -e "${GREEN}All rootless-docker-ownership tests passed.${NC}"

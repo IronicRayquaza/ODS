@@ -39,33 +39,26 @@
 #   detected; they are always safe to call unconditionally.
 # =============================================================================
 
-# Mapping: data subdirectory → container UID that needs write access.
 # Sourced from the compose files and entrypoint scripts for each service.
 #
 # Services NOT listed here run as UID 0 (root) in the container; those map
 # to the host user in rootless mode and need no special handling.
-declare -A ODS_ROOTLESS_UID_MAP=(
-    # n8n — runs as node (UID 1000)
-    [n8n]=1000
-    # whisper — runs as ubuntu (UID 1000)
-    [whisper]=1000
-    # tts (Kokoro) — runs as appuser (UID 1000)
-    [tts]=1000
-    # token-spy — runs as odser (UID 1000)
-    [token-spy]=1000
-    # privacy-shield — runs as UID 1000
-    [privacy-shield]=1000
-    # ape — runs as ape (UID 100)
-    [ape]=100
-    # hermes — gateway runs as hermes (UID 10000)
-    [hermes]=10000
-    # langfuse-web — runs as nextjs (UID 1001); postgres/clickhouse/redis/minio
-    # all run as root (UID 0) so only langfuse itself needs fixing.
-    # The top-level langfuse dir is the NextJS app data dir.
-    [langfuse]=1001
-    # openclaw — runs as node (UID 1000); data/openclaw/home is used by the container
-    [openclaw]=1000
-)
+_ods_rootless_get_uid() {
+    case "$1" in
+        n8n|whisper|tts|token-spy|privacy-shield|openclaw)
+            printf '1000'
+            ;;
+        ape)
+            printf '100'
+            ;;
+        hermes)
+            printf '10000'
+            ;;
+        langfuse)
+            printf '1001'
+            ;;
+    esac
+}
 
 # ---------------------------------------------------------------------------
 # ods_is_rootless_docker
@@ -143,8 +136,9 @@ ods_fix_rootless_ownership() {
     echo "[ods] Fixing data-directory ownership for Docker rootless mode..."
 
     local svc uid
-    for svc in "${!ODS_ROOTLESS_UID_MAP[@]}"; do
-        uid="${ODS_ROOTLESS_UID_MAP[$svc]}"
+    local services=(n8n whisper tts token-spy privacy-shield ape hermes langfuse openclaw)
+    for svc in "${services[@]}"; do
+        uid=$(_ods_rootless_get_uid "$svc")
         local target_dir="${install_dir}/data/${svc}"
         if [[ -d "$target_dir" ]]; then
             echo "[ods]   chown -R ${uid}:${uid} data/${svc}"

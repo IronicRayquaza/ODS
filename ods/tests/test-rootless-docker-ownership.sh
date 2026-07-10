@@ -45,12 +45,17 @@ grep -q '_ods_rootless_chown_dir()' "$LIB" \
     || fail "_ods_rootless_chown_dir not found in rootless-fix.sh"
 pass "_ods_rootless_chown_dir defined"
 
-info "Static: ODS_ROOTLESS_UID_MAP covers all affected services"
-for svc in n8n whisper tts token-spy privacy-shield ape hermes langfuse openclaw; do
-    grep -q "\[$svc\]=" "$LIB" \
-        || fail "ODS_ROOTLESS_UID_MAP missing entry for service: $svc"
-done
-pass "ODS_ROOTLESS_UID_MAP covers all 9 affected services"
+info "Static: _ods_rootless_get_uid covers all affected services"
+(
+    . "$LIB"
+    for svc in n8n whisper tts token-spy privacy-shield openclaw; do
+        [[ "$(_ods_rootless_get_uid "$svc")" == "1000" ]] || exit 1
+    done
+    [[ "$(_ods_rootless_get_uid "ape")" == "100" ]] || exit 1
+    [[ "$(_ods_rootless_get_uid "hermes")" == "10000" ]] || exit 1
+    [[ "$(_ods_rootless_get_uid "langfuse")" == "1001" ]] || exit 1
+) || fail "_ods_rootless_get_uid check failed or missing services"
+pass "_ods_rootless_get_uid covers all 9 affected services"
 
 info "Static: chown helper uses --user 0:0 (host user in rootless)"
 grep -q '\-\-user 0:0' "$LIB" \
@@ -143,19 +148,19 @@ pass "ods-cli help mentions rootless-ownership"
 # ── UID map correctness checks ─────────────────────────────────────────────────
 
 info "UID map: n8n UID is 1000 (node user)"
-grep '\[n8n\]=1000' "$LIB" || fail "n8n UID is not 1000"
+( . "$LIB" && [[ "$(_ods_rootless_get_uid n8n)" == "1000" ]] ) || fail "n8n UID is not 1000"
 pass "n8n UID = 1000 (node)"
 
 info "UID map: hermes UID is 10000"
-grep '\[hermes\]=10000' "$LIB" || fail "hermes UID is not 10000"
+( . "$LIB" && [[ "$(_ods_rootless_get_uid hermes)" == "10000" ]] ) || fail "hermes UID is not 10000"
 pass "hermes UID = 10000"
 
 info "UID map: ape UID is 100"
-grep '\[ape\]=100' "$LIB" || fail "ape UID is not 100"
+( . "$LIB" && [[ "$(_ods_rootless_get_uid ape)" == "100" ]] ) || fail "ape UID is not 100"
 pass "ape UID = 100"
 
 info "UID map: langfuse UID is 1001 (nextjs user)"
-grep '\[langfuse\]=1001' "$LIB" || fail "langfuse UID is not 1001"
+( . "$LIB" && [[ "$(_ods_rootless_get_uid langfuse)" == "1001" ]] ) || fail "langfuse UID is not 1001"
 pass "langfuse UID = 1001 (nextjs)"
 
 # ── Filesystem simulation: ods_fix_rootless_ownership logic ────────────────────
@@ -315,6 +320,94 @@ grep -q '^ODS_AGENT_HOST=10\.0\.0\.5$' "$INSTALL_MANUAL/.env" \
     || fail "Manually-set ODS_AGENT_HOST=10.0.0.5 was overwritten"
 pass "Existing manual ODS_AGENT_HOST is not overwritten"
 rm -rf "$TMP_MANUAL"
+# ── Integration: phase-06 ordering simulation ──────────────────────────────────
+
+info "Integration: Simulates phase-06 ordering (Fresh Install)"
+TMP_PH06_FRESH="$(mktemp -d)"
+INSTALL_PH06_FRESH="$TMP_PH06_FRESH/ods"
+mkdir -p "$INSTALL_PH06_FRESH"
+
+# 1. Fresh install: No existing .env. The variables get default values:
+ODS_AGENT_BIND=""
+ODS_AGENT_HOST="host.docker.internal"
+
+# 2. Phase 06 writes the initial .env file:
+cat > "$INSTALL_PH06_FRESH/.env" << ENV_EOF
+ODS_VERSION=2.5.3
+ODS_AGENT_BIND=${ODS_AGENT_BIND}
+ODS_AGENT_HOST=${ODS_AGENT_HOST}
+ENV_EOF
+
+# 3. Phase 06 calls the rootless helper after .env is written:
+stub_ph06_fresh() {
+    . "$LIB"
+    ods_is_rootless_docker() { return 0; }
+    _ods_detect_lan_ip() { echo "192.168.2.22"; }
+    ods_fix_rootless_agent_network "$INSTALL_PH06_FRESH"
+}
+stub_ph06_fresh
+
+# 4. Assert the final .env contains the correct values:
+grep -q '^ODS_AGENT_BIND=0\.0\.0\.0$' "$INSTALL_PH06_FRESH/.env" \
+    || fail "BIND=0.0.0.0 not written to env"
+grep -q '^ODS_AGENT_HOST=192\.168\.2\.22$' "$INSTALL_PH06_FRESH/.env" \
+    || fail "HOST=192.168.2.22 not written to env"
+pass "Fresh install phase-06 ordering correctly writes rootless settings"
+rm -rf "$TMP_PH06_FRESH"
+
+info "Integration: Simulates phase-06 ordering (Upgrade / Reinstall preservation)"
+TMP_PH06_UPGRADE="$(mktemp -d)"
+INSTALL_PH06_UPGRADE="$TMP_PH06_UPGRADE/ods"
+mkdir -p "$INSTALL_PH06_UPGRADE"
+
+# 1. Existing .env exists from previous rootless run:
+cat > "$INSTALL_PH06_UPGRADE/.env" << ENV_EOF
+ODS_VERSION=2.5.3
+ODS_AGENT_BIND=0.0.0.0
+ODS_AGENT_HOST=192.168.2.22
+ENV_EOF
+
+# 2. Phase 06 runs. It reads existing values:
+_env_existing="$INSTALL_PH06_UPGRADE/.env"
+_env_get_mock() {
+    local key="$1" default="${2:-}"
+    local val=""
+    if grep -q "^${key}=" "$_env_existing" 2>/dev/null; then
+        val=$(grep -m1 "^${key}=" "$_env_existing" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'")
+    fi
+    if [[ -n "$val" ]]; then
+        echo "$val"
+    else
+        echo "$default"
+    fi
+}
+
+ODS_AGENT_BIND=$(_env_get_mock ODS_AGENT_BIND "")
+ODS_AGENT_HOST=$(_env_get_mock ODS_AGENT_HOST "host.docker.internal")
+
+# 3. Phase 06 writes the new .env template:
+cat > "$INSTALL_PH06_UPGRADE/.env" << ENV_EOF
+ODS_VERSION=2.5.3
+ODS_AGENT_BIND=${ODS_AGENT_BIND}
+ODS_AGENT_HOST=${ODS_AGENT_HOST}
+ENV_EOF
+
+# 4. Phase 06 calls the rootless helper after .env is written:
+stub_ph06_upgrade() {
+    . "$LIB"
+    ods_is_rootless_docker() { return 0; }
+    _ods_detect_lan_ip() { echo "192.168.2.22"; }
+    ods_fix_rootless_agent_network "$INSTALL_PH06_UPGRADE"
+}
+stub_ph06_upgrade
+
+# 5. Assert the values are fully preserved and survive:
+grep -q '^ODS_AGENT_BIND=0\.0\.0\.0$' "$INSTALL_PH06_UPGRADE/.env" \
+    || fail "BIND=0.0.0.0 not preserved on upgrade"
+grep -q '^ODS_AGENT_HOST=192\.168\.2\.22$' "$INSTALL_PH06_UPGRADE/.env" \
+    || fail "HOST=192.168.2.22 not preserved on upgrade"
+pass "Upgrade phase-06 ordering correctly preserves rootless settings"
+rm -rf "$TMP_PH06_UPGRADE"
 
 echo ""
 echo -e "${GREEN}All rootless-docker-ownership tests passed.${NC}"

@@ -204,6 +204,7 @@ assert_contains "$win_installer" 'Get-ODSWindowsUserDockerClientArgs' "Windows D
 assert_contains "$win_installer" 'image validation failed with the install-scoped Docker config' "Windows Docker fallback should cover image validation before builds"
 assert_contains "$win_installer" 'Continuing Compose preflight and service launch with the user'\''s Docker config' "Windows Docker fallback should carry through Compose preflight and launch"
 assert_contains "$win_installer" 'Compose service launch failed with the install-scoped Docker config' "Windows Docker fallback should retry compose up"
+assert_contains "$win_installer" 'Managed-container inspection failed with the install-scoped Docker config' "Windows Docker fallback should retry managed-container inspection"
 assert_contains "$win_installer" 'ODSLemonadeRuntime' "Windows installer should use a stable Lemonade scheduled task name"
 assert_contains "$win_installer" 'Invoke-WindowsSttModelDownloadTrigger' "Windows installer should trigger STT preload through a bounded helper"
 assert_contains "$win_installer" '--max-time 30 -X POST' "Windows installer STT preload should use a bounded curl trigger"

@@ -68,6 +68,7 @@ check 'image validation failed with the install-scoped Docker config' "$INSTALL_
 check 'Write-AIWarn "Using $source for $Reason."' "$INSTALL_PS1" "installer records Docker config promotion reason"
 check 'Continuing Compose preflight and service launch with the user'\''s Docker config' "$INSTALL_PS1" "installer carries Docker fallback through preflight and launch"
 check 'Compose service launch failed with the install-scoped Docker config' "$INSTALL_PS1" "compose up retries outside the installer-scoped Docker config"
+check 'Managed-container inspection failed with the install-scoped Docker config' "$INSTALL_PS1" "managed-container inspection retries outside the installer-scoped Docker config"
 check 'Write-ODSWindowsComposeLaunchRecord -InstallDir $installDir -ComposeFlags $composeFlags' "$INSTALL_PS1" "compose launch record is refreshed after a Docker config fallback"
 check '$_probeImage = "alpine:3.20"' "$PRE_SCRIPT" "preflight uses pinned Alpine probe image"
 check '$_inspectExit = $LASTEXITCODE' "$PRE_SCRIPT" "preflight captures inspect exit before deciding to pull"

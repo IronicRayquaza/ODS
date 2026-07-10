@@ -1017,7 +1017,8 @@ litellm_settings:
             param(
                 [string]$InstallDir,
                 [string[]]$ComposeFlags,
-                [string[]]$RequiredServices
+                [string[]]$RequiredServices,
+                [switch]$RetriedWithUserDockerConfig
             )
 
             Push-Location $InstallDir
@@ -1025,6 +1026,12 @@ litellm_settings:
                 $managedIds = @(& docker @script:ODSWindowsDockerClientArgs compose @ComposeFlags ps -q 2>$null |
                     Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
                 if ($managedIds.Count -eq 0) {
+                    if (-not $RetriedWithUserDockerConfig -and $script:ODSWindowsDockerConfigMode -eq "install-scoped") {
+                        Write-AIWarn "Managed-container inspection failed with the install-scoped Docker config; retrying with the user's Docker config."
+                        Use-ODSWindowsUserDockerConfig -Reason "managed-container inspection"
+                        return Assert-ODSWindowsManagedContainers -InstallDir $InstallDir -ComposeFlags $ComposeFlags `
+                            -RequiredServices $RequiredServices -RetriedWithUserDockerConfig
+                    }
                     Write-AIError "Docker Compose did not create any managed Windows containers."
                     Write-AI "  Native inference may be healthy, but ODS also needs the dashboard/chat container stack."
                     Write-AI "  Inspect with: docker compose $($ComposeFlags -join ' ') ps -a"
@@ -1041,6 +1048,12 @@ litellm_settings:
                 }
 
                 if ($missingServices.Count -gt 0) {
+                    if (-not $RetriedWithUserDockerConfig -and $script:ODSWindowsDockerConfigMode -eq "install-scoped") {
+                        Write-AIWarn "Managed-container inspection failed with the install-scoped Docker config; retrying with the user's Docker config."
+                        Use-ODSWindowsUserDockerConfig -Reason "managed-container inspection"
+                        return Assert-ODSWindowsManagedContainers -InstallDir $InstallDir -ComposeFlags $ComposeFlags `
+                            -RequiredServices $RequiredServices -RetriedWithUserDockerConfig
+                    }
                     Write-AIError "Docker Compose did not start required Windows service(s): $($missingServices -join ', ')"
                     Write-AI "  Native inference may be healthy, but ODS is not ready without these containers."
                     Write-AI "  Inspect with: docker compose $($ComposeFlags -join ' ') ps -a"

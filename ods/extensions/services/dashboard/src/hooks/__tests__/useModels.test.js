@@ -1,5 +1,5 @@
 import { renderHook, waitFor, act } from '@testing-library/react'
-import { useModels } from '../useModels'
+import { getMockModels, MOCK_MODES, useModels } from '../useModels'
 
 // Shadow jsdom's Document.prototype.hidden getter on the instance; deleting
 // the own property in afterEach restores the prototype behavior.
@@ -37,6 +37,16 @@ describe('useModels', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     delete document.hidden
+  })
+
+  test('development fixtures use unique model IDs and runnable local modes', () => {
+    const mockModels = getMockModels()
+    const modelIds = mockModels.map(model => model.id)
+
+    expect(new Set(modelIds).size).toBe(modelIds.length)
+    expect(modelIds).toContain('Qwen/Qwen2.5-32B-Instruct-AWQ')
+    expect(modelIds).toContain('Qwen/Qwen2.5-Coder-32B-Instruct-AWQ')
+    expect(MOCK_MODES).toEqual({ odsMode: 'local', configuredMode: 'local' })
   })
 
   test('fetches models on mount', async () => {
@@ -155,9 +165,49 @@ describe('useModels', () => {
     })
 
     const postCall = fetch.mock.calls.find(c => c[1]?.method === 'POST')
-    expect(postCall).toBeTruthy()
-    expect(postCall[0]).toContain('new-model')
-    expect(postCall[0]).toContain('/download')
+    expect(postCall[0]).toBe('/api/models/new-model/download')
+    expect(Object.keys(postCall[1]).sort()).toEqual(['method', 'signal'])
+    expect(postCall[1]).toMatchObject({ method: 'POST' })
+    expect(postCall[1].signal).toBeInstanceOf(globalThis.AbortSignal)
+  })
+
+  test('loadModel sends the exact encoded activation request', async () => {
+    vi.useFakeTimers()
+    const target = 'org/model q4'
+    let currentModel = null
+    fetch.mockImplementation((_url, options) => {
+      if (options?.method === 'POST') {
+        currentModel = target
+        return Promise.resolve({ ok: true })
+      }
+      return Promise.resolve(modelsResponse(
+        [{ id: target, status: currentModel ? 'loaded' : 'downloaded' }],
+        { currentModel }
+      ))
+    })
+
+    try {
+      const { result } = renderHook(() => useModels())
+      await act(async () => {})
+
+      let loadPromise
+      act(() => {
+        loadPromise = result.current.loadModel(target)
+      })
+
+      const postCall = fetch.mock.calls.find(c => c[1]?.method === 'POST')
+      expect(postCall[0]).toBe('/api/models/org%2Fmodel%20q4/load')
+      expect(Object.keys(postCall[1]).sort()).toEqual(['method', 'signal'])
+      expect(postCall[1]).toMatchObject({ method: 'POST' })
+      expect(postCall[1].signal).toBeInstanceOf(globalThis.AbortSignal)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+        await loadPromise
+      })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   test('aborts a hung download start and releases its pending action for retry', async () => {
@@ -287,6 +337,7 @@ describe('useModels', () => {
 
   test('deleteModel calls DELETE and refreshes', async () => {
     vi.stubGlobal('confirm', vi.fn(() => true))
+    const target = 'org/model q4'
 
     fetch.mockImplementation((url, opts) => {
       if (opts?.method === 'DELETE') {
@@ -302,13 +353,12 @@ describe('useModels', () => {
     await waitFor(() => expect(result.current.loading).toBe(false))
 
     await act(async () => {
-      await result.current.deleteModel('to-delete')
+      await result.current.deleteModel(target)
     })
 
-    expect(confirm).toHaveBeenCalled()
+    expect(confirm).toHaveBeenCalledWith('Delete org/model q4? This cannot be undone.')
     const deleteCall = fetch.mock.calls.find(c => c[1]?.method === 'DELETE')
-    expect(deleteCall).toBeTruthy()
-    expect(deleteCall[0]).toContain('to-delete')
+    expect(deleteCall).toEqual(['/api/models/org%2Fmodel%20q4', { method: 'DELETE' }])
   })
 
   test('clears a pending delete when an independent refresh confirms removal', async () => {

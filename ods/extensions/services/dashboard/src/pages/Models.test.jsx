@@ -113,8 +113,8 @@ test('renders the model library layout from catalog fields only', () => {
   renderModels()
 
   expect(screen.getByRole('button', { name: /model library/i })).toBeInTheDocument()
-  expect(screen.getByText('VRAM')).toBeInTheDocument()
-  expect(screen.getByText('Speed')).toBeInTheDocument()
+  expect(screen.getAllByText('VRAM').length).toBeGreaterThan(0)
+  expect(screen.getAllByText('Speed').length).toBeGreaterThan(0)
   expect(screen.getByText('Currently running: qwen3.5-9b-q4')).toBeInTheDocument()
   expect(screen.getByRole('link', { name: /dashboard/i })).toHaveAttribute('href', '/')
   expect(screen.getByText('51.7 tok/s')).toBeInTheDocument()
@@ -135,9 +135,9 @@ test('loaded models show active state and benchmark action', () => {
   expect(screen.getByText('Active')).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: /benchmark/i }))
   expect(benchmarkModel).toHaveBeenCalledWith('qwen3.5-9b-q4')
-
-  fireEvent.click(screen.getByRole('button', { name: /model actions/i }))
-  expect(screen.queryByRole('button', { name: /delete file/i })).not.toBeInTheDocument()
+  const deleteButton = screen.getByRole('button', { name: /delete qwen 3\.5 9b unavailable/i })
+  expect(deleteButton).toBeDisabled()
+  expect(deleteButton).toHaveAttribute('title', 'The active model cannot be deleted. Run another model first.')
 })
 
 test('renders oracle source labels and install recommendation context', () => {
@@ -179,10 +179,12 @@ test('renders oracle source labels and install recommendation context', () => {
   expect(screen.getByText('~4.4 GB incl. KV')).toBeInTheDocument()
 })
 
-test('runs downloaded models through the existing load action', () => {
+test('keeps Run and Delete visible for downloaded models', () => {
   const loadModel = vi.fn()
+  const deleteModel = vi.fn()
   useModelsMock.mockReturnValue(baseState({
     loadModel,
+    deleteModel,
     models: [model({ status: 'downloaded' })],
   }))
 
@@ -190,9 +192,10 @@ test('runs downloaded models through the existing load action', () => {
   fireEvent.click(screen.getByRole('button', { name: /^run$/i }))
 
   expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4')
-
-  fireEvent.click(screen.getByRole('button', { name: /model actions/i }))
-  expect(screen.getByRole('button', { name: /delete file/i })).toBeInTheDocument()
+  const deleteButton = screen.getByRole('button', { name: /delete qwen 3\.5 9b$/i })
+  expect(deleteButton).toBeEnabled()
+  fireEvent.click(deleteButton)
+  expect(deleteModel).toHaveBeenCalledWith('qwen3.5-9b-q4')
 })
 
 test('keeps Download available in cloud mode', () => {
@@ -401,7 +404,7 @@ test('does not let unrelated mutation errors clear an in-flight download start',
   expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument()
 })
 
-test('disables model actions and hides Delete while that model is working', () => {
+test('keeps Delete visible but disabled while that model is working', () => {
   useModelsMock.mockReturnValue(baseState({
     actionLoading: 'qwen3.5-9b-q4',
     actionLoadingModels: ['qwen3.5-9b-q4'],
@@ -411,8 +414,9 @@ test('disables model actions and hides Delete while that model is working', () =
   renderModels()
 
   expect(screen.getByRole('button', { name: /working/i })).toBeDisabled()
-  expect(screen.getByRole('button', { name: /model actions/i })).toBeDisabled()
-  expect(screen.queryByRole('button', { name: /delete file/i })).not.toBeInTheDocument()
+  const deleteButton = screen.getByRole('button', { name: /delete qwen 3\.5 9b$/i })
+  expect(deleteButton).toBeDisabled()
+  expect(deleteButton).toHaveAttribute('title', 'Wait for the current model action to finish before deleting it.')
 })
 
 test('locks every model action while activation is in progress, including rollback and downloads', () => {
@@ -430,37 +434,53 @@ test('locks every model action while activation is in progress, including rollba
   renderModels()
 
   expect(screen.getByText('Rollback Model')).toBeInTheDocument()
-  for (const button of screen.getAllByRole('button', { name: /model actions/i })) {
-    expect(button).toBeDisabled()
-  }
   for (const button of screen.getAllByRole('button', { name: /^run$/i })) {
     expect(button).toBeDisabled()
   }
+  const rollbackDelete = screen.getByRole('button', { name: /delete rollback model$/i })
+  expect(rollbackDelete).toBeDisabled()
+  expect(rollbackDelete).toHaveAttribute('title', 'Wait for the current model swap to finish before deleting another model.')
+  const targetDelete = screen.getByRole('button', { name: /delete next model$/i })
+  expect(targetDelete).toBeDisabled()
+  expect(targetDelete).toHaveAttribute('title', 'Wait for the current model action to finish before deleting it.')
   expect(screen.getByRole('button', { name: /^download$/i })).toBeDisabled()
-  expect(screen.queryByRole('button', { name: /delete file/i })).not.toBeInTheDocument()
 })
 
-test('replaces unusable Run actions with visible runtime settings links', () => {
+test('keeps Run visible with the runtime-mode reason when activation is unavailable', () => {
   const loadModel = vi.fn()
+  const activationModeError = 'ODS is running in cloud mode. A local-mode installation is required to run downloaded models.'
   useModelsMock.mockReturnValue(baseState({
     odsMode: 'cloud',
     configuredMode: 'cloud',
     canActivateModels: false,
-    activationModeError: 'ODS is running in cloud mode. A local-mode installation is required to run downloaded models.',
+    activationModeError,
     loadModel,
     models: [model({ status: 'downloaded' })],
   }))
 
   renderModels()
 
-  expect(screen.queryByRole('button', { name: /^run$/i })).not.toBeInTheDocument()
-  expect(screen.getByRole('link', { name: /^review mode$/i })).toHaveAttribute('href', '/settings')
+  const runButton = screen.getByRole('button', { name: /^run$/i })
+  expect(runButton).toBeDisabled()
+  expect(runButton).toHaveAttribute('title', activationModeError)
+  expect(screen.getByRole('button', { name: /delete qwen 3\.5 9b$/i })).toBeEnabled()
   expect(screen.getByRole('link', { name: /review runtime settings/i })).toHaveAttribute('href', '/settings')
+  expect(loadModel).not.toHaveBeenCalled()
+})
 
-  fireEvent.click(screen.getByRole('button', { name: /model actions/i }))
-  expect(screen.queryByRole('button', { name: /run model/i })).not.toBeInTheDocument()
-  expect(screen.getByRole('link', { name: /review runtime mode/i })).toHaveAttribute('href', '/settings')
+test('keeps Run visible with the VRAM requirement when the model does not fit', () => {
+  const loadModel = vi.fn()
+  useModelsMock.mockReturnValue(baseState({
+    loadModel,
+    models: [model({ status: 'downloaded', fitsVram: false, vramRequired: 12 })],
+  }))
 
+  renderModels()
+
+  const runButton = screen.getByRole('button', { name: /^run$/i })
+  expect(runButton).toBeDisabled()
+  expect(runButton).toHaveAttribute('title', 'Requires 12 GB VRAM; the detected GPU has 8.0 GB total.')
+  fireEvent.click(runButton)
   expect(loadModel).not.toHaveBeenCalled()
 })
 
@@ -489,8 +509,9 @@ test('treats currentModel as active even if a stale row still says downloaded', 
 
   expect(screen.getByText('Active')).toBeInTheDocument()
   expect(screen.getByRole('button', { name: /benchmark/i })).toBeInTheDocument()
-  fireEvent.click(screen.getByRole('button', { name: /model actions/i }))
-  expect(screen.queryByRole('button', { name: /delete file/i })).not.toBeInTheDocument()
+  const deleteButton = screen.getByRole('button', { name: /delete qwen 3\.5 9b unavailable/i })
+  expect(deleteButton).toBeDisabled()
+  expect(deleteButton).toHaveAttribute('title', 'The active model cannot be deleted. Run another model first.')
 })
 
 test('filters models by search and category without changing catalog data', () => {

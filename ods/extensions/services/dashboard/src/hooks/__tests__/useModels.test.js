@@ -264,6 +264,37 @@ describe('useModels', () => {
     }
   })
 
+  test('recovers polling after a models request exceeds its deadline', async () => {
+    vi.useFakeTimers()
+    let getCount = 0
+    fetch.mockImplementation((_url, options) => {
+      getCount += 1
+      if (getCount > 1) {
+        return Promise.resolve(modelsResponse([{ id: 'recovered', status: 'loaded' }]))
+      }
+      return new Promise((_resolve, reject) => {
+        options.signal.addEventListener('abort', () => {
+          const error = new Error('The operation was aborted.')
+          error.name = 'AbortError'
+          reject(error)
+        }, { once: true })
+      })
+    })
+
+    try {
+      const { result } = renderHook(() => useModels())
+      expect(getCount).toBe(1)
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(30000) })
+      expect(result.current.loading).toBe(false)
+      expect(getCount).toBe(2)
+      expect(result.current.models[0].id).toBe('recovered')
+      expect(result.current.error).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   test('does not let an older models response overwrite a newer snapshot', async () => {
     const firstRequest = deferred()
     const secondRequest = deferred()

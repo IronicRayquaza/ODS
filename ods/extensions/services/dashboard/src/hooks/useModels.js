@@ -72,6 +72,7 @@ const MOCK_GPU = { vramTotal: 16, vramUsed: 13.2, vramFree: 2.8 }
 const MOCK_CURRENT_MODEL = 'Qwen/Qwen2.5-32B-Instruct-AWQ'
 const DEFAULT_POLL_MS = 30000
 const PENDING_MODEL_ACTION_POLL_MS = 2000
+const MODELS_FETCH_TIMEOUT_MS = 30000
 
 // Named export for dev-only mocking (explicit opt-in via VITE_USE_MOCK_DATA)
 export { getMockModels }
@@ -140,8 +141,10 @@ export function useModels() {
     }
 
     const requestId = ++modelsRequestRef.current
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), MODELS_FETCH_TIMEOUT_MS)
     try {
-      const response = await fetch('/api/models')
+      const response = await fetch('/api/models', { signal: controller.signal })
       if (!response.ok) throw new Error('Failed to fetch models')
       const data = await response.json()
 
@@ -164,6 +167,7 @@ export function useModels() {
       }
       // No silent fallback - let error propagate to UI
     } finally {
+      clearTimeout(timeout)
       setLoading(false)
     }
   }, [reconcilePendingAction])

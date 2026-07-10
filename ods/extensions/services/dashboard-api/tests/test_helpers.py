@@ -150,7 +150,7 @@ class TestGetBootstrapStatus:
         status = get_bootstrap_status()
         assert status.active is False
 
-    def test_inactive_when_model_file_on_disk(self, data_dir):
+    def test_active_when_downloading_model_file_on_disk(self, data_dir):
         models_dir = data_dir / "models"
         models_dir.mkdir(exist_ok=True)
         (models_dir / "present.gguf").write_bytes(b"\x00" * 1024)
@@ -158,6 +158,20 @@ class TestGetBootstrapStatus:
         status_file = data_dir / "bootstrap-status.json"
         status_file.write_text(json.dumps({
             "status": "downloading", "model": "present.gguf",
+            "percent": 50, "bytesDownloaded": 500, "bytesTotal": 1024,
+        }))
+
+        status = get_bootstrap_status()
+        assert status.active is True
+
+    def test_inactive_when_non_active_status_model_file_on_disk(self, data_dir):
+        models_dir = data_dir / "models"
+        models_dir.mkdir(exist_ok=True)
+        (models_dir / "present.gguf").write_bytes(b"\x00" * 1024)
+
+        status_file = data_dir / "bootstrap-status.json"
+        status_file.write_text(json.dumps({
+            "status": "stale", "model": "present.gguf",
             "percent": 50, "bytesDownloaded": 500, "bytesTotal": 1024,
         }))
 

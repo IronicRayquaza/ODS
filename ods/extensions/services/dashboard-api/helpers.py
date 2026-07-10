@@ -689,15 +689,14 @@ def get_bootstrap_status() -> BootstrapStatus:
         if status == "" and not data.get("bytesDownloaded") and not data.get("percent"):
             return BootstrapStatus(active=False)
 
-        # Reconcile with the filesystem: if the target model file is already
-        # present on disk, the download is effectively done regardless of what
-        # the status record says (covers stale "downloading" entries left by a
-        # crash or a parallel download path). Skip during "verifying" and
-        # "swapping" because the file has been renamed into place but SHA256,
-        # config updates, and the llama-server hot-swap may not have finished
-        # yet — returning inactive here would hide a subsequent failure.
+        # Reconcile with the filesystem only for non-active states. If the
+        # target model file is already present on disk and the status is
+        # non-active, the download is done enough for UI purposes. Active
+        # states remain busy because config updates and the llama-server
+        # hot-swap may not have finished yet; returning inactive here would
+        # hide a subsequent failure.
         model_name = data.get("model")
-        if model_name and status not in ("verifying", "swapping"):
+        if model_name and status not in ("downloading", "verifying", "swapping"):
             models_dir = Path(DATA_DIR) / "models"
             model_path = (models_dir / model_name).resolve()
             if model_path.is_relative_to(models_dir.resolve()):

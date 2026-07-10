@@ -54,9 +54,6 @@ _ods_rootless_get_uid() {
         hermes)
             printf '10000'
             ;;
-        langfuse)
-            printf '1001'
-            ;;
     esac
 }
 
@@ -136,7 +133,7 @@ ods_fix_rootless_ownership() {
     echo "[ods] Fixing data-directory ownership for Docker rootless mode..."
 
     local svc uid
-    local services=(n8n whisper tts token-spy privacy-shield ape hermes langfuse openclaw)
+    local services=(n8n whisper tts token-spy privacy-shield ape hermes openclaw)
     for svc in "${services[@]}"; do
         uid=$(_ods_rootless_get_uid "$svc")
         local target_dir="${install_dir}/data/${svc}"
@@ -145,6 +142,19 @@ ods_fix_rootless_ownership() {
             _ods_rootless_chown_dir "$target_dir" "$uid"
         fi
     done
+
+    # Special case: langfuse database directories require specific UIDs
+    # postgres (UID 70) and clickhouse (UID 101)
+    local postgres_dir="${install_dir}/data/langfuse/postgres"
+    if [[ -d "$postgres_dir" ]]; then
+        echo "[ods]   chown -R 70:70 data/langfuse/postgres"
+        _ods_rootless_chown_dir "$postgres_dir" "70"
+    fi
+    local clickhouse_dir="${install_dir}/data/langfuse/clickhouse"
+    if [[ -d "$clickhouse_dir" ]]; then
+        echo "[ods]   chown -R 101:101 data/langfuse/clickhouse"
+        _ods_rootless_chown_dir "$clickhouse_dir" "101"
+    fi
 
     # Special case: openclaw workspace under config/ also needs UID 1000
     local openclaw_ws="${install_dir}/config/openclaw/workspace"

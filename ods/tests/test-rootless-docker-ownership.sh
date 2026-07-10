@@ -53,9 +53,8 @@ info "Static: _ods_rootless_get_uid covers all affected services"
     done
     [[ "$(_ods_rootless_get_uid "ape")" == "100" ]] || exit 1
     [[ "$(_ods_rootless_get_uid "hermes")" == "10000" ]] || exit 1
-    [[ "$(_ods_rootless_get_uid "langfuse")" == "1001" ]] || exit 1
 ) || fail "_ods_rootless_get_uid check failed or missing services"
-pass "_ods_rootless_get_uid covers all 9 affected services"
+pass "_ods_rootless_get_uid covers all 8 generic services"
 
 info "Static: chown helper uses --user 0:0 (host user in rootless)"
 grep -q '\-\-user 0:0' "$LIB" \
@@ -159,9 +158,10 @@ info "UID map: ape UID is 100"
 ( . "$LIB" && [[ "$(_ods_rootless_get_uid ape)" == "100" ]] ) || fail "ape UID is not 100"
 pass "ape UID = 100"
 
-info "UID map: langfuse UID is 1001 (nextjs user)"
-( . "$LIB" && [[ "$(_ods_rootless_get_uid langfuse)" == "1001" ]] ) || fail "langfuse UID is not 1001"
-pass "langfuse UID = 1001 (nextjs)"
+info "UID map: langfuse database UIDs (postgres=70, clickhouse=101)"
+grep -q 'chown -R 70:70' "$LIB" || fail "postgres UID 70 not set"
+grep -q 'chown -R 101:101' "$LIB" || fail "clickhouse UID 101 not set"
+pass "langfuse database UIDs correct (postgres=70, clickhouse=101)"
 
 # ── Filesystem simulation: ods_fix_rootless_ownership logic ────────────────────
 
@@ -174,6 +174,8 @@ mkdir -p "$INSTALL/data/n8n"
 mkdir -p "$INSTALL/data/hermes"
 mkdir -p "$INSTALL/data/tts"
 mkdir -p "$INSTALL/data/whisper"
+mkdir -p "$INSTALL/data/langfuse/postgres"
+mkdir -p "$INSTALL/data/langfuse/clickhouse"
 
 CHOWN_LOG="$TMP/chown.log"
 > "$CHOWN_LOG"
@@ -191,13 +193,14 @@ stub_simulate() {
 }
 stub_simulate
 
-grep -q '^1000:n8n$'    "$CHOWN_LOG" || fail "n8n not chowned (present dir)"
-grep -q '^10000:hermes$' "$CHOWN_LOG" || fail "hermes not chowned (present dir)"
-grep -q '^1000:tts$'    "$CHOWN_LOG" || fail "tts not chowned (present dir)"
-grep -q '^1000:whisper$' "$CHOWN_LOG" || fail "whisper not chowned (present dir)"
-grep -q ':ape$'         "$CHOWN_LOG" && fail "ape was processed but dir does not exist"
-grep -q ':langfuse$'    "$CHOWN_LOG" && fail "langfuse was processed but dir does not exist"
-pass "ods_fix_rootless_ownership only processes existing directories"
+grep -q '^1000:n8n$'        "$CHOWN_LOG" || fail "n8n not chowned (present dir)"
+grep -q '^10000:hermes$'    "$CHOWN_LOG" || fail "hermes not chowned (present dir)"
+grep -q '^1000:tts$'        "$CHOWN_LOG" || fail "tts not chowned (present dir)"
+grep -q '^1000:whisper$'    "$CHOWN_LOG" || fail "whisper not chowned (present dir)"
+grep -q '^70:postgres$'     "$CHOWN_LOG" || fail "langfuse/postgres not chowned (present dir)"
+grep -q '^101:clickhouse$'  "$CHOWN_LOG" || fail "langfuse/clickhouse not chowned (present dir)"
+grep -q ':ape$'             "$CHOWN_LOG" && fail "ape was processed but dir does not exist"
+pass "ods_fix_rootless_ownership only processes existing directories and nested database paths"
 
 info "Filesystem: ownership fix is no-op when not rootless"
 CHOWN_LOG2="$TMP/chown2.log"

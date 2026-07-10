@@ -8,6 +8,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 import time
 import types
 from pathlib import Path, PurePosixPath
@@ -2174,6 +2175,96 @@ class TestModelActivationOwnership:
         assert handler.parse_response()["activeModelId"] is None
 
 
+class TestModelLifecycleSerialization:
+
+    @pytest.fixture(autouse=True)
+    def _auth(self, monkeypatch):
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
+
+    def test_activation_reports_background_update_owner(self):
+        acquired, _active = _mod._begin_model_lifecycle("system_update")
+        assert acquired
+        try:
+            handler = _FakeHandler(json.dumps({"model_id": "target"}).encode("utf-8"))
+            _mod.AgentHandler._handle_model_activate(handler)
+        finally:
+            _mod._end_model_lifecycle("system_update")
+
+        assert handler.response_code == 409
+        response = handler.parse_response()
+        assert response["code"] == "model_lifecycle_busy"
+        assert response["activeOperation"] == "system_update"
+
+    def test_delete_reports_artifact_verification_owner(self, tmp_path, monkeypatch):
+        install_dir = tmp_path / "install"
+        models_dir = install_dir / "data" / "models"
+        models_dir.mkdir(parents=True)
+        (models_dir / "target.gguf").write_bytes(b"model")
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        acquired, _active = _mod._begin_model_lifecycle(
+            "artifact_verification",
+            "other.gguf",
+        )
+        assert acquired
+        try:
+            handler = _FakeHandler(
+                json.dumps({"gguf_file": "target.gguf"}).encode("utf-8")
+            )
+            _mod.AgentHandler._handle_model_delete(handler)
+        finally:
+            _mod._end_model_lifecycle("artifact_verification")
+
+        assert handler.response_code == 409
+        response = handler.parse_response()
+        assert response["activeOperation"] == "artifact_verification"
+        assert response["activeTarget"] == "other.gguf"
+
+    def test_update_reports_model_delete_owner(self, monkeypatch):
+        monkeypatch.setattr(_mod, "_update_thread", None)
+        acquired, _active = _mod._begin_model_lifecycle("model_delete", "target.gguf")
+        assert acquired
+        try:
+            handler = _FakeHandler(b"{}")
+            _mod.AgentHandler._handle_update_start(handler)
+        finally:
+            _mod._end_model_lifecycle("model_delete")
+
+        assert handler.response_code == 409
+        response = handler.parse_response()
+        assert response["code"] == "model_lifecycle_busy"
+        assert response["activeOperation"] == "model_delete"
+
+    def test_download_reports_model_activation_owner(self, tmp_path, monkeypatch):
+        install_dir = tmp_path / "install"
+        (install_dir / "config").mkdir(parents=True)
+        (install_dir / "data" / "models").mkdir(parents=True)
+        model = {
+            "gguf_file": "target.gguf",
+            "gguf_url": "https://example.test/target.gguf",
+            "gguf_sha256": hashlib.sha256(b"model").hexdigest(),
+        }
+        (install_dir / "config" / "model-library.json").write_text(
+            json.dumps({"models": [model]}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        acquired, _active = _mod._begin_model_lifecycle("model_activation", "other")
+        assert acquired
+        try:
+            handler = _FakeHandler(json.dumps({
+                "gguf_file": model["gguf_file"],
+                "gguf_url": model["gguf_url"],
+            }).encode("utf-8"))
+            _mod.AgentHandler._handle_model_download(handler)
+        finally:
+            _mod._end_model_lifecycle("model_activation")
+
+        assert handler.response_code == 409
+        response = handler.parse_response()
+        assert response["activeOperation"] == "model_activation"
+        assert response["activeTarget"] == "other"
+
+
 class TestModelActivationModeAndMacosBridge:
 
     def test_cloud_mode_rejects_local_activation_before_any_state_change(
@@ -2301,6 +2392,8 @@ class TestModelActivationModeAndMacosBridge:
                 "models": [{
                     "id": "target-model",
                     "gguf_file": "new-model.gguf",
+                    "gguf_url": "https://example.test/new-model.gguf",
+                    "gguf_sha256": hashlib.sha256(b"model").hexdigest(),
                     "llm_model_name": "new-model",
                     "context_length": 4096,
                 }],
@@ -2355,6 +2448,7 @@ class TestModelActivationModeAndMacosBridge:
         monkeypatch.setattr(_mod, "_stop_macos_native_llama_server", record_stop)
         monkeypatch.setattr(_mod, "_configure_macos_llm_bridge", record_bridge)
         monkeypatch.setattr(_mod, "_launch_native_llama_server", record_launch)
+        monkeypatch.setattr(_mod, "_chat_completion_ready", lambda *_args, **_kwargs: True)
         monkeypatch.setattr(_mod.subprocess, "run", fake_run)
         handler = _FakeHandler(b"")
 
@@ -3869,6 +3963,102 @@ class TestModelDownloadCatalogUnavailable:
         assert body["error"] == "Model not in library catalog"
 
 
+class TestModelDeleteSafety:
+
+    def _setup(self, tmp_path, monkeypatch, *, active="other.gguf"):
+        install_dir = tmp_path / "install"
+        models_dir = install_dir / "data" / "models"
+        (install_dir / "config").mkdir(parents=True)
+        models_dir.mkdir(parents=True)
+        (install_dir / ".env").write_text(
+            f"GPU_BACKEND=nvidia\nGGUF_FILE={active}\nOLLAMA_PORT=8080\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
+        return install_dir, models_dir
+
+    def test_split_delete_clears_status_naming_deleted_part(self, tmp_path, monkeypatch):
+        install_dir, models_dir = self._setup(tmp_path, monkeypatch)
+        parts = ["split-00001-of-00002.gguf", "split-00002-of-00002.gguf"]
+        for part in parts:
+            (models_dir / part).write_bytes(b"model part")
+        (install_dir / "config" / "model-library.json").write_text(
+            json.dumps({"models": [{
+                "gguf_file": parts[0],
+                "gguf_parts": [
+                    {"file": part, "url": f"https://example.test/{part}"}
+                    for part in parts
+                ],
+            }]}),
+            encoding="utf-8",
+        )
+        status_path = install_dir / "data" / "model-download-status.json"
+        status_path.write_text(
+            json.dumps({
+                "status": "complete",
+                "model": f"{parts[1]} (part 2/2)",
+                "bytesDownloaded": 10,
+                "bytesTotal": 10,
+            }),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(_mod, "_live_runtime_has_model", lambda _env, _model: False)
+        handler = _FakeHandler(json.dumps({"gguf_file": parts[0]}).encode("utf-8"))
+
+        _mod.AgentHandler._handle_model_delete(handler)
+
+        assert handler.response_code == 200
+        assert all(not (models_dir / part).exists() for part in parts)
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+        assert status["status"] == "idle"
+        assert status["model"] == ""
+        assert not any(part in json.dumps(status) for part in parts)
+
+    def test_delete_refuses_persisted_active_model_without_touching_status(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir, models_dir = self._setup(
+            tmp_path,
+            monkeypatch,
+            active="active.gguf",
+        )
+        target = models_dir / "active.gguf"
+        target.write_bytes(b"active")
+        status_path = install_dir / "data" / "model-download-status.json"
+        original_status = json.dumps({"status": "complete", "model": "active.gguf"})
+        status_path.write_text(original_status, encoding="utf-8")
+        monkeypatch.setattr(
+            _mod,
+            "_live_runtime_has_model",
+            lambda *_args: pytest.fail("persisted active identity should refuse first"),
+        )
+        handler = _FakeHandler(json.dumps({"gguf_file": "active.gguf"}).encode("utf-8"))
+
+        _mod.AgentHandler._handle_model_delete(handler)
+
+        assert handler.response_code == 409
+        assert target.exists()
+        assert status_path.read_text(encoding="utf-8") == original_status
+
+    def test_delete_refuses_model_reported_active_only_by_live_runtime(
+        self, tmp_path, monkeypatch,
+    ):
+        _install_dir, models_dir = self._setup(tmp_path, monkeypatch)
+        target = models_dir / "live-active.gguf"
+        target.write_bytes(b"active")
+        monkeypatch.setattr(_mod, "_live_runtime_has_model", lambda _env, _model: True)
+        handler = _FakeHandler(
+            json.dumps({"gguf_file": "live-active.gguf"}).encode("utf-8")
+        )
+
+        _mod.AgentHandler._handle_model_delete(handler)
+
+        assert handler.response_code == 409
+        assert "live runtime" in handler.parse_response()["error"]
+        assert target.exists()
+
+
 class TestModelDownloadFileIntegrity:
 
     class _NoCancel:
@@ -4004,6 +4194,9 @@ class TestModelDownloadFileIntegrity:
 
         handler = _FakeHandler(b"")
         _mod.AgentHandler._handle_model_status(handler)
+        _mod._model_status_verify_thread.join(timeout=2)
+        handler = _FakeHandler(b"")
+        _mod.AgentHandler._handle_model_status(handler)
 
         assert handler.response_code == 200
         body = handler.parse_response()
@@ -4124,12 +4317,64 @@ class TestModelDownloadFileIntegrity:
 
         handler = _FakeHandler(b"")
         _mod.AgentHandler._handle_model_status(handler)
+        _mod._model_status_verify_thread.join(timeout=2)
+        handler = _FakeHandler(b"")
+        _mod.AgentHandler._handle_model_status(handler)
 
         assert handler.response_code == 200
         response = handler.parse_response()
         assert response["status"] == "failed"
         assert parts[1]["file"] in response["error"]
         assert "missing" in response["error"]
+
+    def test_stale_status_verification_is_background_single_flight(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir = self._setup_env(
+            tmp_path,
+            monkeypatch,
+            expected_payload=b"already downloaded",
+        )
+        model_path = install_dir / "data" / "models" / "test-model.gguf"
+        model_path.write_bytes(b"already downloaded")
+        status_path = install_dir / "data" / "model-download-status.json"
+        status_path.write_text(
+            json.dumps({
+                "status": "downloading",
+                "model": "test-model.gguf",
+                "bytesDownloaded": model_path.stat().st_size,
+                "bytesTotal": model_path.stat().st_size,
+            }),
+            encoding="utf-8",
+        )
+        entered = threading.Event()
+        release = threading.Event()
+        verification_calls = []
+
+        def blocking_verify(*_args, **_kwargs):
+            verification_calls.append(True)
+            entered.set()
+            assert release.wait(timeout=2)
+            return True, ""
+
+        monkeypatch.setattr(_mod, "_verify_model_manifest", blocking_verify)
+
+        first = _FakeHandler(b"")
+        _mod.AgentHandler._handle_model_status(first)
+        assert first.response_code == 200
+        assert first.parse_response()["status"] == "verifying"
+        assert entered.wait(timeout=2)
+
+        second = _FakeHandler(b"")
+        _mod.AgentHandler._handle_model_status(second)
+        assert second.response_code == 200
+        assert second.parse_response()["status"] == "verifying"
+        assert len(verification_calls) == 1
+
+        release.set()
+        _mod._model_status_verify_thread.join(timeout=2)
+        assert not _mod._model_status_verify_thread.is_alive()
+        assert json.loads(status_path.read_text(encoding="utf-8"))["status"] == "complete"
 
     def test_corrupt_existing_single_file_is_replaced_before_reuse(
         self,

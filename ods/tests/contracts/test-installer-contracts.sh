@@ -379,6 +379,9 @@ if grep -q '^[[:space:]]*_build_services=(dashboard dashboard-api ape token-spy 
   exit 1
 fi
 
+echo "[contract] failed requested local builds cannot reuse stale images"
+bash tests/test-phase11-local-build-failure.sh
+
 echo "[contract] OpenClaw deprecation preserves actual installs only"
 for installer in install-core.sh installers/macos/install-macos.sh; do
   grep -Fq 'name=^/ods-openclaw$' "$installer" \

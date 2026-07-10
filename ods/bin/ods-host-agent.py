@@ -5086,9 +5086,9 @@ macos_configure_llm_bridge_from_env "$env_file" "$install_dir"
 def _send_lemonade_warmup(host: str, port: str, gguf_file: str, attempt: int) -> bool:
     """Send a warm-up chat completion to trigger Lemonade on-demand model load.
 
-    Lemonade discovers models via --extra-models-dir but only loads them when
-    a request arrives for that model ID.  Returns True if the request was
-    accepted (model is loading).  Mirrors bootstrap-upgrade.sh lines 343-347.
+    Lemonade discovers models from its configured extra_models_dir but only
+    loads them when a request arrives for that model ID. Returns True if the
+    request was accepted (model is loading). Mirrors bootstrap-upgrade.sh.
     """
     model_id = f"extra.{gguf_file}"
     url = f"http://{host}:{port}/api/v1/chat/completions"
@@ -5369,6 +5369,13 @@ def _restart_windows_lemonade(env: dict):
     ps_env = os.environ.copy()
     ps_env.update({
         "ODS_WIN_LEMONADE_EXE": str(exe),
+        "ODS_WIN_LEMONADE_HELPER": str(
+            INSTALL_DIR / "installers" / "windows" / "lib" / "backend-contract.ps1"
+        ),
+        "ODS_WIN_ENV_PATH": str(INSTALL_DIR / ".env"),
+        "ODS_WIN_LEMONADE_DIAGNOSTIC_LOG": str(
+            INSTALL_DIR / "logs" / "lemonade-launch.log"
+        ),
         "ODS_WIN_MODELS_DIR": str(INSTALL_DIR / "data" / "models"),
         "ODS_WIN_PID_FILE": str(INSTALL_DIR / "data" / "llama-server.pid"),
         "ODS_WIN_LEMONADE_PORT": env.get("AMD_INFERENCE_PORT", "8080") or "8080",
@@ -5378,11 +5385,23 @@ def _restart_windows_lemonade(env: dict):
     script = r'''
 $ErrorActionPreference = "Stop"
 $exe = $env:ODS_WIN_LEMONADE_EXE
+$helperPath = $env:ODS_WIN_LEMONADE_HELPER
+$envPath = $env:ODS_WIN_ENV_PATH
+$diagnosticLog = $env:ODS_WIN_LEMONADE_DIAGNOSTIC_LOG
 $modelsDir = $env:ODS_WIN_MODELS_DIR
 $pidPath = $env:ODS_WIN_PID_FILE
 $port = [int]$env:ODS_WIN_LEMONADE_PORT
 $bindAddr = $env:ODS_WIN_BIND_ADDR
 $taskName = $env:ODS_WIN_LEMONADE_TASK
+if (-not (Test-Path -LiteralPath $helperPath -PathType Leaf)) {
+    throw "Windows Lemonade launch helper not found: $helperPath"
+}
+. $helperPath
+$adminApiKey = Get-ODSLemonadeAdminApiKey -EnvPath $envPath
+$launchContract = Get-ODSLemonadeLaunchContract `
+    -ExecutablePath $exe -Port $port -BindAddress $bindAddr `
+    -ModelsDir $modelsDir -AdminApiKey $adminApiKey
+$bindAddr = $launchContract.BindAddress
 $binDir = Split-Path -Parent $exe
 $userProfile = [Environment]::GetFolderPath("UserProfile")
 $cacheBin = if ($userProfile) { Join-Path (Join-Path (Join-Path $userProfile ".cache") "lemonade") "bin" } else { $null }
@@ -5464,10 +5483,17 @@ if ($remaining.Count -gt 0) {
     throw "Could not stop existing Lemonade processes: $ids"
 }
 
-$argString = "serve --port $port --host $bindAddr --no-tray --llamacpp vulkan --extra-models-dir `"$modelsDir`""
+$action = New-ODSLemonadeScheduledTaskAction `
+    -Contract $launchContract -EnvPath $envPath -DiagnosticLogPath $diagnosticLog
+$existingAction = if ($existingTask) { @($existingTask.Actions)[0] } else { $null }
+$existingTaskMatches = (
+    $existingAction -and
+    [string]$existingAction.Execute -eq [string]$action.Execute -and
+    [string]$existingAction.Arguments -eq [string]$action.Arguments
+)
 $launchMethod = "scheduled task"
+$directProcess = $null
 try {
-    $action = New-ScheduledTaskAction -Execute $exe -Argument $argString -WorkingDirectory (Split-Path -Parent $exe)
     $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddYears(1))
     $settings = New-ScheduledTaskSettingsSet `
         -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
@@ -5476,19 +5502,19 @@ try {
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
     Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
 } catch {
-    if ($existingTask) {
+    if ($existingTaskMatches) {
         try {
             Write-Warning "Could not refresh Lemonade scheduled task; reusing existing task: $_"
             Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
         } catch {
             $launchMethod = "direct process"
             Write-Warning "Could not start Lemonade through Task Scheduler: $_"
-            Start-Process -FilePath $exe -ArgumentList $argString -WindowStyle Hidden -WorkingDirectory (Split-Path -Parent $exe) | Out-Null
+            $directProcess = Start-ODSLemonadeDirectProcess -Contract $launchContract
         }
     } else {
         $launchMethod = "direct process"
-        Write-Warning "Could not start Lemonade through Task Scheduler: $_"
-        Start-Process -FilePath $exe -ArgumentList $argString -WindowStyle Hidden -WorkingDirectory (Split-Path -Parent $exe) | Out-Null
+        Write-Warning "Could not install the current Lemonade task contract; starting directly: $_"
+        $directProcess = Start-ODSLemonadeDirectProcess -Contract $launchContract
     }
 }
 $proc = $null
@@ -5498,13 +5524,14 @@ for ($i = 0; $i -lt 45; $i++) {
     if ($proc) { break }
 }
 if (-not $proc -and $launchMethod -eq "scheduled task") {
+    $scheduledDiagnostics = Get-ODSLemonadeLaunchDiagnostics -TaskName $taskName
     $launchMethod = "direct process"
-    Write-Warning "Lemonade scheduled task did not start a server process. Starting directly."
+    Write-Warning "Lemonade scheduled task did not start a server process. $(Format-ODSLemonadeLaunchDiagnostics -Diagnostics $scheduledDiagnostics)"
     try { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } catch {}
     foreach ($listener in @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)) {
         if ($listener.OwningProcess -gt 0) { Stop-ODSProcessId -ProcId ([int]$listener.OwningProcess) }
     }
-    Start-Process -FilePath $exe -ArgumentList $argString -WindowStyle Hidden -WorkingDirectory (Split-Path -Parent $exe) | Out-Null
+    $directProcess = Start-ODSLemonadeDirectProcess -Contract $launchContract
     for ($i = 0; $i -lt 15; $i++) {
         Start-Sleep -Seconds 1
         $proc = Get-ODSHealthyRouter
@@ -5512,9 +5539,19 @@ if (-not $proc -and $launchMethod -eq "scheduled task") {
     }
 }
 if (-not $proc) {
-    $taskInfo = Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction SilentlyContinue
-    $taskResult = if ($taskInfo) { $taskInfo.LastTaskResult } else { "unknown" }
-    throw "Lemonade $launchMethod started but no healthy owned router was found (task result: $taskResult)"
+    $launchDiagnostics = Get-ODSLemonadeLaunchDiagnostics `
+        -TaskName $taskName -ChildProcess $directProcess
+    throw "Lemonade $launchMethod started but no healthy owned router was found. $(Format-ODSLemonadeLaunchDiagnostics -Diagnostics $launchDiagnostics)"
+}
+if ($launchContract.RequiresRuntimeConfiguration) {
+    try {
+        $null = Set-ODSLemonadeModernRuntimeConfig `
+            -Port $port -ModelsDir $modelsDir -AdminApiKey $adminApiKey
+    } catch {
+        $configDiagnostics = Get-ODSLemonadeLaunchDiagnostics `
+            -TaskName $taskName -ChildProcess $directProcess
+        throw "Lemonade 10.7+ runtime configuration failed: $_. $(Format-ODSLemonadeLaunchDiagnostics -Diagnostics $configDiagnostics)"
+    }
 }
 New-Item -ItemType Directory -Path (Split-Path -Parent $pidPath) -Force | Out-Null
 Set-Content -LiteralPath $pidPath -Value $proc.ProcessId

@@ -461,10 +461,9 @@ if ($dryRun) {
 
             if ($useLemonade) {
                 # ── Start Lemonade server ──
-                # --extra-models-dir: Lemonade auto-discovers GGUF files in this directory
-                # --no-tray: headless mode (no GUI system tray icon)
-                # --llamacpp vulkan: AMD Vulkan GPU acceleration
-                # Model loads automatically on first chat request -- no /api/v1/load needed
+                # The shared launch contract keeps legacy CLI flags on older
+                # releases and configures models/Vulkan through Lemonade 10.7's
+                # authenticated internal API. Models load on first chat request.
                 Write-AI "Starting Lemonade server..."
                 $modelsDir = Join-Path (Join-Path $installDir "data") "models"
                 $taskName = "ODSLemonadeRuntime"
@@ -477,10 +476,20 @@ if ($dryRun) {
                 $pidDir = Split-Path $script:INFERENCE_PID_FILE
                 New-Item -ItemType Directory -Path $pidDir -Force | Out-Null
 
-                $argString = "serve --port $($script:LEMONADE_PORT) --host $bindAddr --no-tray --llamacpp vulkan --extra-models-dir `"$modelsDir`""
+                $adminApiKey = Get-ODSLemonadeAdminApiKey -EnvPath $_envPath
+                $launchContract = Get-ODSLemonadeLaunchContract `
+                    -ExecutablePath $script:LEMONADE_EXE `
+                    -Port $script:LEMONADE_PORT `
+                    -BindAddress $bindAddr `
+                    -ModelsDir $modelsDir `
+                    -AdminApiKey $adminApiKey
+                Write-AI "Lemonade $($launchContract.Version) launch contract: $($launchContract.ArgumentString)"
+                $diagnosticLog = Join-Path (Join-Path $installDir "logs") "lemonade-launch.log"
                 $launchMethod = "scheduled task"
+                $directProcess = $null
                 try {
-                    $action = New-ScheduledTaskAction -Execute $script:LEMONADE_EXE -Argument $argString -WorkingDirectory (Split-Path -Parent $script:LEMONADE_EXE)
+                    $action = New-ODSLemonadeScheduledTaskAction `
+                        -Contract $launchContract -EnvPath $_envPath -DiagnosticLogPath $diagnosticLog
                     $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddYears(1))
                     $lemonadeSettings = New-ScheduledTaskSettingsSet `
                         -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
@@ -492,7 +501,7 @@ if ($dryRun) {
                     $launchMethod = "direct process"
                     Write-AIWarn "Could not start Lemonade through Task Scheduler: $_"
                     Write-AI "Starting Lemonade directly for this Windows session..."
-                    Start-Process -FilePath $script:LEMONADE_EXE -ArgumentList $argString -WindowStyle Hidden -WorkingDirectory (Split-Path -Parent $script:LEMONADE_EXE) | Out-Null
+                    $directProcess = Start-ODSLemonadeDirectProcess -Contract $launchContract
                 }
                 Start-Sleep -Seconds 5
                 $proc = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
@@ -500,10 +509,12 @@ if ($dryRun) {
                     Sort-Object ProcessId -Descending |
                     Select-Object -First 1
                 if (-not $proc -and $launchMethod -eq "scheduled task") {
+                    $scheduledDiagnostics = Get-ODSLemonadeLaunchDiagnostics -TaskName $taskName
                     $launchMethod = "direct process"
                     Write-AIWarn "Lemonade scheduled task did not start a server process."
+                    Write-AIWarn (Format-ODSLemonadeLaunchDiagnostics -Diagnostics $scheduledDiagnostics)
                     Write-AI "Starting Lemonade directly for this Windows session..."
-                    Start-Process -FilePath $script:LEMONADE_EXE -ArgumentList $argString -WindowStyle Hidden -WorkingDirectory (Split-Path -Parent $script:LEMONADE_EXE) | Out-Null
+                    $directProcess = Start-ODSLemonadeDirectProcess -Contract $launchContract
                     Start-Sleep -Seconds 3
                     $proc = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
                         Where-Object { $_.ExecutablePath -and $_.ExecutablePath.Equals($script:LEMONADE_EXE, [StringComparison]::OrdinalIgnoreCase) } |
@@ -511,7 +522,10 @@ if ($dryRun) {
                         Select-Object -First 1
                 }
                 if (-not $proc) {
+                    $launchDiagnostics = Get-ODSLemonadeLaunchDiagnostics `
+                        -TaskName $taskName -ChildProcess $directProcess
                     Write-AIWarn "Lemonade $launchMethod started but no Lemonade process was found. Falling back to native llama-server (Vulkan)."
+                    Write-AIWarn (Format-ODSLemonadeLaunchDiagnostics -Diagnostics $launchDiagnostics)
                     Stop-ODSWindowsLemonadeProcesses -ExePath $script:LEMONADE_EXE -TaskNames @($taskName, "DreamServerLemonadeRuntime")
                     Remove-Item -LiteralPath $script:INFERENCE_PID_FILE -Force -ErrorAction SilentlyContinue
                     $useLemonade = $false
@@ -532,6 +546,17 @@ if ($dryRun) {
                         } catch { }
                         if ($waited % 10 -eq 0) { Write-AI "  Still starting... ($waited s)" }
                     }
+                    if ($healthy -and $launchContract.RequiresRuntimeConfiguration) {
+                        try {
+                            $null = Set-ODSLemonadeModernRuntimeConfig `
+                                -Port $script:LEMONADE_PORT -ModelsDir $modelsDir `
+                                -AdminApiKey $adminApiKey
+                            Write-AISuccess "Lemonade 10.7+ runtime configuration verified"
+                        } catch {
+                            Write-AIWarn "Lemonade runtime configuration failed: $_"
+                            $healthy = $false
+                        }
+                    }
                     if ($healthy) {
                         Write-AISuccess "Lemonade server healthy (PID $($proc.ProcessId))"
                         if ($gpuInfo.HasNpu) {
@@ -539,7 +564,10 @@ if ($dryRun) {
                         }
                         Write-AI "Model ($($tierConfig.GgufFile)) will load on first request."
                     } else {
+                        $healthDiagnostics = Get-ODSLemonadeLaunchDiagnostics `
+                            -TaskName $taskName -ChildProcess $directProcess
                         Write-AIWarn "Lemonade server did not respond within ${maxWait}s. Falling back to native llama-server (Vulkan)."
+                        Write-AIWarn (Format-ODSLemonadeLaunchDiagnostics -Diagnostics $healthDiagnostics)
                         Stop-ODSWindowsLemonadeProcesses -ExePath $script:LEMONADE_EXE -TaskNames @($taskName, "DreamServerLemonadeRuntime")
                         Remove-Item -LiteralPath $script:INFERENCE_PID_FILE -Force -ErrorAction SilentlyContinue
                         $useLemonade = $false

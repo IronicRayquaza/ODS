@@ -783,17 +783,28 @@ class TestRestartWindowsLemonade:
         assert "Unregister-ScheduledTask" not in script
         assert "taskkill.exe /PID $ProcId /T /F" in script
         assert "for ($i = 0; $i -lt 45; $i++)" in script
-        assert "task result: $taskResult" in script
+        assert "Get-ODSLemonadeLaunchDiagnostics" in script
+        assert "Format-ODSLemonadeLaunchDiagnostics" in script
         assert "Start-ScheduledTask -TaskName $taskName" in script
-        assert "Start-Process -FilePath $exe" in script
+        assert "Start-ODSLemonadeDirectProcess -Contract $launchContract" in script
         assert "no healthy owned router was found" in script
         assert "Stop-ScheduledTask -TaskName $taskName" in script
         assert "Refusing to stop unowned process" in script
         assert "Get-ODSHealthyRouter" in script
         assert "/api/v1/health" in script
         assert "$proc = Get-ODSHealthyRouter" in script
+        assert "Get-ODSLemonadeLaunchContract" in script
+        assert "New-ODSLemonadeScheduledTaskAction" in script
+        assert "Set-ODSLemonadeModernRuntimeConfig" in script
+        assert "$existingTaskMatches" in script
+        assert "--extra-models-dir" not in script
+        assert "--no-tray" not in script
         assert captured["env"]["ODS_WIN_LEMONADE_TASK"] == "ODSLemonadeRuntime"
         assert captured["env"]["ODS_WIN_LEMONADE_EXE"] == str(lemonade_exe)
+        assert Path(captured["env"]["ODS_WIN_LEMONADE_HELPER"]).as_posix().endswith(
+            "installers/windows/lib/backend-contract.ps1"
+        )
+        assert captured["env"]["ODS_WIN_ENV_PATH"] == str(tmp_path / ".env")
 
     def test_installer_and_cli_lemonade_tasks_are_always_on(self):
         ods_root = Path(__file__).resolve().parents[4]

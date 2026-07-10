@@ -928,6 +928,8 @@ def json_response(handler, code: int, body: dict):
     handler.send_response(code)
     handler.send_header("Content-Type", "application/json")
     handler.send_header("Content-Length", str(len(payload)))
+    if getattr(handler, "close_connection", False):
+        handler.send_header("Connection", "close")
     handler.end_headers()
     handler.wfile.write(payload)
 
@@ -1355,6 +1357,10 @@ def _run_update_script(action: str, *args: str, timeout: int | None) -> subproce
 
 
 class AgentHandler(BaseHTTPRequestHandler):
+    # Dashboard API keeps a small connection pool to avoid exhausting macOS
+    # ephemeral ports when requests traverse the private Colima TCP bridge.
+    protocol_version = "HTTP/1.1"
+
     def log_message(self, fmt, *args):
         logger.info(fmt, *args)
 
@@ -1665,6 +1671,12 @@ class AgentHandler(BaseHTTPRequestHandler):
             json_response(self, 500, {"error": f"Failed to fetch stats: {exc}"})
 
     def do_POST(self):
+        # Several legacy endpoints intentionally ignore an optional body, and
+        # rejected requests may return before consuming one. Close POST
+        # connections after their framed response so unread bytes can never be
+        # parsed as the next request on an HTTP/1.1 keep-alive connection. GET
+        # polling remains reusable, which is where connection churn matters.
+        self.close_connection = True
         if self.path in ("/v1/extension/start", "/v1/extension/stop"):
             action = "start" if self.path.endswith("/start") else "stop"
             self._handle_extension(action)

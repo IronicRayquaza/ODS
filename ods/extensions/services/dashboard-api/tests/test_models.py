@@ -69,25 +69,18 @@ def test_agent_model_status_collapses_concurrent_poll_bursts(monkeypatch):
     calls = 0
     calls_lock = threading.Lock()
 
-    class _Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def read(self):
-            return b'{"status":"downloading","percent":42}'
-
-    def fake_urlopen(_request, timeout):
+    def fake_request(method, path, *, timeout, payload=None):
         nonlocal calls
+        assert method == "GET"
+        assert path == "/v1/model/status"
         assert timeout == 5
+        assert payload is None
         with calls_lock:
             calls += 1
         time.sleep(0.05)
-        return _Response()
+        return {"status": "downloading", "percent": 42}
 
-    monkeypatch.setattr(models_router.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(models_router, "request_agent_json", fake_request)
     monkeypatch.setattr(models_router, "_AGENT_MODEL_STATUS_CACHE_TTL_SECONDS", 1.0)
     monkeypatch.setattr(models_router, "_agent_model_status_cache_at", 0.0)
     monkeypatch.setattr(models_router, "_agent_model_status_cache_value", None)
@@ -97,6 +90,29 @@ def test_agent_model_status_collapses_concurrent_poll_bursts(monkeypatch):
 
     assert calls == 1
     assert results == [{"status": "downloading", "percent": 42}] * 16
+
+
+def test_agent_model_status_and_actions_share_transport(monkeypatch):
+    import routers.models as models_router
+
+    calls = []
+
+    def fake_request(method, path, *, timeout, payload=None):
+        calls.append((method, path, timeout, payload))
+        return {"status": "idle" if method == "GET" else "started"}
+
+    monkeypatch.setattr(models_router, "request_agent_json", fake_request)
+    monkeypatch.setattr(models_router, "_AGENT_MODEL_STATUS_CACHE_TTL_SECONDS", 0.0)
+    monkeypatch.setattr(models_router, "_agent_model_status_cache_at", 0.0)
+
+    assert models_router._get_agent_model_status() == {"status": "idle"}
+    assert models_router._call_agent_model("/v1/model/download", {"model": "test"}) == {
+        "status": "started"
+    }
+    assert calls == [
+        ("GET", "/v1/model/status", 5, None),
+        ("POST", "/v1/model/download", 30, {"model": "test"}),
+    ]
 
 
 def test_fetch_loaded_model_falls_back_to_models_when_lemonade_health_empty(monkeypatch):

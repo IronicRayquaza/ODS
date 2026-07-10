@@ -15,7 +15,8 @@ from typing import Optional
 import aiohttp
 import httpx
 
-from config import SERVICES, INSTALL_DIR, DATA_DIR, LLM_BACKEND, AGENT_URL, ODS_AGENT_KEY
+from config import SERVICES, INSTALL_DIR, DATA_DIR, LLM_BACKEND
+from host_agent_client import AgentClientError, async_request_json as request_agent_json
 from models import ServiceStatus, DiskUsage, ModelInfo, BootstrapStatus
 
 
@@ -126,13 +127,8 @@ async def _check_tailscale_health(service_id: str, config: dict) -> ServiceStatu
     local install look degraded.
     """
     try:
-        client = await _get_httpx_client()
-        headers = {"Authorization": f"Bearer {ODS_AGENT_KEY}"} if ODS_AGENT_KEY else {}
-        resp = await client.get(f"{AGENT_URL}/v1/tailscale/status", headers=headers)
-        if resp.status_code >= 500:
-            return _service_status_from_config(service_id, config, "not_deployed")
-        payload = resp.json()
-    except (httpx.HTTPError, httpx.TimeoutException, ValueError, OSError):
+        payload = await request_agent_json("GET", "/v1/tailscale/status", timeout=5)
+    except AgentClientError:
         return _service_status_from_config(service_id, config, "not_deployed")
 
     if not payload.get("running"):
@@ -155,18 +151,14 @@ async def _check_host_systemd_health(service_id: str, config: dict) -> ServiceSt
     if port <= 0:
         return _service_status_from_config(service_id, config, "not_deployed")
 
-    headers = {"Authorization": f"Bearer {ODS_AGENT_KEY}"} if ODS_AGENT_KEY else {}
     try:
-        client = await _get_httpx_client()
-        resp = await client.get(
-            f"{AGENT_URL}/v1/host/port",
+        payload = await request_agent_json(
+            "GET",
+            "/v1/host/port",
             params={"host": "127.0.0.1", "port": port},
-            headers=headers,
+            timeout=5,
         )
-        if resp.status_code >= 400:
-            return _service_status_from_config(service_id, config, "down")
-        payload = resp.json()
-    except (httpx.HTTPError, httpx.TimeoutException, ValueError, OSError):
+    except AgentClientError:
         return _service_status_from_config(service_id, config, "down")
 
     status = "healthy" if payload.get("reachable") else "not_deployed"

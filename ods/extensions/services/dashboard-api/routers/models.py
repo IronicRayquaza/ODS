@@ -7,8 +7,6 @@ import os
 import re
 import threading
 import time
-import urllib.request
-import urllib.error
 from pathlib import Path
 from typing import Any
 from typing import Optional
@@ -16,7 +14,7 @@ from typing import Optional
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
-from config import AGENT_URL, DATA_DIR, ODS_AGENT_KEY, INSTALL_DIR, LLM_BACKEND, SERVICES
+from config import DATA_DIR, INSTALL_DIR, LLM_BACKEND, SERVICES
 from gpu import get_gpu_info
 from helpers import (
     get_bootstrap_status,
@@ -24,6 +22,13 @@ from helpers import (
     get_llama_metrics,
     get_loaded_model,
     record_model_performance,
+)
+from host_agent_client import (
+    AgentClientError,
+    AgentHTTPError,
+    AgentProtocolError,
+    AgentUnavailable,
+    request_json as request_agent_json,
 )
 from models import ModelLibraryGpu, ModelLibraryResponse
 from performance_oracle import (
@@ -388,15 +393,9 @@ def _get_agent_model_status(timeout: int = 5) -> Optional[dict]:
         if now - _agent_model_status_cache_at < _AGENT_MODEL_STATUS_CACHE_TTL_SECONDS:
             return _agent_model_status_cache_value
 
-        req = urllib.request.Request(
-            f"{AGENT_URL}/v1/model/status",
-            method="GET",
-            headers={"Authorization": f"Bearer {ODS_AGENT_KEY}"},
-        )
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                status = json.loads(resp.read().decode())
-        except (urllib.error.HTTPError, urllib.error.URLError, OSError, json.JSONDecodeError):
+            status = request_agent_json("GET", "/v1/model/status", timeout=timeout)
+        except AgentClientError:
             status = None
 
         _agent_model_status_cache_value = status
@@ -406,27 +405,14 @@ def _get_agent_model_status(timeout: int = 5) -> Optional[dict]:
 
 def _call_agent_model(path: str, body: dict, timeout: int = 30) -> dict:
     """Call the host agent model endpoint."""
-    url = f"{AGENT_URL}{path}"
-    data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
-        url, data=data, method="POST",
-        headers={
-            "Authorization": f"Bearer {ODS_AGENT_KEY}",
-            "Content-Type": "application/json",
-        },
-    )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode())
-    except urllib.error.HTTPError as exc:
-        try:
-            err_body = json.loads(exc.read().decode())
-            detail = err_body.get("error", f"Host agent returned HTTP {exc.code}")
-        except (json.JSONDecodeError, OSError):
-            detail = f"Host agent returned HTTP {exc.code}"
-        raise HTTPException(status_code=502, detail=detail)
-    except (urllib.error.URLError, OSError) as exc:
-        raise HTTPException(status_code=503, detail=f"Host agent unreachable: {exc}")
+        return request_agent_json("POST", path, payload=body, timeout=timeout)
+    except AgentHTTPError as exc:
+        raise HTTPException(status_code=502, detail=exc.detail) from exc
+    except AgentUnavailable as exc:
+        raise HTTPException(status_code=503, detail=f"Host agent unreachable: {exc}") from exc
+    except AgentProtocolError as exc:
+        raise HTTPException(status_code=502, detail=f"Invalid host agent response: {exc}") from exc
 
 
 def _find_model_in_library(model_id: str) -> Optional[dict]:

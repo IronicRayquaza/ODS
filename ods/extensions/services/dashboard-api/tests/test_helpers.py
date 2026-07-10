@@ -407,12 +407,10 @@ class TestCheckServiceHealth:
             "host": "localhost",
             "host_network": True,
         }
-        response = MagicMock()
-        response.status_code = 200
-        response.json.return_value = {"running": False}
-        client = MagicMock()
-        client.get = AsyncMock(return_value=response)
-        monkeypatch.setattr("helpers._get_httpx_client", AsyncMock(return_value=client))
+        monkeypatch.setattr(
+            "helpers.request_agent_json",
+            AsyncMock(return_value={"running": False}),
+        )
 
         result = await check_service_health("tailscale", config)
         assert result.status == "not_deployed"
@@ -427,12 +425,10 @@ class TestCheckServiceHealth:
             "host": "localhost",
             "host_network": True,
         }
-        response = MagicMock()
-        response.status_code = 200
-        response.json.return_value = {"running": True, "authenticated": True}
-        client = MagicMock()
-        client.get = AsyncMock(return_value=response)
-        monkeypatch.setattr("helpers._get_httpx_client", AsyncMock(return_value=client))
+        monkeypatch.setattr(
+            "helpers.request_agent_json",
+            AsyncMock(return_value={"running": True, "authenticated": True}),
+        )
 
         result = await check_service_health("tailscale", config)
         assert result.status == "healthy"
@@ -839,22 +835,14 @@ class TestCheckServiceHealthSystemd:
 
     @pytest.mark.asyncio
     async def test_host_systemd_returns_healthy_when_host_agent_proves_port(self, monkeypatch):
-        class FakeResponse:
-            status_code = 200
+        async def fake_request(method, path, *, params, timeout):
+            assert method == "GET"
+            assert path == "/v1/host/port"
+            assert params == {"host": "127.0.0.1", "port": 3003}
+            assert timeout == 5
+            return {"reachable": True, "response_time_ms": 12.3}
 
-            def json(self):
-                return {"reachable": True, "response_time_ms": 12.3}
-
-        class FakeClient:
-            async def get(self, url, *, params=None, headers=None):
-                assert url.endswith("/v1/host/port")
-                assert params == {"host": "127.0.0.1", "port": 3003}
-                return FakeResponse()
-
-        async def fake_client():
-            return FakeClient()
-
-        monkeypatch.setattr("helpers._get_httpx_client", fake_client)
+        monkeypatch.setattr("helpers.request_agent_json", fake_request)
 
         config = {
             "name": "opencode", "port": 3003, "external_port": 3003,
@@ -866,20 +854,10 @@ class TestCheckServiceHealthSystemd:
 
     @pytest.mark.asyncio
     async def test_host_systemd_returns_not_deployed_when_host_port_closed(self, monkeypatch):
-        class FakeResponse:
-            status_code = 200
-
-            def json(self):
-                return {"reachable": False, "response_time_ms": 2.0}
-
-        class FakeClient:
-            async def get(self, url, *, params=None, headers=None):
-                return FakeResponse()
-
-        async def fake_client():
-            return FakeClient()
-
-        monkeypatch.setattr("helpers._get_httpx_client", fake_client)
+        monkeypatch.setattr(
+            "helpers.request_agent_json",
+            AsyncMock(return_value={"reachable": False, "response_time_ms": 2.0}),
+        )
 
         config = {
             "name": "opencode", "port": 3003, "external_port": 3003,

@@ -7,14 +7,12 @@ remain in main.py so that test monkeypatches continue to intercept them.
 """
 
 import re
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import HTTPException
 
-from config import AGENT_URL
+from host_agent_client import AgentClientError, request_json as request_agent_json
 
 # ── Regex constants ────────────────────────────────────────────────────────────
 
@@ -361,7 +359,7 @@ def _compute_env_apply_plan(previous_values: dict[str, str], next_values: dict[s
 
 def _check_host_agent_available() -> bool:
     try:
-        with urllib.request.urlopen(f"{AGENT_URL}/health", timeout=3) as response:
-            return response.status == 200
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError):
+        request_agent_json("GET", "/health", timeout=3)
+        return True
+    except AgentClientError:
         return False

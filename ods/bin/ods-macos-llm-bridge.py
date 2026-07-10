@@ -53,6 +53,23 @@ def _pump(source: socket.socket, destination: socket.socket) -> None:
             pass
 
 
+def _enable_tcp_keepalive(connection: socket.socket) -> None:
+    """Reclaim half-open bridge tunnels without timing out healthy idle calls."""
+    try:
+        connection.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        idle_option = getattr(socket, "TCP_KEEPIDLE", None)
+        if idle_option is None:
+            idle_option = getattr(socket, "TCP_KEEPALIVE", None)
+        if idle_option is not None:
+            connection.setsockopt(socket.IPPROTO_TCP, idle_option, 60)
+        if hasattr(socket, "TCP_KEEPINTVL"):
+            connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
+        if hasattr(socket, "TCP_KEEPCNT"):
+            connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+    except OSError as exc:
+        logger.debug("Could not configure TCP keepalive: %s", exc)
+
+
 class LlmBridgeHandler(socketserver.BaseRequestHandler):
     def handle(self) -> None:
         peer = str(self.client_address[0])
@@ -71,6 +88,8 @@ class LlmBridgeHandler(socketserver.BaseRequestHandler):
             return
 
         with upstream:
+            _enable_tcp_keepalive(self.request)
+            _enable_tcp_keepalive(upstream)
             self.request.settimeout(None)
             upstream.settimeout(None)
             request_to_upstream = threading.Thread(
@@ -95,6 +114,11 @@ class LlmBridgeServer(socketserver.ThreadingTCPServer):
     # The Models page fans out status polls while starting an action. The
     # socketserver default backlog of 5 can drop the action connection.
     request_queue_size = 128
+    # One handler plus two pump threads are used per live tunnel. macOS
+    # launchd commonly budgets 32 threads for this LaunchAgent, so eight live
+    # tunnels leave headroom for the main thread and shutdown handling.
+    max_connections = 8
+    connection_slot_timeout = 10.0
 
     def __init__(
         self,
@@ -104,7 +128,29 @@ class LlmBridgeServer(socketserver.ThreadingTCPServer):
     ) -> None:
         self.target_host, self.target_port = target_address
         self.allowed_networks = parse_allowed_networks(allowed_peers)
+        self._connection_slots = threading.BoundedSemaphore(self.max_connections)
         super().__init__(server_address, LlmBridgeHandler)
+
+    def process_request(self, request: socket.socket, client_address) -> None:
+        if not self._connection_slots.acquire(timeout=self.connection_slot_timeout):
+            logger.warning(
+                "Bridge connection limit reached; rejecting %s after %.1fs",
+                client_address[0],
+                self.connection_slot_timeout,
+            )
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._connection_slots.release()
+            raise
+
+    def process_request_thread(self, request: socket.socket, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._connection_slots.release()
 
 
 def main() -> None:

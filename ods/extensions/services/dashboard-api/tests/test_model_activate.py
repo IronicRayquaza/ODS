@@ -1,10 +1,12 @@
 """Tests for AMD model activation helpers in ods-host-agent.py."""
 
 import importlib.util
+import http.client
 import io
 import json
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -32,6 +34,56 @@ _write_windows_native_litellm_config = _mod._write_windows_native_litellm_config
 
 def test_host_agent_backlog_handles_dashboard_poll_bursts():
     assert _mod.ThreadedHTTPServer.request_queue_size >= 64
+
+
+def test_host_agent_keeps_gets_alive_and_closes_posts(monkeypatch):
+    class _CountingServer(_mod.ThreadedHTTPServer):
+        accepted_connections = 0
+
+        def get_request(self):
+            request = super().get_request()
+            self.accepted_connections += 1
+            return request
+
+    server = _CountingServer(("127.0.0.1", 0), _mod.AgentHandler)
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+    try:
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "keepalive-test-key")
+        for _ in range(20):
+            connection.request("GET", "/health")
+            response = connection.getresponse()
+            assert response.status == 200
+            assert json.loads(response.read()) == {"status": "ok", "version": _mod.VERSION}
+        assert server.accepted_connections == 1
+
+        connection.request(
+            "POST",
+            "/v1/model/download/cancel",
+            body="{}",
+            headers={
+                "Authorization": "Bearer keepalive-test-key",
+                "Content-Type": "application/json",
+            },
+        )
+        response = connection.getresponse()
+        assert response.status == 200
+        assert response.getheader("Connection") == "close"
+        assert json.loads(response.read()) == {"status": "no_download"}
+
+        # http.client transparently opens a fresh socket after the explicit
+        # close; the unread cancel body cannot corrupt this request.
+        connection.request("GET", "/health")
+        response = connection.getresponse()
+        assert response.status == 200
+        assert json.loads(response.read()) == {"status": "ok", "version": _mod.VERSION}
+        assert server.accepted_connections == 2
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=5)
 
 
 # --- _check_lemonade_health ---

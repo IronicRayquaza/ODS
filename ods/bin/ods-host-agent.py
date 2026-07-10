@@ -3587,6 +3587,7 @@ class AgentHandler(BaseHTTPRequestHandler):
         litellm_local_backup: str | None = None
         hermes_backups: dict[Path, str] = {}
         committed = False
+        windows_native_restart_attempted = False
 
         def restore_backups():
             if env_backup is not None:
@@ -3802,6 +3803,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                 if not windows_lemonade_already_serving:
                     _restart_windows_lemonade(env)
             elif windows_native_llama:
+                windows_native_restart_attempted = True
                 _restart_windows_native_llama_server(env_path, env)
             elif gpu_backend == "apple":
                 # macOS: manage native llama-server process via PID file
@@ -3988,6 +3990,16 @@ class AgentHandler(BaseHTTPRequestHandler):
                     restore_backups()
                 except OSError:
                     logger.exception("Rollback write failed during model-activate failure handling")
+                if windows_native_restart_attempted:
+                    try:
+                        rollback_env = load_env(env_path)
+                        _restart_windows_native_llama_server(env_path, rollback_env)
+                    except Exception:
+                        logger.exception(
+                            "Failed to restore Windows native llama-server "
+                            "after model activation error"
+                        )
+            logger.exception("Model activation failed")
             json_response(self, 500, {"error": f"Model activation failed: {exc}"})
 
     def _handle_model_delete(self):
@@ -4204,11 +4216,12 @@ if (Test-Path $pidPath) {
     Remove-Item -LiteralPath $pidPath -Force -ErrorAction SilentlyContinue
 }
 
-foreach ($listener in @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)) {
+foreach ($listener in @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Ignore)) {
     if ($listener.OwningProcess -gt 0) {
         Stop-ODSLlamaProcessId -ProcId ([int]$listener.OwningProcess)
     }
 }
+exit 0
 '''
     ps_cmd = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script]
     try:

@@ -431,6 +431,8 @@ class TestWindowsNativeLlamaServer:
         assert "Stop-Process -Id $ProcId -Force" in captured["script"]
         assert "taskkill.exe /PID $ProcId /F" in captured["script"]
         assert "taskkill.exe /PID $ProcId /T /F" not in captured["script"]
+        assert "Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Ignore" in captured["script"]
+        assert captured["script"].rstrip().endswith("exit 0")
         assert captured["env"]["ODS_WIN_LLAMA_PORT"] == "9090"
         assert launch_calls
 
@@ -952,6 +954,45 @@ class TestModelActivateRollback:
         assert env_path.read_text(encoding="utf-8") == env_text
         assert models_ini.read_text(encoding="utf-8") == ini_text
         assert litellm_local.read_text(encoding="utf-8") == old_local_yaml
+
+    def test_windows_native_restart_error_restores_previous_runtime(self, tmp_path, monkeypatch):
+        install_dir, env_path, _env_text, models_ini, ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path, gpu_backend="amd")
+        )
+        env_path.write_text(
+            "GPU_BACKEND=amd\n"
+            "LLM_BACKEND=llama-server\n"
+            "AMD_INFERENCE_RUNTIME=llama-server\n"
+            "AMD_INFERENCE_RUNTIME_MODE=windows-llama-server-fallback\n"
+            "AMD_INFERENCE_LOCATION=host\n"
+            "AMD_INFERENCE_MANAGED=true\n"
+            "AMD_INFERENCE_PORT=9090\n"
+            "GGUF_FILE=old-model.gguf\n"
+            "LLM_MODEL=old-model\n"
+            "CTX_SIZE=2048\n",
+            encoding="utf-8",
+        )
+        env_text = env_path.read_text(encoding="utf-8")
+        restart_models = []
+
+        def restart_then_recover(_path, env):
+            restart_models.append(env["GGUF_FILE"])
+            if len(restart_models) == 1:
+                raise RuntimeError("simulated native launch failure")
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
+        monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
+        monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
+        monkeypatch.setattr(_mod, "_restart_windows_native_llama_server", restart_then_recover)
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 500
+        assert restart_models == ["new-model.gguf", "old-model.gguf"]
+        assert env_path.read_text(encoding="utf-8") == env_text
+        assert models_ini.read_text(encoding="utf-8") == ini_text
 
     def test_activation_patches_hermes_configs_and_restarts_hermes(self, tmp_path, monkeypatch):
         install_dir, _env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (

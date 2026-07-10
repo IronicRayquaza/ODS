@@ -482,8 +482,11 @@ if ($dryRun) {
                 try {
                     $action = New-ScheduledTaskAction -Execute $script:LEMONADE_EXE -Argument $argString -WorkingDirectory (Split-Path -Parent $script:LEMONADE_EXE)
                     $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddYears(1))
+                    $lemonadeSettings = New-ScheduledTaskSettingsSet `
+                        -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+                        -ExecutionTimeLimit ([TimeSpan]::Zero)
                     $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-                    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force -ErrorAction Stop | Out-Null
+                    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $lemonadeSettings -Principal $principal -Force -ErrorAction Stop | Out-Null
                     Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
                 } catch {
                     $launchMethod = "direct process"

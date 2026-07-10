@@ -5469,8 +5469,11 @@ $launchMethod = "scheduled task"
 try {
     $action = New-ScheduledTaskAction -Execute $exe -Argument $argString -WorkingDirectory (Split-Path -Parent $exe)
     $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddYears(1))
+    $settings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -ExecutionTimeLimit ([TimeSpan]::Zero)
     $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force -ErrorAction Stop | Out-Null
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
     Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
 } catch {
     if ($existingTask) {

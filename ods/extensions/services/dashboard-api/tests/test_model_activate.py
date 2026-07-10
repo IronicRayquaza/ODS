@@ -776,6 +776,9 @@ class TestRestartWindowsLemonade:
         assert "$existingTask = Get-ScheduledTask -TaskName $taskName" in script
         assert "Could not refresh Lemonade scheduled task; reusing existing task" in script
         assert "Register-ScheduledTask -TaskName $taskName" in script
+        assert "$settings = New-ScheduledTaskSettingsSet" in script
+        assert "-ExecutionTimeLimit ([TimeSpan]::Zero)" in script
+        assert "-Settings $settings" in script
         assert "-Force -ErrorAction Stop | Out-Null" in script
         assert "Unregister-ScheduledTask" not in script
         assert "taskkill.exe /PID $ProcId /T /F" in script
@@ -791,6 +794,27 @@ class TestRestartWindowsLemonade:
         assert "$proc = Get-ODSHealthyRouter" in script
         assert captured["env"]["ODS_WIN_LEMONADE_TASK"] == "ODSLemonadeRuntime"
         assert captured["env"]["ODS_WIN_LEMONADE_EXE"] == str(lemonade_exe)
+
+    def test_installer_and_cli_lemonade_tasks_are_always_on(self):
+        ods_root = Path(__file__).resolve().parents[4]
+        sources = {
+            "installer": (
+                ods_root / "installers" / "windows" / "install-windows.ps1",
+                "Register-ScheduledTask -TaskName $taskName",
+            ),
+            "cli": (
+                ods_root / "installers" / "windows" / "ods.ps1",
+                "Register-ScheduledTask -TaskName $script:LEMONADE_TASK_NAME",
+            ),
+        }
+
+        for source_name, (source_path, registration) in sources.items():
+            source = source_path.read_text(encoding="utf-8")
+            registration_offset = source.index(registration)
+            task_block = source[max(0, registration_offset - 800):registration_offset + 500]
+            assert "New-ScheduledTaskSettingsSet" in task_block, source_name
+            assert "-ExecutionTimeLimit ([TimeSpan]::Zero)" in task_block, source_name
+            assert "-Settings $lemonadeSettings" in task_block, source_name
 
     def test_refuses_externally_managed_runtime_before_process_discovery(
         self, monkeypatch, tmp_path,

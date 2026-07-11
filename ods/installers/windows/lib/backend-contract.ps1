@@ -370,16 +370,58 @@ try {
 
 function Start-ODSLemonadeDirectProcess {
     [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][psobject]$Contract)
+    param(
+        [Parameter(Mandatory = $true)][psobject]$Contract,
+        [string]$DiagnosticLogPath
+    )
 
     $previousAdminKey = $env:LEMONADE_ADMIN_API_KEY
     try {
         if (-not [string]::IsNullOrWhiteSpace([string]$Contract.AdminApiKey)) {
             $env:LEMONADE_ADMIN_API_KEY = [string]$Contract.AdminApiKey
         }
-        return Start-Process -FilePath $Contract.ExecutablePath `
-            -ArgumentList $Contract.ArgumentString -WindowStyle Hidden `
-            -WorkingDirectory (Split-Path -Parent $Contract.ExecutablePath) -PassThru
+        $logDir = if (-not [string]::IsNullOrWhiteSpace($DiagnosticLogPath)) {
+            Split-Path -Parent $DiagnosticLogPath
+        } else {
+            [IO.Path]::GetTempPath()
+        }
+        if ([string]::IsNullOrWhiteSpace($logDir)) { $logDir = [IO.Path]::GetTempPath() }
+        New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+        $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+        $stdoutLog = if (-not [string]::IsNullOrWhiteSpace($DiagnosticLogPath)) {
+            "$DiagnosticLogPath.$stamp.stdout.log"
+        } else {
+            Join-Path $logDir "ods-lemonade-direct-$stamp.stdout.log"
+        }
+        $stderrLog = if (-not [string]::IsNullOrWhiteSpace($DiagnosticLogPath)) {
+            "$DiagnosticLogPath.$stamp.stderr.log"
+        } else {
+            Join-Path $logDir "ods-lemonade-direct-$stamp.stderr.log"
+        }
+        $workingDirectory = Split-Path -Parent $Contract.ExecutablePath
+        $exeLiteral = ConvertTo-ODSPowerShellSingleQuotedLiteral $Contract.ExecutablePath
+        $argsLiteral = ConvertTo-ODSPowerShellSingleQuotedLiteral $Contract.ArgumentString
+        $workLiteral = ConvertTo-ODSPowerShellSingleQuotedLiteral $workingDirectory
+        $stdoutLiteral = ConvertTo-ODSPowerShellSingleQuotedLiteral $stdoutLog
+        $stderrLiteral = ConvertTo-ODSPowerShellSingleQuotedLiteral $stderrLog
+        $adminKeyLiteral = ConvertTo-ODSPowerShellSingleQuotedLiteral ([string]$Contract.AdminApiKey)
+        $launcher = @"
+`$ErrorActionPreference = 'Stop'
+if (-not [string]::IsNullOrWhiteSpace($adminKeyLiteral)) { `$env:LEMONADE_ADMIN_API_KEY = $adminKeyLiteral }
+Start-Process -FilePath $exeLiteral -ArgumentList $argsLiteral -WorkingDirectory $workLiteral -WindowStyle Hidden -RedirectStandardOutput $stdoutLiteral -RedirectStandardError $stderrLiteral | Out-Null
+"@
+        $encodedLauncher = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($launcher))
+        $commandLine = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $encodedLauncher"
+        $result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create `
+            -Arguments @{ CommandLine = $commandLine; CurrentDirectory = $workingDirectory } -ErrorAction Stop
+        if ([int]$result.ReturnValue -ne 0) {
+            throw "Lemonade direct process launch failed through WMI with code $($result.ReturnValue)."
+        }
+        return [pscustomobject]@{
+            Id = [int]$result.ProcessId
+            ProcessId = [int]$result.ProcessId
+            LaunchMethod = "wmi"
+        }
     } finally {
         if ($null -eq $previousAdminKey) {
             Remove-Item Env:\LEMONADE_ADMIN_API_KEY -ErrorAction SilentlyContinue

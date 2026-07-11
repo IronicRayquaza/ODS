@@ -33,7 +33,7 @@ $script:LEMONADE_INSTALL_DIR = Join-Path $env:ProgramFiles "Lemonade Server"
 $script:LEMONADE_EXE         = Join-Path (Join-Path $script:LEMONADE_INSTALL_DIR "bin") "lemonade-server.exe"
 $script:LEMONADE_PORT        = 8080
 $script:LEMONADE_API_KEY     = "lemonade"
-$script:LEMONADE_HEALTH_URL  = "http://localhost:8080/api/v1/health"
+$script:LEMONADE_HEALTH_URL  = "http://127.0.0.1:8080/api/v1/health"
 
 # llama-server fallback (Vulkan build, used if Lemonade install is declined/fails)
 $script:LLAMA_SERVER_DIR = Join-Path $script:ODS_INSTALL_DIR "llama-server"

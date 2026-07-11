@@ -177,7 +177,7 @@ function Sync-ODSNativeInferenceConfig {
             $parsedPort = 0
             if ([int]::TryParse($lemonadePort, [ref]$parsedPort) -and $parsedPort -gt 0 -and $parsedPort -le 65535) {
                 $script:LEMONADE_PORT = $parsedPort
-                $script:LEMONADE_HEALTH_URL = "http://localhost:$($script:LEMONADE_PORT)/api/v1/health"
+                $script:LEMONADE_HEALTH_URL = "http://127.0.0.1:$($script:LEMONADE_PORT)/api/v1/health"
             }
         }
     } catch { }
@@ -810,7 +810,7 @@ function Start-ODSLemonadeRuntime {
         $launchMethod = "direct process"
         Write-AIWarn "Could not start Lemonade through Task Scheduler: $_"
         Write-AI "Starting Lemonade directly for this Windows session..."
-        $directProcess = Start-ODSLemonadeDirectProcess -Contract $launchContract
+        $directProcess = Start-ODSLemonadeDirectProcess -Contract $launchContract -DiagnosticLogPath $diagnosticLog
     }
 
     Start-Sleep -Seconds 5
@@ -824,7 +824,7 @@ function Start-ODSLemonadeRuntime {
         Write-AIWarn "Lemonade scheduled task did not start a server process."
         Write-AIWarn (Format-ODSLemonadeLaunchDiagnostics -Diagnostics $scheduledDiagnostics)
         Write-AI "Starting Lemonade directly for this Windows session..."
-        $directProcess = Start-ODSLemonadeDirectProcess -Contract $launchContract
+        $directProcess = Start-ODSLemonadeDirectProcess -Contract $launchContract -DiagnosticLogPath $diagnosticLog
         Start-Sleep -Seconds 3
         $proc = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
             Where-Object { $_.ExecutablePath -and $_.ExecutablePath.Equals($script:LEMONADE_EXE, [StringComparison]::OrdinalIgnoreCase) } |

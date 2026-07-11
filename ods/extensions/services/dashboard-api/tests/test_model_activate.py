@@ -1171,7 +1171,7 @@ class TestRestartWindowsLemonade:
         assert "Format-ODSLemonadeLaunchDiagnostics" in script
         assert 'LemonadeServer.exe", "lemonade-server.exe", "lemonade-router.exe", "lemonade.exe' in script
         assert "Start-ScheduledTask -TaskName $taskName" in script
-        assert "Start-ODSLemonadeDirectProcess -Contract $launchContract" in script
+        assert "Start-ODSLemonadeDirectProcess -Contract $launchContract -DiagnosticLogPath $diagnosticLog" in script
         assert "no healthy owned router was found" in script
         assert "Stop-ScheduledTask -TaskName $taskName" in script
         assert "Refusing to stop unowned process" in script

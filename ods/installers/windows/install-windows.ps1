@@ -206,7 +206,7 @@ if ($gpuInfo.Backend -eq "amd") {
     $_resolvedLemonadeExe = Resolve-ODSLemonadeExe -ExecutableName ([string]$amdLemonadeRuntime.windows_executable)
     if ($_resolvedLemonadeExe) { $script:LEMONADE_EXE = $_resolvedLemonadeExe }
     $script:LEMONADE_PORT = [int]$amdLemonadeRuntime.api_port
-    $script:LEMONADE_HEALTH_URL = "http://localhost:$($script:LEMONADE_PORT)$($amdLemonadeRuntime.health_path)"
+    $script:LEMONADE_HEALTH_URL = "http://127.0.0.1:$($script:LEMONADE_PORT)$($amdLemonadeRuntime.health_path)"
 }
 . (Join-Path $PhasesDir "06-directories.ps1")
 . (Join-Path $PhasesDir "07-devtools.ps1")
@@ -504,7 +504,7 @@ if ($dryRun) {
                     $launchMethod = "direct process"
                     Write-AIWarn "Could not start Lemonade through Task Scheduler: $_"
                     Write-AI "Starting Lemonade directly for this Windows session..."
-                    $directProcess = Start-ODSLemonadeDirectProcess -Contract $launchContract
+                    $directProcess = Start-ODSLemonadeDirectProcess -Contract $launchContract -DiagnosticLogPath $diagnosticLog
                 }
                 Start-Sleep -Seconds 5
                 $proc = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
@@ -517,7 +517,7 @@ if ($dryRun) {
                     Write-AIWarn "Lemonade scheduled task did not start a server process."
                     Write-AIWarn (Format-ODSLemonadeLaunchDiagnostics -Diagnostics $scheduledDiagnostics)
                     Write-AI "Starting Lemonade directly for this Windows session..."
-                    $directProcess = Start-ODSLemonadeDirectProcess -Contract $launchContract
+                    $directProcess = Start-ODSLemonadeDirectProcess -Contract $launchContract -DiagnosticLogPath $diagnosticLog
                     Start-Sleep -Seconds 3
                     $proc = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
                         Where-Object { $_.ExecutablePath -and $_.ExecutablePath.Equals($script:LEMONADE_EXE, [StringComparison]::OrdinalIgnoreCase) } |

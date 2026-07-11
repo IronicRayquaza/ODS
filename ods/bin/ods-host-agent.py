@@ -5810,12 +5810,12 @@ try {
         } catch {
             $launchMethod = "direct process"
             Write-Warning "Could not start Lemonade through Task Scheduler: $_"
-            $directProcess = Start-ODSLemonadeDirectProcess -Contract $launchContract
+            $directProcess = Start-ODSLemonadeDirectProcess -Contract $launchContract -DiagnosticLogPath $diagnosticLog
         }
     } else {
         $launchMethod = "direct process"
         Write-Warning "Could not install the current Lemonade task contract; starting directly: $_"
-        $directProcess = Start-ODSLemonadeDirectProcess -Contract $launchContract
+        $directProcess = Start-ODSLemonadeDirectProcess -Contract $launchContract -DiagnosticLogPath $diagnosticLog
     }
 }
 $proc = $null
@@ -5832,7 +5832,7 @@ if (-not $proc -and $launchMethod -eq "scheduled task") {
     foreach ($listener in @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)) {
         if ($listener.OwningProcess -gt 0) { Stop-ODSProcessId -ProcId ([int]$listener.OwningProcess) }
     }
-    $directProcess = Start-ODSLemonadeDirectProcess -Contract $launchContract
+    $directProcess = Start-ODSLemonadeDirectProcess -Contract $launchContract -DiagnosticLogPath $diagnosticLog
     for ($i = 0; $i -lt 15; $i++) {
         Start-Sleep -Seconds 1
         $proc = Get-ODSHealthyRouter

@@ -675,7 +675,7 @@ restart_windows_lemonade_with_full_model() {
         } catch {
             $launchMethod = "direct process"
             Write-Warning "Could not start Lemonade through Task Scheduler: $_"
-            $proc = Start-ODSLemonadeDirectProcess -Contract $launchContract
+            $proc = Start-ODSLemonadeDirectProcess -Contract $launchContract -DiagnosticLogPath $env:ODS_WIN_LEMONADE_DIAGNOSTIC_LOG
         }
 
         $healthy = $false
@@ -694,7 +694,7 @@ restart_windows_lemonade_with_full_model() {
             Write-Warning "Lemonade scheduled task did not start a healthy router. $(Format-ODSLemonadeLaunchDiagnostics -Diagnostics $scheduledDiagnostics)"
             try { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue } catch { }
             $launchMethod = "direct process"
-            $proc = Start-ODSLemonadeDirectProcess -Contract $launchContract
+            $proc = Start-ODSLemonadeDirectProcess -Contract $launchContract -DiagnosticLogPath $env:ODS_WIN_LEMONADE_DIAGNOSTIC_LOG
             for ($i = 0; $i -lt 15; $i++) {
                 try {
                     $health = Invoke-WebRequest -Uri ("http://127.0.0.1:{0}/api/v1/health" -f $port) -TimeoutSec 3 -UseBasicParsing

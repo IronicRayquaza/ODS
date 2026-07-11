@@ -75,7 +75,7 @@ function model(overrides = {}) {
     size: '5.6 GB',
     sizeGb: 5.6,
     vramRequired: 7,
-    contextLength: 32768,
+    contextLength: 65536,
     specialty: 'General',
     description: 'Balanced local model.',
     quantization: 'Q4_K_M',
@@ -195,6 +195,34 @@ test('keeps Run and Delete visible for downloaded models', () => {
   const deleteButton = screen.getByRole('button', { name: /delete qwen 3\.5 9b$/i })
   expect(deleteButton).toBeEnabled()
   fireEvent.click(deleteButton)
+  expect(deleteModel).not.toHaveBeenCalled()
+
+  expect(screen.getByRole('dialog', { name: /delete qwen 3\.5 9b/i })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: /delete model/i }))
+  expect(deleteModel).toHaveBeenCalledWith('qwen3.5-9b-q4')
+})
+
+test('blocks low-context downloaded models from becoming the active agent model', () => {
+  const loadModel = vi.fn()
+  const deleteModel = vi.fn()
+  useModelsMock.mockReturnValue(baseState({
+    loadModel,
+    deleteModel,
+    models: [model({ status: 'downloaded', contextLength: 8192 })],
+  }))
+
+  renderModels()
+
+  const runButton = screen.getByRole('button', { name: /needs 64k/i })
+  expect(runButton).toBeDisabled()
+  expect(runButton).toHaveAttribute('title', 'Hermes Agent requires at least 64K context; this model has 8K.')
+  fireEvent.click(runButton)
+  expect(loadModel).not.toHaveBeenCalled()
+
+  const deleteButton = screen.getByRole('button', { name: /delete qwen 3\.5 9b$/i })
+  expect(deleteButton).toBeEnabled()
+  fireEvent.click(deleteButton)
+  fireEvent.click(screen.getByRole('button', { name: /delete model/i }))
   expect(deleteModel).toHaveBeenCalledWith('qwen3.5-9b-q4')
 })
 

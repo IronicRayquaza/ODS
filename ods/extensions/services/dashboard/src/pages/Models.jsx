@@ -20,6 +20,7 @@ import { useDownloadProgress } from '../hooks/useDownloadProgress'
 
 const PAGE_SIZE = 10
 const DOWNLOAD_STATUS_TIMEOUT_MS = 15000
+const HERMES_AGENT_MIN_CONTEXT_TOKENS = 64000
 const TECH_PANEL_STYLE = {
   background: 'linear-gradient(180deg, rgba(10,10,18,0.96), rgba(7,7,13,0.92))',
   borderColor: 'rgba(255,255,255,0.08)',
@@ -88,6 +89,7 @@ export default function Models() {
   const [compatibilityFilter, setCompatibilityFilter] = useState('all')
   const [speedFilter, setSpeedFilter] = useState('any')
   const [contextFloor, setContextFloor] = useState(0)
+  const [deleteConfirmModel, setDeleteConfirmModel] = useState(null)
   const libraryRef = useRef(null)
 
   useEffect(() => {
@@ -188,6 +190,13 @@ export default function Models() {
         error: downloadError?.message || `Failed to start download for ${modelId}.`,
       })
     }
+  }
+
+  const handleConfirmDelete = async () => {
+    if (!deleteConfirmModel?.id) return
+    const modelId = deleteConfirmModel.id
+    setDeleteConfirmModel(null)
+    await deleteModel(modelId)
   }
 
   const pendingModelActions = actionLoadingModels ?? (actionLoading ? [actionLoading] : [])
@@ -367,7 +376,7 @@ export default function Models() {
                       onDownload={() => handleDownload(model.id)}
                       onLoad={() => loadModel(model.id)}
                       onBenchmark={() => benchmarkModel(model.id)}
-                      onDelete={() => deleteModel(model.id)}
+                      onDelete={() => setDeleteConfirmModel(model)}
                     />
                   )
                 })}
@@ -389,6 +398,14 @@ export default function Models() {
           </div>
         </section>
       </div>
+
+      {deleteConfirmModel && (
+        <DeleteModelDialog
+          model={deleteConfirmModel}
+          onCancel={() => setDeleteConfirmModel(null)}
+          onConfirm={handleConfirmDelete}
+        />
+      )}
     </div>
   )
 }
@@ -760,6 +777,8 @@ function PrimaryAction({
 
   if (isDownloaded) {
     const runDisabled = Boolean(runDisabledReason)
+    const contextBlocked = isAgentContextDisabledReason(runDisabledReason)
+    const buttonLabel = contextBlocked ? 'Needs 64K' : 'Run'
     return (
       <span className="inline-flex" title={runDisabledReason || `Run ${model.name}`}>
         <button
@@ -773,8 +792,8 @@ function PrimaryAction({
               : 'cursor-not-allowed border border-white/[0.08] bg-black/20 text-theme-text-muted'
           }`}
         >
-          <Play size={13} />
-          Run
+          {contextBlocked ? <AlertCircle size={13} /> : <Play size={13} />}
+          {buttonLabel}
         </button>
       </span>
     )
@@ -835,6 +854,52 @@ function DeleteAction({ model, isLoaded, isDownloaded, isLoading, activationBusy
         <Trash2 size={14} />
       </button>
     </span>
+  )
+}
+
+function DeleteModelDialog({ model, onCancel, onConfirm }) {
+  const titleId = `delete-model-${model.id || 'model'}`
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-6">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="w-full max-w-md rounded-xl border border-red-300/20 bg-[#08080d] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.45)]"
+      >
+        <div className="flex items-start gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-red-300/20 bg-red-500/10 text-red-300">
+            <Trash2 size={17} />
+          </div>
+          <div className="min-w-0">
+            <h2 id={titleId} className="text-sm font-semibold text-theme-text">
+              Delete {model.name}?
+            </h2>
+            <p className="mt-2 text-sm leading-5 text-theme-text-muted">
+              The model file will be removed from this device. Download it again from the library if you need it later.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="inline-flex h-9 items-center justify-center rounded-md border border-white/[0.08] bg-black/20 px-3 text-xs font-semibold text-theme-text-secondary transition-colors hover:border-theme-accent/35 hover:text-theme-text"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="inline-flex h-9 items-center justify-center rounded-md border border-red-300/30 bg-red-500/15 px-3 text-xs font-semibold text-red-200 transition-colors hover:border-red-200/50 hover:bg-red-500/25"
+          >
+            Delete model
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -977,6 +1042,10 @@ function getRunDisabledReason({
   if (!canActivateModels) {
     return activationModeError || 'The local model runtime is unavailable. Review runtime settings before running this model.'
   }
+  const contextLength = Number(model.contextLength || 0)
+  if (contextLength > 0 && contextLength < HERMES_AGENT_MIN_CONTEXT_TOKENS) {
+    return `Hermes Agent requires at least 64K context; this model has ${formatContext(contextLength)}.`
+  }
   if (model.fitsVram !== true) {
     const required = Number(model.estimatedRequired || model.vramRequired || 0)
     const total = Number(gpu?.vramTotal || 0)
@@ -988,6 +1057,10 @@ function getRunDisabledReason({
   if (activationBusy) return 'Wait for the current model swap to finish.'
   if (loadBusy) return 'Another model action is in progress.'
   return null
+}
+
+function isAgentContextDisabledReason(reason) {
+  return typeof reason === 'string' && reason.startsWith('Hermes Agent requires at least 64K context')
 }
 
 function formatModeLabel(mode) {

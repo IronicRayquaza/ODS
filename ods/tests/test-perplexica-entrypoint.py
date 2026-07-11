@@ -12,7 +12,10 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-import pytest
+try:
+    import pytest
+except ModuleNotFoundError:
+    pytest = None
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +25,16 @@ COMPOSE = SERVICE_DIR / "compose.yaml"
 ENTRYPOINT = SERVICE_DIR / "docker-entrypoint.sh"
 SYNC_SCRIPT = SERVICE_DIR / "sync-model-config.js"
 WHISPER_COMPOSE = ROOT / "extensions" / "services" / "whisper" / "compose.yaml"
+
+
+def _node_cmd_or_skip() -> str | None:
+    node = shutil.which("node")
+    if node:
+        return node
+    if pytest is not None:
+        pytest.skip("Node.js is required")
+    print("[SKIP] Node.js is required")
+    return None
 
 
 def test_compose_uses_ods_entrypoint() -> None:
@@ -96,8 +109,11 @@ def test_entrypoint_reconciles_persisted_model_route_on_every_start() -> None:
     assert "PERPLEXICA_MODEL_SYNC_ATTEMPTS" in script
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is required")
 def test_sync_script_persists_exact_lemonade_route() -> None:
+    node = _node_cmd_or_skip()
+    if node is None:
+        return
+
     state = {
         "modelProviders": [{
             "id": "openai-provider",
@@ -149,7 +165,7 @@ def test_sync_script_persists_exact_lemonade_route() -> None:
             "OPENAI_API_KEY": "litellm-key",
         })
         result = subprocess.run(
-            [shutil.which("node"), str(SYNC_SCRIPT)],
+            [node, str(SYNC_SCRIPT)],
             capture_output=True,
             text=True,
             timeout=10,
@@ -171,8 +187,11 @@ def test_sync_script_persists_exact_lemonade_route() -> None:
     assert state["preferences"]["defaultChatModel"] == "Modern-Model"
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is required")
 def test_sync_script_falls_back_to_extra_gguf_when_exact_lemonade_id_is_absent() -> None:
+    node = _node_cmd_or_skip()
+    if node is None:
+        return
+
     state = {
         "modelProviders": [{
             "id": "openai-provider",
@@ -221,7 +240,7 @@ def test_sync_script_falls_back_to_extra_gguf_when_exact_lemonade_id_is_absent()
             "OPENAI_API_KEY": "litellm-key",
         })
         result = subprocess.run(
-            [shutil.which("node"), str(SYNC_SCRIPT)],
+            [node, str(SYNC_SCRIPT)],
             capture_output=True,
             text=True,
             timeout=10,
@@ -240,8 +259,11 @@ def test_sync_script_falls_back_to_extra_gguf_when_exact_lemonade_id_is_absent()
     }]
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is required")
 def test_sync_script_normalizes_base_url_without_v1_suffix() -> None:
+    node = _node_cmd_or_skip()
+    if node is None:
+        return
+
     state = {
         "modelProviders": [{
             "id": "openai-provider",
@@ -288,7 +310,7 @@ def test_sync_script_normalizes_base_url_without_v1_suffix() -> None:
             "OPENAI_API_KEY": "custom-key",
         })
         result = subprocess.run(
-            [shutil.which("node"), str(SYNC_SCRIPT)],
+            [node, str(SYNC_SCRIPT)],
             capture_output=True,
             text=True,
             timeout=10,

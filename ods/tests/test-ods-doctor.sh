@@ -53,7 +53,20 @@ fi
 
 # 3. Runs without shell error (default output path)
 TEMP_REPORT=$(mktemp /tmp/ods-doctor-test.XXXXXX.json)
-trap 'rm -f "$TEMP_REPORT"' EXIT
+REAL_ENV="$ROOT_DIR/.env"
+ENV_BACKUP_PATH=""
+TEST_TEMP_WORKSPACE=""
+
+cleanup() {
+    if [[ -n "$ENV_BACKUP_PATH" ]] && [[ -f "$ENV_BACKUP_PATH" ]]; then
+        mv "$ENV_BACKUP_PATH" "$REAL_ENV"
+    fi
+    rm -f "$TEMP_REPORT" /tmp/curl_calls.log
+    if [[ -n "$TEST_TEMP_WORKSPACE" ]] && [[ -d "$TEST_TEMP_WORKSPACE" ]]; then
+        rm -rf "$TEST_TEMP_WORKSPACE"
+    fi
+}
+trap cleanup EXIT
 
 set +e
 out=$(cd "$ROOT_DIR" && bash scripts/ods-doctor.sh "$TEMP_REPORT" 2>&1)
@@ -248,6 +261,131 @@ if command -v jq >/dev/null 2>&1; then
     else
         skip "Behavioral test: autofix_hints (docker missing but no hints - unexpected)"
     fi
+fi
+# 12. External LLM backend configuration and connectivity check
+if command -v jq >/dev/null 2>&1; then
+    # Create temp workspace and set global variable for tracking
+    TEST_TEMP_WORKSPACE=$(mktemp -d /tmp/ods-doctor-test-workspace.XXXXXX)
+    mkdir -p "$TEST_TEMP_WORKSPACE/bin"
+
+    # Write a stubbed curl that records URL called and responds successfully
+    cat << 'EOF' > "$TEST_TEMP_WORKSPACE/bin/curl"
+#!/bin/bash
+echo "$*" >> /tmp/curl_calls.log
+# return a dummy JSON for success
+echo '{"status":"ok"}'
+exit 0
+EOF
+    chmod +x "$TEST_TEMP_WORKSPACE/bin/curl"
+
+    # Backup real .env using a unique file name and set global tracker
+    ENV_BACKUP_PATH=$(mktemp /tmp/ods-env-backup.XXXXXX)
+    if [[ -f "$REAL_ENV" ]]; then
+        mv "$REAL_ENV" "$ENV_BACKUP_PATH"
+    fi
+
+    # Write test .env with quoted values
+    cat << 'EOF' > "$REAL_ENV"
+EXTERNAL_LLM_URL="https://mock-llm.example.com"
+EXTERNAL_LLM_PROVIDER="ollama"
+EXTERNAL_LLM_MODEL="llama3-test"
+EOF
+
+    rm -f /tmp/curl_calls.log
+
+    # Run the doctor script with mock curl in PATH
+    set +e
+    (export PATH="$TEST_TEMP_WORKSPACE/bin:$PATH"; cd "$ROOT_DIR" && bash scripts/ods-doctor.sh "$TEMP_REPORT" >/dev/null 2>&1)
+    exit_code=$?
+    set -e
+
+    # Verify JSON structure and values
+    status=$(jq -r '.runtime.llm_backend.status' "$TEMP_REPORT")
+    provider=$(jq -r '.runtime.llm_backend.provider' "$TEMP_REPORT")
+    url=$(jq -r '.runtime.llm_backend.url' "$TEMP_REPORT")
+    model=$(jq -r '.runtime.llm_backend.model' "$TEMP_REPORT")
+
+    # Read curl calls before cleanup
+    curl_calls=""
+    if [[ -f /tmp/curl_calls.log ]]; then
+        curl_calls=$(cat /tmp/curl_calls.log)
+    fi
+
+    # Restore original env immediately
+    if [[ -f "$ENV_BACKUP_PATH" ]]; then
+        mv "$ENV_BACKUP_PATH" "$REAL_ENV"
+    else
+        rm -f "$REAL_ENV"
+    fi
+    ENV_BACKUP_PATH=""
+
+    # Clean up temp workspace and curl calls log immediately
+    rm -rf "$TEST_TEMP_WORKSPACE"
+    TEST_TEMP_WORKSPACE=""
+    rm -f /tmp/curl_calls.log
+
+    # Perform assertions
+    if [[ "$status" == "ok" ]] && \
+       [[ "$provider" == "ollama" ]] && \
+       [[ "$url" == "https://mock-llm.example.com" ]] && \
+       [[ "$model" == "llama3-test" ]]; then
+        pass "External LLM report JSON contains correct unquoted fields"
+    else
+        fail "External LLM report JSON fields are incorrect. got: status=$status, provider=$provider, url=$url, model=$model"
+    fi
+
+    # Verify expected endpoint was probed by curl
+    if echo "$curl_calls" | grep -q "https://mock-llm.example.com/api/tags"; then
+        pass "External LLM probe endpoint (/api/tags) was called successfully"
+    else
+        fail "External LLM probe did not hit correct endpoint. calls: $curl_calls"
+    fi
+else
+    skip "jq not available - skipping external LLM behavioral validation"
+fi
+
+# 13. Cloud mode LLM backend check validation (no external LLM url configured)
+if command -v jq >/dev/null 2>&1; then
+    # Backup real .env using a unique file name and set global tracker
+    ENV_BACKUP_PATH=$(mktemp /tmp/ods-env-backup.XXXXXX)
+    if [[ -f "$REAL_ENV" ]]; then
+        mv "$REAL_ENV" "$ENV_BACKUP_PATH"
+    fi
+
+    # Write test .env with ODS_MODE=cloud and no EXTERNAL_LLM_URL
+    cat << 'EOF' > "$REAL_ENV"
+ODS_MODE="cloud"
+EOF
+
+    # Run the doctor script
+    set +e
+    (cd "$ROOT_DIR" && bash scripts/ods-doctor.sh "$TEMP_REPORT" >/dev/null 2>&1)
+    exit_code=$?
+    set -e
+
+    # Verify JSON structure and values
+    status=$(jq -r '.runtime.llm_backend.status' "$TEMP_REPORT")
+    provider=$(jq -r '.runtime.llm_backend.provider' "$TEMP_REPORT")
+
+    # Verify autofix hints do not mention llama-server or unreachable LLM
+    llama_hint=$(jq -r '.autofix_hints[] | select(contains("llama-server") or contains("LLM backend"))' "$TEMP_REPORT" 2>/dev/null || true)
+
+    # Restore original env immediately
+    if [[ -f "$ENV_BACKUP_PATH" ]]; then
+        mv "$ENV_BACKUP_PATH" "$REAL_ENV"
+    else
+        rm -f "$REAL_ENV"
+    fi
+    ENV_BACKUP_PATH=""
+
+    # Perform assertions
+    if [[ "$status" == "ok" ]] && [[ "$provider" == "cloud" ]] && [[ -z "$llama_hint" ]]; then
+        pass "Cloud mode LLM backend check reports ok and has no local llama-server failure hints"
+    else
+        fail "Cloud mode LLM backend check failed. got: status=$status, provider=$provider, llama_hint=$llama_hint"
+    fi
+else
+    skip "jq not available - skipping cloud mode behavioral validation"
 fi
 
 echo ""

@@ -4138,6 +4138,7 @@ class AgentHandler(BaseHTTPRequestHandler):
             return
 
         model_id = body.get("model_id", "")
+        runtime_only = bool(body.get("runtime_only") or body.get("runtimeOnly"))
         if not isinstance(model_id, str) or not model_id.strip():
             json_response(self, 400, {"error": "model_id is required"})
             return
@@ -4163,11 +4164,11 @@ class AgentHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            self._do_model_activate(model_id)
+            self._do_model_activate(model_id, runtime_only=runtime_only)
         finally:
             _end_model_activation()
 
-    def _do_model_activate(self, model_id: str):
+    def _do_model_activate(self, model_id: str, *, runtime_only: bool = False):
         """Inner activate logic — called with _model_activate_lock held."""
         env_path = INSTALL_DIR / ".env"
         try:
@@ -4673,6 +4674,19 @@ class AgentHandler(BaseHTTPRequestHandler):
 
                 if windows_native_llama:
                     _write_windows_native_litellm_config(INSTALL_DIR, gguf_file, env)
+
+                if runtime_only and windows_host_lemonade:
+                    committed = True
+                    json_response(
+                        self,
+                        200,
+                        {
+                            "status": "activated",
+                            "model_id": model_id,
+                            "runtime_only": True,
+                        },
+                    )
+                    return
 
                 hermes_live_exists = bool(
                     hermes_live_snapshot and hermes_live_snapshot.get("exists")

@@ -1246,6 +1246,7 @@ class TestRestartWindowsLemonade:
         assert "model-library.json" in source
         assert '$agentHealthUrl = "http://127.0.0.1:$agentPort/health"' in source
         assert '$agentUrl = "http://127.0.0.1:$agentPort/v1/model/activate"' in source
+        assert "runtime_only = $true" in source
 
         agent_activation = source.index(
             "Invoke-ODSHostAgentConfiguredModelActivation -EnvVars $envVars"
@@ -2110,6 +2111,61 @@ class TestModelActivateRollback:
         content = lemonade_yaml.read_text(encoding="utf-8")
         assert "model: openai/extra.new-model.gguf" in content
         assert ["docker", "restart", "ods-litellm"] in calls
+
+    def test_windows_lemonade_runtime_only_persists_config_without_dependents(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir, env_path, _env_text, _models_ini, _ini_text, lemonade_yaml, _yaml_text = (
+            _write_model_activation_fixture(
+                tmp_path,
+                gpu_backend="amd",
+                lemonade=True,
+                lemonade_api_key="sk-inline-from-env-file-67890",
+            )
+        )
+        env_path.write_text(
+            "ODS_MODE=lemonade\n"
+            "GPU_BACKEND=amd\n"
+            "LLM_BACKEND=lemonade\n"
+            "AMD_INFERENCE_RUNTIME=lemonade\n"
+            "AMD_INFERENCE_LOCATION=host\n"
+            "AMD_INFERENCE_PORT=8080\n"
+            "GGUF_FILE=old-model.gguf\n"
+            "LLM_MODEL=old-model\n"
+            "LEMONADE_MODEL=Old-Model\n"
+            "CTX_SIZE=2048\n"
+            "LITELLM_LEMONADE_API_KEY=sk-inline-from-env-file-67890\n",
+            encoding="utf-8",
+        )
+        restarts = []
+
+        def fail_dependent(*_args, **_kwargs):
+            raise AssertionError("runtime-only activation should leave dependents to ods.ps1 restart")
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
+        monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
+        monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
+        monkeypatch.setattr(_mod, "_restart_windows_lemonade", lambda env: restarts.append(env["GGUF_FILE"]))
+        monkeypatch.setattr(_mod, "_resolve_lemonade_model_id", lambda *_args, **_kwargs: "Modern-Model")
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(_mod, "_restart_existing_container", fail_dependent)
+        monkeypatch.setattr(_mod, "_verify_litellm_route", fail_dependent)
+        monkeypatch.setattr(_mod, "_verify_running_hermes_route", fail_dependent)
+        monkeypatch.setattr(_mod, "_recreate_openclaw_if_present", fail_dependent)
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model", runtime_only=True)
+
+        assert handler.response_code == 200
+        assert handler.parse_response() == {
+            "status": "activated",
+            "model_id": "target-model",
+            "runtime_only": True,
+        }
+        assert restarts == ["new-model.gguf"]
+        assert "LEMONADE_MODEL=Modern-Model" in env_path.read_text(encoding="utf-8")
+        assert "model: openai/Modern-Model" in lemonade_yaml.read_text(encoding="utf-8")
 
     def test_windows_native_llama_activation_uses_plain_health_and_litellm_local(
         self, tmp_path, monkeypatch,

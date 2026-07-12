@@ -1024,7 +1024,10 @@ function Invoke-ODSHostAgentConfiguredModelActivation {
         $null = Invoke-WebRequest -Uri $agentHealthUrl `
             -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
         Write-AI "Loading configured Lemonade model through host agent..."
-        $body = @{ model_id = $modelId } | ConvertTo-Json -Compress
+        $body = @{
+            model_id = $modelId
+            runtime_only = $true
+        } | ConvertTo-Json -Compress
         $headers = @{ Authorization = "Bearer $agentKey" }
         $null = Invoke-RestMethod -Method Post -Uri $agentUrl `
             -Headers $headers -ContentType "application/json" -Body $body `

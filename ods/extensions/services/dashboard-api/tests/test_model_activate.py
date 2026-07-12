@@ -1235,6 +1235,18 @@ class TestRestartWindowsLemonade:
         assert "Test-ODSLemonadeLoadedModelMatches" in source
         assert "Wait-ODSLemonadeConfiguredModel -EnvVars $envVars" in source
 
+    def test_windows_agent_launcher_detaches_from_host_agent(self):
+        ods_root = Path(__file__).resolve().parents[4]
+        source = (ods_root / "installers" / "windows" / "ods.ps1").read_text(
+            encoding="utf-8",
+        )
+        marker = "Start-Process -FilePath $_pythonLiteral"
+        start = source.index(marker)
+        launcher_line = source[start:source.index("\n", start)]
+
+        assert "-RedirectStandardError $_logFileLiteral" in launcher_line
+        assert " -Wait" not in launcher_line
+
     def test_refuses_externally_managed_runtime_before_process_discovery(
         self, monkeypatch, tmp_path,
     ):

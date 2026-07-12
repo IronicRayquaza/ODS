@@ -12,7 +12,8 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-source "$(dirname "${BASH_SOURCE[0]}")/lib/auth-env.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/auth-env.sh"
 
 # Config
 API_URL="http://localhost:${DASHBOARD_API_PORT}"

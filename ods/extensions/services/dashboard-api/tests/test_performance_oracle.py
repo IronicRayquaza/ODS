@@ -211,6 +211,60 @@ def test_installer_recommended_model_survives_bootstrap_env(data_dir, tmp_path):
     assert payload["recommendationAlternatives"][0]["id"] == "qwen3.5-9b-q4"
 
 
+def test_configured_model_prefers_env_file_over_stale_process_env(data_dir, tmp_path, monkeypatch):
+    install_dir = tmp_path / "ods"
+    (install_dir / "data" / "models").mkdir(parents=True)
+    (install_dir / ".env").write_text(
+        "LLM_MODEL=phi-4-mini\n"
+        "GGUF_FILE=Phi-4-mini-instruct-Q4_K_M.gguf\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LLM_MODEL", "qwen3.6-35b-a3b")
+    monkeypatch.setenv("GGUF_FILE", "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf")
+    catalog = [
+        {
+            "id": "phi4-mini-q4",
+            "name": "Phi-4 Mini",
+            "gguf_file": "Phi-4-mini-instruct-Q4_K_M.gguf",
+            "size_mb": 2490,
+            "vram_required_gb": 4,
+            "context_length": 128000,
+            "quantization": "Q4_K_M",
+            "specialty": "Balanced",
+            "description": "Compact 128K model.",
+            "llm_model_name": "phi-4-mini",
+        },
+        {
+            "id": "qwen3.6-35b-a3b-ud-q4",
+            "name": "Qwen 3.6 35B A3B",
+            "gguf_file": "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
+            "size_mb": 21500,
+            "vram_required_gb": 24,
+            "context_length": 65536,
+            "quantization": "UD-Q4_K_M",
+            "specialty": "Reasoning",
+            "description": "Large reasoning model.",
+            "llm_model_name": "qwen3.6-35b-a3b",
+        },
+    ]
+
+    payload = build_models_payload(
+        _gpu(),
+        "Phi-4-mini-instruct-Q4_K_M",
+        0,
+        install_dir,
+        data_dir,
+        catalog=catalog,
+        evidence=[],
+    )
+
+    by_id = {model["id"]: model for model in payload["models"]}
+    assert payload["currentModel"] == "phi4-mini-q4"
+    assert payload["configuredModel"] == "phi4-mini-q4"
+    assert by_id["phi4-mini-q4"]["configured"] is True
+    assert by_id["qwen3.6-35b-a3b-ud-q4"]["configured"] is False
+
+
 def test_pre_download_ranker_prefers_capable_8gb_model_over_bootstrap(data_dir):
     catalog = [
         {

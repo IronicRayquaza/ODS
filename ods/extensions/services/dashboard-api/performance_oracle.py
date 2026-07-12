@@ -104,6 +104,15 @@ def read_env_file_value(key: str, install_dir: str | Path) -> str:
     return ""
 
 
+def read_persisted_env_value(key: str, install_dir: str | Path) -> str:
+    """Read mutable install config from .env before the container environment."""
+    env_path = Path(install_dir) / ".env"
+    file_value = read_env_file_value(key, install_dir)
+    if file_value or env_path.exists():
+        return file_value
+    return os.environ.get(key, "").strip().strip("\"'")
+
+
 def model_files_dir(data_dir: str | Path) -> Path:
     return Path(data_dir) / "models"
 
@@ -642,17 +651,17 @@ def build_sample_signature(model: dict[str, Any], gpu_info: Optional[GPUInfo],
 
 
 def _recommendation_from_env(install_dir: str | Path) -> dict[str, Any]:
-    recommended_context = read_env_value("MODEL_RECOMMENDED_CONTEXT", install_dir)
+    recommended_context = read_persisted_env_value("MODEL_RECOMMENDED_CONTEXT", install_dir)
     return {
-        "source": read_env_value("MODEL_RECOMMENDATION_SOURCE", install_dir) or "installer_configured",
-        "confidence": read_env_value("MODEL_RECOMMENDATION_CONFIDENCE", install_dir) or "medium",
-        "reason": read_env_value("MODEL_RECOMMENDATION_REASON", install_dir) or "",
-        "performanceSource": read_env_value("MODEL_PERFORMANCE_SOURCE", install_dir) or "benchmark_required",
-        "performanceLabel": read_env_value("MODEL_PERFORMANCE_LABEL", install_dir) or "Benchmark after first launch",
-        "model": read_env_value("MODEL_RECOMMENDED_MODEL", install_dir) or read_env_value("LLM_MODEL", install_dir) or None,
-        "gguf": read_env_value("MODEL_RECOMMENDED_GGUF", install_dir) or read_env_value("GGUF_FILE", install_dir) or None,
+        "source": read_persisted_env_value("MODEL_RECOMMENDATION_SOURCE", install_dir) or "installer_configured",
+        "confidence": read_persisted_env_value("MODEL_RECOMMENDATION_CONFIDENCE", install_dir) or "medium",
+        "reason": read_persisted_env_value("MODEL_RECOMMENDATION_REASON", install_dir) or "",
+        "performanceSource": read_persisted_env_value("MODEL_PERFORMANCE_SOURCE", install_dir) or "benchmark_required",
+        "performanceLabel": read_persisted_env_value("MODEL_PERFORMANCE_LABEL", install_dir) or "Benchmark after first launch",
+        "model": read_persisted_env_value("MODEL_RECOMMENDED_MODEL", install_dir) or read_persisted_env_value("LLM_MODEL", install_dir) or None,
+        "gguf": read_persisted_env_value("MODEL_RECOMMENDED_GGUF", install_dir) or read_persisted_env_value("GGUF_FILE", install_dir) or None,
         "contextLength": int(recommended_context) if str(recommended_context).isdigit() else None,
-        "selectionPolicy": read_env_value("MODEL_RECOMMENDATION_POLICY", install_dir) or _DEFAULT_RECOMMENDATION_POLICY,
+        "selectionPolicy": read_persisted_env_value("MODEL_RECOMMENDATION_POLICY", install_dir) or _DEFAULT_RECOMMENDATION_POLICY,
     }
 
 

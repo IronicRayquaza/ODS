@@ -177,7 +177,7 @@ def test_installer_recommended_model_survives_bootstrap_env(data_dir, tmp_path):
         "GGUF_FILE=Qwen3.5-2B-Q4_K_M.gguf\n"
         "MODEL_RECOMMENDED_MODEL=qwen3.5-9b\n"
         "MODEL_RECOMMENDED_GGUF=Qwen3.5-9B-Q4_K_M.gguf\n"
-        "MODEL_RECOMMENDED_CONTEXT=32768\n"
+        "MODEL_RECOMMENDED_CONTEXT=65536\n"
         "MODEL_RECOMMENDATION_SOURCE=installer_tier_map\n",
         encoding="utf-8",
     )
@@ -205,6 +205,7 @@ def test_installer_recommended_model_survives_bootstrap_env(data_dir, tmp_path):
     assert payload["hermesMinimumContext"] == 65536
     assert payload["hermesTargetContext"] == 131072
     assert by_id["qwen3.5-2b-q4"]["status"] == "loaded"
+    assert by_id["qwen3.5-9b-q4"]["contextLength"] == 32768
     assert by_id["qwen3.5-9b-q4"]["recommended"] is True
     assert by_id["qwen3.5-9b-q4"]["recommendation"]["source"] == "installer_tier_map"
     assert by_id["qwen3.5-9b-q4"]["recommendation"]["contextLength"] == 32768

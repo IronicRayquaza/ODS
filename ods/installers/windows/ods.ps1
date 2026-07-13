@@ -2020,7 +2020,7 @@ function Invoke-Disable {
 function Invoke-Model {
     param(
         [string]$Action = "current",
-        [string[]]$Args
+        [string[]]$SubArgs
     )
 
     Test-Install
@@ -2052,7 +2052,7 @@ function Invoke-Model {
                 Write-Host 'Usage: .\ods.ps1 model swap <tier>'
             }
             "swap" {
-                $tier = ($Args | Select-Object -First 1)
+                $tier = ($SubArgs | Select-Object -First 1)
                 if ([string]::IsNullOrWhiteSpace($tier)) {
                     Write-AIError "Usage: .\ods.ps1 model swap <T0|T1|T2|T3|T4|SH|SH_LARGE|NV_ULTRA>"
                     return
@@ -2181,7 +2181,7 @@ switch ($Command.ToLower()) {
     "model"   {
         $action = ($Arguments | Select-Object -First 1)
         if (-not $action) { $action = "current" }
-        Invoke-Model -Action $action -Args ($Arguments | Select-Object -Skip 1)
+        Invoke-Model -Action $action -SubArgs ($Arguments | Select-Object -Skip 1)
     }
     "chat"    { Invoke-Chat -Message ($Arguments -join " ") }
     "update"  { Invoke-Update }

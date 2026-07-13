@@ -627,9 +627,13 @@ _macos_launch_detached_bootstrap_upgrade() {
     local pid_file="${INSTALL_DIR}/data/bootstrap-upgrade.pid"
     local log_file="${INSTALL_DIR}/logs/model-upgrade.log"
     local python_cmd="${PYTHON_CMD:-/usr/bin/python3}"
+    local bash_cmd="${BASH:-bash}"
     [[ -x "$python_cmd" ]] || python_cmd="/usr/bin/python3"
+    if command -v cygpath >/dev/null 2>&1; then
+        bash_cmd="$(cygpath -w "$bash_cmd" 2>/dev/null || printf '%s' "$bash_cmd")"
+    fi
 
-    "$python_cmd" - "$pid_file" "$log_file" "$upgrade_script" "$@" <<'BOOTSTRAP_LAUNCH_PY'
+    BOOTSTRAP_BASH="$bash_cmd" "$python_cmd" - "$pid_file" "$log_file" "$upgrade_script" "$@" <<'BOOTSTRAP_LAUNCH_PY'
 import os
 import subprocess
 import sys
@@ -641,11 +645,12 @@ script = sys.argv[3]
 script_args = sys.argv[4:]
 if not script_args:
     raise SystemExit("bootstrap launcher requires the install directory")
+bash_exe = os.environ.get("BOOTSTRAP_BASH") or os.environ.get("BASH") or "bash"
 log_path.parent.mkdir(parents=True, exist_ok=True)
 pid_path.parent.mkdir(parents=True, exist_ok=True)
 with log_path.open("ab", buffering=0) as log_handle:
     proc = subprocess.Popen(
-        ["bash", script, *script_args],
+        [bash_exe, script, *script_args],
         cwd=script_args[0],
         stdin=subprocess.DEVNULL,
         stdout=log_handle,
@@ -658,6 +663,31 @@ tmp.write_text(f"{proc.pid}\n", encoding="ascii")
 os.chmod(tmp, 0o600)
 os.replace(tmp, pid_path)
 BOOTSTRAP_LAUNCH_PY
+}
+
+_macos_persist_bootstrap_upgrade_args() {
+    local full_gguf_file="$1"
+    local full_gguf_url="$2"
+    local full_gguf_sha256="$3"
+    local full_llm_model="$4"
+    local full_max_context="$5"
+    local bootstrap_gguf_file="${6:-Qwen3.5-2B-Q4_K_M.gguf}"
+    local args_file="${INSTALL_DIR}/data/bootstrap-upgrade.args"
+
+    mkdir -p "${INSTALL_DIR}/data"
+    {
+        printf '%s\n' "$full_gguf_file"
+        printf '%s\n' "$full_gguf_url"
+        printf '%s\n' "$full_gguf_sha256"
+        printf '%s\n' "$full_llm_model"
+        printf '%s\n' "$full_max_context"
+        printf '%s\n' "$bootstrap_gguf_file"
+    } > "${args_file}.tmp" && mv "${args_file}.tmp" "$args_file" || {
+        rm -f "${args_file}.tmp" 2>/dev/null || true
+        ai_warn "Could not persist bootstrap-upgrade retry metadata"
+        return 1
+    }
+    chmod 600 "$args_file" 2>/dev/null || true
 }
 
 _macos_native_llama_cwd_is_owned() {
@@ -2569,9 +2599,18 @@ for service in (data.get("services") or {}).values():
         _upgrade_script="$INSTALL_DIR/scripts/bootstrap-upgrade.sh"
 
         if [[ -x "$_upgrade_script" ]] || [[ -f "$_upgrade_script" ]]; then
-            if ! _macos_launch_detached_bootstrap_upgrade "$_upgrade_script" \
-                "$INSTALL_DIR" "$FULL_GGUF_FILE" "$FULL_GGUF_URL" \
-                "$FULL_GGUF_SHA256" "$FULL_LLM_MODEL" "$FULL_MAX_CONTEXT"; then
+            _macos_persist_bootstrap_upgrade_args \
+                "$FULL_GGUF_FILE" "$FULL_GGUF_URL" "$FULL_GGUF_SHA256" \
+                "$FULL_LLM_MODEL" "$FULL_MAX_CONTEXT" "$BOOTSTRAP_GGUF_FILE" || true
+            # Start the long-lived downloader from a child shell after closing
+            # inherited non-stdio FDs, matching the Linux installer contract.
+            if ! (
+                _close_inherited_fds_for_daemon
+                _macos_launch_detached_bootstrap_upgrade "$_upgrade_script" \
+                    "$INSTALL_DIR" "$FULL_GGUF_FILE" "$FULL_GGUF_URL" \
+                    "$FULL_GGUF_SHA256" "$FULL_LLM_MODEL" "$FULL_MAX_CONTEXT" \
+                    "$BOOTSTRAP_GGUF_FILE"
+            ); then
                 ai_err "Could not launch the isolated background model upgrade."
                 exit 1
             fi

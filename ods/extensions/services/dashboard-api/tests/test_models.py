@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from models import GPUInfo
+from models import BootstrapStatus, GPUInfo
 
 
 def test_fetch_loaded_model_uses_configured_llm_url(monkeypatch):
@@ -533,6 +533,56 @@ def test_api_models_returns_full_catalog_without_fake_tokens(test_client, monkey
     assert payload["models"][0]["tokensPerSec"] is None
     assert payload["models"][0]["tokensPerSecEstimate"] == 130
     assert payload["models"][0]["performance"]["source"] == "benchmark_required"
+
+
+def test_download_model_rejects_while_bootstrap_upgrade_active(test_client, monkeypatch, tmp_path):
+    models_router, install_dir, _data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
+    _write_model_library(install_dir, [
+        {
+            "id": "phi4-mini-q4",
+            "name": "Phi-4 Mini",
+            "gguf_file": "Phi-4-mini-instruct-Q4_K_M.gguf",
+            "gguf_url": "https://example.test/Phi-4-mini-instruct-Q4_K_M.gguf",
+            "size_mb": 2490,
+            "vram_required_gb": 4,
+            "context_length": 128000,
+            "quantization": "Q4_K_M",
+            "specialty": "Balanced",
+            "description": "Compact 128K model.",
+            "tokens_per_sec_estimate": 130,
+            "llm_model_name": "phi-4-mini",
+        },
+    ])
+    monkeypatch.setattr(
+        models_router,
+        "get_bootstrap_status",
+        lambda: BootstrapStatus(
+            active=True,
+            model_name="Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
+            percent=8.5,
+        ),
+    )
+    monkeypatch.setattr(
+        models_router,
+        "_call_agent_model",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("bootstrap-busy download reached host agent")
+        ),
+    )
+
+    resp = test_client.post(
+        "/api/models/phi4-mini-q4/download",
+        headers=test_client.auth_headers,
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == {
+        "error": "Cannot start model download while bootstrap full-model upgrade is in progress",
+        "code": "model_lifecycle_busy",
+        "activeOperation": "bootstrap_upgrade",
+        "activeTarget": "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
+        "requestedModelId": "phi4-mini-q4",
+    }
 
 
 def test_api_models_falls_back_to_loaded_model_probe(test_client, monkeypatch, tmp_path):

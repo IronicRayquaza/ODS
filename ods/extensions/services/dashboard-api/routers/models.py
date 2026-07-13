@@ -888,6 +888,19 @@ def download_model(model_id: str, api_key: str = Depends(verify_api_key)):
     if model is None:
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found in library")
 
+    bootstrap_info = get_bootstrap_status()
+    if bootstrap_info.active:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "Cannot start model download while bootstrap full-model upgrade is in progress",
+                "code": "model_lifecycle_busy",
+                "activeOperation": "bootstrap_upgrade",
+                "activeTarget": bootstrap_info.model_name,
+                "requestedModelId": model_id,
+            },
+        )
+
     payload = {
         "gguf_file": model["gguf_file"],
         "gguf_url": model.get("gguf_url", ""),

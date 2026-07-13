@@ -68,6 +68,42 @@ show_ods_banner() {
     echo ""
 }
 
+download_hf_artifact_with_python() {
+    local url="$1"
+    local destination="$2"
+    local helper=""
+    local python_cmd="${PYTHON_CMD:-}"
+    local log_file="${ODS_LOG_FILE:-/tmp/ods-install.log}"
+
+    case "$url" in
+        https://huggingface.co/*|https://www.huggingface.co/*|https://hf.co/*) ;;
+        *) return 2 ;;
+    esac
+
+    for candidate in \
+        "${INSTALL_DIR:-}/scripts/download-hf-artifact.py" \
+        "${SOURCE_ROOT:-}/scripts/download-hf-artifact.py"; do
+        if [[ -f "$candidate" ]]; then
+            helper="$candidate"
+            break
+        fi
+    done
+    [[ -n "$helper" ]] || return 2
+
+    if [[ -z "$python_cmd" ]]; then
+        python_cmd="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+    fi
+    [[ -n "$python_cmd" ]] || return 2
+
+    if ! "$python_cmd" -c "import huggingface_hub, hf_xet" >/dev/null 2>&1; then
+        "$python_cmd" -m pip install --user -q "huggingface_hub[hf_xet]>=0.27" \
+            >> "$log_file" 2>&1 || true
+    fi
+
+    ai "Retrying with Hugging Face client..."
+    "$python_cmd" "$helper" "$url" "$destination" >> "$log_file" 2>&1
+}
+
 # Download with curl, resume support, and retry logic
 download_with_progress() {
     local url="$1"
@@ -122,6 +158,11 @@ download_with_progress() {
             return 0
         else
             local rc=$?
+            if download_hf_artifact_with_python "$url" "$part_file"; then
+                mv "$part_file" "$destination"
+                ai_ok "${label} complete"
+                return 0
+            fi
             if [[ $attempt -eq $max_retries ]]; then
                 ai_err "${label} failed after $max_retries attempts (curl exit code: ${rc})"
                 ai "Re-run the installer to resume the download."

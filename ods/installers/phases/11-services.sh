@@ -105,6 +105,30 @@ except Exception:
     fi
 }
 
+_phase11_download_hf_artifact() {
+    local url="$1" destination="$2" log_file="$3"
+    local helper="$INSTALL_DIR/scripts/download-hf-artifact.py"
+    local python_cmd="${ODS_PYTHON_CMD:-}"
+
+    case "$url" in
+        https://huggingface.co/*|https://www.huggingface.co/*|https://hf.co/*) ;;
+        *) return 2 ;;
+    esac
+
+    [[ -f "$helper" ]] || return 2
+    if [[ -z "$python_cmd" ]]; then
+        python_cmd="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+    fi
+    [[ -n "$python_cmd" ]] || return 2
+
+    if ! "$python_cmd" -c "import huggingface_hub, hf_xet" >/dev/null 2>&1; then
+        "$python_cmd" -m pip install --user -q "huggingface_hub[hf_xet]>=0.27" \
+            >> "$log_file" 2>&1 || true
+    fi
+
+    "$python_cmd" "$helper" "$url" "$destination" >> "$log_file" 2>&1
+}
+
 ods_progress 75 "services" "Starting services"
 show_phase 5 6 "Starting Services" "~2-3 minutes"
 
@@ -583,6 +607,15 @@ else
                     else
                         rm -f "$GGUF_DIR/$GGUF_FILE" 2>/dev/null || true
                         printf "\r  ${AMB}⚠${NC} %-60s\n" "Download claimed to succeed but $GGUF_FILE is missing/empty"
+                    fi
+                elif _phase11_download_hf_artifact "$GGUF_URL" "$GGUF_DIR/$GGUF_FILE.part" "$INSTALL_DIR/logs/model-download.log"; then
+                    if mv "$GGUF_DIR/$GGUF_FILE.part" "$GGUF_DIR/$GGUF_FILE" && [[ -s "$GGUF_DIR/$GGUF_FILE" ]]; then
+                        printf "\r  ${BGRN}✓${NC} %-60s\n" "Model downloaded via Hugging Face client: $GGUF_FILE"
+                        _dl_success=true
+                        break
+                    else
+                        rm -f "$GGUF_DIR/$GGUF_FILE" 2>/dev/null || true
+                        printf "\r  ${AMB}⚠${NC} %-60s\n" "Hugging Face fallback completed but $GGUF_FILE is missing/empty"
                     fi
                 fi
                 printf "\r  ${AMB}⚠${NC} %-60s\n" "Download attempt $_attempt failed"

@@ -112,6 +112,85 @@ function Get-ODSCurlDownloadHttpArgs {
     }
 }
 
+function Test-ODSHuggingFaceResolveUrl {
+    param([string]$Url)
+    return ($Url -match '^https://(www\.)?(huggingface\.co|hf\.co)/')
+}
+
+function Get-ODSHuggingFaceDownloadHelper {
+    $roots = @()
+    $_sourceRoot = Get-Variable -Name SourceRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if (-not [string]::IsNullOrWhiteSpace($_sourceRoot)) { $roots += $_sourceRoot }
+    $_installDir = Get-Variable -Name installDir -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if (-not [string]::IsNullOrWhiteSpace($_installDir)) { $roots += $_installDir }
+    if (-not [string]::IsNullOrWhiteSpace($env:ODS_HOME)) { $roots += $env:ODS_HOME }
+
+    foreach ($root in $roots) {
+        $candidate = Join-Path $root "scripts\download-hf-artifact.py"
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+    return $null
+}
+
+function Get-ODSPythonDownloadCommand {
+    $candidates = @(
+        @{ FilePath = "python3"; PrefixArgs = @() },
+        @{ FilePath = "python"; PrefixArgs = @() },
+        @{ FilePath = "py"; PrefixArgs = @("-3") }
+    )
+
+    foreach ($candidate in $candidates) {
+        $filePath = $candidate.FilePath
+        $prefixArgs = @($candidate.PrefixArgs)
+        & $filePath @prefixArgs -c "import sys" 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            return [pscustomobject]@{
+                FilePath = $filePath
+                PrefixArgs = $prefixArgs
+            }
+        }
+    }
+    return $null
+}
+
+function Invoke-ODSHuggingFaceDownloadFallback {
+    param(
+        [string]$Url,
+        [string]$Destination
+    )
+
+    if (-not (Test-ODSHuggingFaceResolveUrl -Url $Url)) {
+        return $false
+    }
+
+    $helper = Get-ODSHuggingFaceDownloadHelper
+    if (-not $helper) {
+        return $false
+    }
+
+    $python = Get-ODSPythonDownloadCommand
+    if (-not $python) {
+        return $false
+    }
+
+    $checkArgs = @($python.PrefixArgs) + @("-c", "import huggingface_hub, hf_xet")
+    & $python.FilePath @checkArgs 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        $installArgs = @($python.PrefixArgs) + @("-m", "pip", "install", "--user", "-q", "huggingface_hub[hf_xet]>=0.27")
+        & $python.FilePath @installArgs 2>&1 | Out-Null
+    }
+
+    Write-AI "Retrying with Hugging Face client..."
+    $downloadArgs = @($python.PrefixArgs) + @($helper, $Url, $Destination)
+    & $python.FilePath @downloadArgs
+    if ($LASTEXITCODE -eq 0 -and (Test-Path $Destination) -and ((Get-Item $Destination).Length -gt 0)) {
+        return $true
+    }
+    return $false
+}
+
 function Show-ProgressDownload {
     param(
         [string]$Url,
@@ -142,6 +221,11 @@ function Show-ProgressDownload {
         Write-AISuccess "$Label complete"
         return $true
     } else {
+        if (Invoke-ODSHuggingFaceDownloadFallback -Url $Url -Destination $partFile) {
+            Move-Item -Path $partFile -Destination $Destination -Force
+            Write-AISuccess "$Label complete"
+            return $true
+        }
         $curlErrors = @{ 6="Could not resolve host"; 7="Connection refused"; 18="Partial transfer"; 28="Timeout"; 35="SSL error"; 56="Network failure" }
         $hint = $(if ($curlErrors.ContainsKey($curlExit)) { " ($($curlErrors[$curlExit]))" } else { "" })
         Write-AIError "$Label failed (curl exit code: $curlExit$hint)"

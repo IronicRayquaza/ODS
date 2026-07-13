@@ -130,6 +130,67 @@ _phase11_download_hf_artifact() {
     "$python_cmd" "$helper" "$url" "$destination" >> "$log_file" 2>&1
 }
 
+_phase11_prefetch_embeddings_model() {
+    [[ "${ENABLE_EMBEDDINGS:-${ENABLE_RAG:-false}}" == "true" ]] || return 0
+    [[ "${ODS_EMBEDDINGS_PREFETCH:-true}" == "false" ]] && {
+        ai_warn "Skipping embeddings model prefetch because ODS_EMBEDDINGS_PREFETCH=false."
+        return 0
+    }
+
+    local helper="$INSTALL_DIR/scripts/download-hf-snapshot.py"
+    local model="${EMBEDDING_MODEL:-}"
+    local revision="${EMBEDDING_MODEL_REVISION:-}"
+    local cache_dir="$INSTALL_DIR/data/embeddings"
+    local python_cmd="${ODS_PYTHON_CMD:-${_python_cmd:-}}"
+    local prefetch_pid
+
+    if [[ -z "$model" ]] && declare -f _phase11_env_get >/dev/null 2>&1; then
+        model="$(_phase11_env_get EMBEDDING_MODEL "BAAI/bge-base-en-v1.5")"
+    fi
+    model="${model:-BAAI/bge-base-en-v1.5}"
+
+    [[ -f "$helper" ]] || {
+        ai_bad "Embeddings snapshot helper missing: $helper"
+        return 1
+    }
+    if [[ -z "$python_cmd" ]]; then
+        python_cmd="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
+    fi
+    [[ -n "$python_cmd" ]] || {
+        ai_bad "Python is required to prefetch the embeddings model for RAG."
+        return 1
+    }
+
+    if ! "$python_cmd" -c "import huggingface_hub, hf_xet" >/dev/null 2>&1; then
+        if ods_ensure_python_pip "$python_cmd" "Embeddings Hugging Face downloader"; then
+            ods_python_pip_install_user "$python_cmd" "$LOG_FILE" "huggingface_hub[hf_xet]>=0.27" || true
+        fi
+    fi
+    if ! "$python_cmd" -c "import huggingface_hub, hf_xet" >/dev/null 2>&1; then
+        ai_bad "Could not install huggingface_hub[hf_xet] for embeddings prefetch."
+        ai "Install it manually and re-run:"
+        ai "  $python_cmd -m pip install --user 'huggingface_hub[hf_xet]>=0.27'"
+        return 1
+    fi
+
+    mkdir -p "$cache_dir"
+    ai "Caching embeddings model for RAG: $model"
+    if [[ -n "$revision" ]]; then
+        "$python_cmd" "$helper" "$model" "$cache_dir" --revision "$revision" >> "$LOG_FILE" 2>&1 &
+    else
+        "$python_cmd" "$helper" "$model" "$cache_dir" >> "$LOG_FILE" 2>&1 &
+    fi
+    prefetch_pid=$!
+    if spin_task "$prefetch_pid" "Caching embeddings model"; then
+        ai_ok "Embeddings model cached for TEI"
+        return 0
+    fi
+
+    ai_bad "Embeddings model prefetch failed."
+    ai "Log file: $LOG_FILE"
+    return 1
+}
+
 _phase11_model_file_valid() {
     local path="$1" expected_sha="${2:-}" actual_hash
     [[ -s "$path" ]] || return 1
@@ -949,6 +1010,10 @@ MODELS_INI_EOF
         exit 1
     fi
     ai_ok "Compose configuration valid"
+
+    if ! _phase11_prefetch_embeddings_model; then
+        exit 1
+    fi
 
     # Launch containers
     ods_progress 81 "services" "Launching containers"

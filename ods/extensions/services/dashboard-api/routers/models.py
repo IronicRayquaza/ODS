@@ -484,6 +484,52 @@ def _is_cancelled_download_status(status: Any) -> bool:
     return key in {"cancelled", "canceled"}
 
 
+def _bootstrap_upgrade_download_conflict() -> dict[str, Any] | None:
+    """Return a lifecycle-busy payload when bootstrap upgrade owns download priority."""
+    bootstrap_info = get_bootstrap_status()
+    if bootstrap_info.active:
+        return {
+            "error": "Cannot start model download while bootstrap full-model upgrade is in progress",
+            "code": "model_lifecycle_busy",
+            "activeOperation": "bootstrap_upgrade",
+            "activeTarget": bootstrap_info.model_name,
+        }
+
+    status_path = Path(DATA_DIR) / "bootstrap-status.json"
+    args_path = Path(DATA_DIR) / "bootstrap-upgrade.args"
+    if not status_path.exists() or not args_path.exists():
+        return None
+
+    try:
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    state = str(status.get("status") or "").casefold()
+    model_name = str(status.get("model") or "").strip()
+    if state not in {"failed", "error"} or not model_name:
+        return None
+    if "\x00" in model_name or "/" in model_name or "\\" in model_name or Path(model_name).name != model_name:
+        return None
+
+    try:
+        final_path = (Path(DATA_DIR) / "models" / model_name).resolve()
+        models_root = (Path(DATA_DIR) / "models").resolve()
+        if not final_path.is_relative_to(models_root):
+            return None
+        if final_path.exists() and final_path.stat().st_size > 0:
+            return None
+    except OSError:
+        return None
+
+    return {
+        "error": "Cannot start model download while bootstrap full-model upgrade is pending retry",
+        "code": "model_lifecycle_busy",
+        "activeOperation": "bootstrap_upgrade_retry_pending",
+        "activeTarget": model_name,
+    }
+
+
 def _get_agent_model_status(timeout: int = 5) -> Optional[dict]:
     """Return host-agent-normalized model download status when reachable."""
     global _agent_model_status_cache_at, _agent_model_status_cache_value
@@ -888,17 +934,11 @@ def download_model(model_id: str, api_key: str = Depends(verify_api_key)):
     if model is None:
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found in library")
 
-    bootstrap_info = get_bootstrap_status()
-    if bootstrap_info.active:
+    bootstrap_conflict = _bootstrap_upgrade_download_conflict()
+    if bootstrap_conflict is not None:
         raise HTTPException(
             status_code=409,
-            detail={
-                "error": "Cannot start model download while bootstrap full-model upgrade is in progress",
-                "code": "model_lifecycle_busy",
-                "activeOperation": "bootstrap_upgrade",
-                "activeTarget": bootstrap_info.model_name,
-                "requestedModelId": model_id,
-            },
+            detail={**bootstrap_conflict, "requestedModelId": model_id},
         )
 
     payload = {

@@ -171,6 +171,47 @@ def test_agent_activation_waits_for_download_lifecycle_teardown(monkeypatch):
     assert calls == 3
 
 
+def test_agent_activation_waits_past_old_download_teardown_bound(monkeypatch):
+    import routers.models as models_router
+
+    calls = 0
+    current_time = {"value": 0.0}
+    conflict_payload = {
+        "error": "Cannot activate a model while model_download is in progress",
+        "code": "model_lifecycle_busy",
+        "activeOperation": "model_download",
+        "activeModelId": None,
+    }
+
+    def request(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls < 5:
+            raise models_router.AgentHTTPError(
+                409,
+                conflict_payload["error"],
+                json.dumps(conflict_payload),
+            )
+        return {"status": "started"}
+
+    def sleep(_seconds):
+        current_time["value"] += 10.0
+
+    monkeypatch.setattr(models_router, "request_agent_json", request)
+    monkeypatch.setattr(models_router.time, "monotonic", lambda: current_time["value"])
+    monkeypatch.setattr(models_router.time, "sleep", sleep)
+
+    assert models_router._MODEL_DOWNLOAD_BUSY_ACTIVATION_GRACE_SECONDS >= 120.0
+    assert models_router._call_agent_model(
+        "/v1/model/activate",
+        {"model_id": "qwen3.5-122b-a10b-q4"},
+        timeout=600,
+        retry_download_busy_seconds=models_router._MODEL_DOWNLOAD_BUSY_ACTIVATION_GRACE_SECONDS,
+    ) == {"status": "started"}
+    assert calls == 5
+    assert current_time["value"] > 30.0
+
+
 def test_agent_activation_does_not_retry_unrelated_lifecycle_conflict(monkeypatch):
     import routers.models as models_router
 
@@ -851,7 +892,7 @@ def test_load_model_uses_observed_download_teardown_grace(test_client, monkeypat
         "timeout": 600,
         "retry_download_busy_seconds": models_router._MODEL_DOWNLOAD_BUSY_ACTIVATION_GRACE_SECONDS,
     }
-    assert captured["retry_download_busy_seconds"] >= 30.0
+    assert captured["retry_download_busy_seconds"] >= 120.0
 
 
 def test_load_model_delegates_when_loaded_backend_is_not_ready(test_client, monkeypatch, tmp_path):

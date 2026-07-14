@@ -134,6 +134,28 @@ function Get-ODSHuggingFaceDownloadHelper {
     return $null
 }
 
+function Invoke-ODSNativeQuiet {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$Arguments = @()
+    )
+
+    $prevEAP = $ErrorActionPreference
+    $exitCode = 1
+    try {
+        # Expected failed native probes must return an exit code under
+        # Windows PowerShell 5.1 strict installer semantics.
+        $ErrorActionPreference = "SilentlyContinue"
+        & $FilePath @Arguments 2>&1 | Out-Null
+        if ($null -ne $LASTEXITCODE) { $exitCode = $LASTEXITCODE }
+    } catch {
+        $exitCode = 1
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
+    return $exitCode
+}
+
 function Get-ODSPythonDownloadCommand {
     $candidates = @(
         @{ FilePath = "python3"; PrefixArgs = @() },
@@ -144,8 +166,8 @@ function Get-ODSPythonDownloadCommand {
     foreach ($candidate in $candidates) {
         $filePath = $candidate.FilePath
         $prefixArgs = @($candidate.PrefixArgs)
-        & $filePath @prefixArgs -c "import sys" 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) {
+        $probeArgs = @($prefixArgs) + @("-c", "import sys")
+        if ((Invoke-ODSNativeQuiet -FilePath $filePath -Arguments $probeArgs) -eq 0) {
             return [pscustomobject]@{
                 FilePath = $filePath
                 PrefixArgs = $prefixArgs
@@ -176,10 +198,9 @@ function Invoke-ODSHuggingFaceDownloadFallback {
     }
 
     $checkArgs = @($python.PrefixArgs) + @("-c", "import huggingface_hub, hf_xet")
-    & $python.FilePath @checkArgs 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
+    if ((Invoke-ODSNativeQuiet -FilePath $python.FilePath -Arguments $checkArgs) -ne 0) {
         $installArgs = @($python.PrefixArgs) + @("-m", "pip", "install", "--user", "-q", "huggingface_hub[hf_xet]>=0.27")
-        & $python.FilePath @installArgs 2>&1 | Out-Null
+        Invoke-ODSNativeQuiet -FilePath $python.FilePath -Arguments $installArgs | Out-Null
     }
 
     Write-AI "Retrying with Hugging Face client..."

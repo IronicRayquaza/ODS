@@ -1665,7 +1665,7 @@ Start-Process -FilePath $_pythonLiteral -ArgumentList `$agentArgs -WorkingDirect
                 -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
                 -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero)
             $taskPrincipal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-            
+
             $taskError = $null
             try {
                 Register-ScheduledTask -TaskName $script:ODS_AGENT_TASK_NAME `
@@ -1683,7 +1683,7 @@ Start-Process -FilePath $_pythonLiteral -ArgumentList `$agentArgs -WorkingDirect
                 $taskError = $_
                 Write-AIWarn "Could not start host agent through Task Scheduler: $($taskError.Exception.Message)"
                 Write-AI "Setting up alternative startup persistence for standard user..."
-                
+
                 $startupFolder = [Environment]::GetFolderPath("Startup")
                 $vbsFile = Join-Path $startupFolder "ods-host-agent.vbs"
                 $vbsContent = @"

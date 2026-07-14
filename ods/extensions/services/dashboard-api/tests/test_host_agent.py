@@ -2622,6 +2622,84 @@ class TestModelActivationModeAndMacosBridge:
             )
 
 
+class TestModelActivationLemonadePersistence:
+
+    def test_activation_never_persists_blank_lemonade_model_during_restore(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        install_dir = tmp_path / "install"
+        models_dir = install_dir / "data" / "models"
+        config_dir = install_dir / "config"
+        (config_dir / "llama-server").mkdir(parents=True)
+        (config_dir / "litellm").mkdir(parents=True)
+        models_dir.mkdir(parents=True)
+        env_path = install_dir / ".env"
+        env_path.write_text(
+            "ODS_MODE=local\n"
+            "GPU_BACKEND=amd\n"
+            "GGUF_FILE=old-model.gguf\n"
+            "LLM_MODEL=old-model\n"
+            "LEMONADE_MODEL=extra.old-model.gguf\n"
+            "OLLAMA_PORT=11434\n"
+            "MAX_CONTEXT=32768\n"
+            "CTX_SIZE=32768\n",
+            encoding="utf-8",
+        )
+        payload = b"new model"
+        (models_dir / "new-model.gguf").write_bytes(payload)
+        (config_dir / "model-library.json").write_text(
+            json.dumps({
+                "models": [{
+                    "id": "target-model",
+                    "gguf_file": "new-model.gguf",
+                    "gguf_url": "https://example.test/new-model.gguf",
+                    "gguf_sha256": hashlib.sha256(payload).hexdigest(),
+                    "llm_model_name": "new-model",
+                    "context_length": 65536,
+                }],
+            }),
+            encoding="utf-8",
+        )
+        observed_envs = []
+
+        def fake_compose_restart(_env):
+            observed_envs.append(_mod.load_env(env_path).copy())
+            raise RuntimeError("stop after env write")
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
+        monkeypatch.setattr(
+            _mod,
+            "_resolve_lemonade_model_id",
+            lambda _env, gguf_file, **_kwargs: f"extra.{gguf_file}",
+        )
+        monkeypatch.setattr(
+            _mod, "_compose_restart_llama_server", fake_compose_restart
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_capture_hermes_live_config",
+            lambda *_args, **_kwargs: {"exists": False},
+        )
+        monkeypatch.setattr(
+            _mod, "_remove_hermes_live_config", lambda *_args, **_kwargs: None
+        )
+        monkeypatch.setattr(
+            _mod, "_capture_perplexica_config", lambda *_args, **_kwargs: None
+        )
+        handler = _FakeHandler(b"")
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 500
+        assert observed_envs
+        pending_env = observed_envs[0]
+        assert pending_env["GGUF_FILE"] == "new-model.gguf"
+        assert pending_env["LEMONADE_MODEL"] == "extra.new-model.gguf"
+
+
 class TestModelActivationRuntimeIdentity:
 
     @pytest.mark.parametrize(

@@ -4727,6 +4727,11 @@ class AgentHandler(BaseHTTPRequestHandler):
                         "without restarting native Lemonade",
                         gguf_file,
                     )
+            if lemonade_runtime and not lemonade_model_id:
+                # Keep the persisted route non-empty while a Lemonade activation
+                # is still proving readiness. A slow or interrupted restore must
+                # never strand dependents with LEMONADE_MODEL=.
+                lemonade_model_id = _resolve_lemonade_model_id(env_pre, gguf_file)
             runtime_profile = _select_runtime_profile(model, env_pre)
             runtime_env = {}
             if runtime_profile:
@@ -4781,11 +4786,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                     "MODEL_RUNTIME_PROFILE_SOURCE": runtime_profile.get("source_url", "") if runtime_profile else "",
                 }
                 if lemonade_runtime:
-                    updates["LEMONADE_MODEL"] = (
-                        str(env_pre.get("LEMONADE_MODEL") or "")
-                        if same_lemonade_target
-                        else ""
-                    )
+                    updates["LEMONADE_MODEL"] = lemonade_model_id
                 runtime_keys = {
                     "LLAMA_PARALLEL",
                     "LLAMA_ARG_FLASH_ATTN",

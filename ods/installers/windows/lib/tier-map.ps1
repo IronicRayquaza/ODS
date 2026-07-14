@@ -456,6 +456,18 @@ function Test-CatalogModelFamilyAllowed {
     return ($family -ne "gemma4")
 }
 
+function Test-CatalogModelInstallRecommendationAllowed {
+    param([object]$Model)
+
+    $prop = $Model.PSObject.Properties["install_recommendation"]
+    if (-not $prop) { return $true }
+    $value = $prop.Value
+    if ($null -eq $value) { return $true }
+    if ($value -is [bool]) { return [bool]$value }
+    $text = "$value".Trim().ToLowerInvariant()
+    return -not ($text -in @("0", "false", "no", "off"))
+}
+
 function Get-CatalogModelEstimatedParamBillions {
     param([object]$Model)
 
@@ -649,6 +661,7 @@ function Resolve-CatalogModelRecommendation {
     $candidates = @()
     foreach ($model in $catalog.models) {
         if (-not $model.gguf_url) { continue }
+        if (-not (Test-CatalogModelInstallRecommendationAllowed -Model $model)) { continue }
         if (-not (Test-CatalogModelFamilyAllowed -Model $model -ModelProfileName $modelProfileName)) { continue }
         $runtimeProfile = Get-CatalogRuntimeProfile -Model $model -GpuInfo $GpuInfo -SystemRamGB $SystemRamGB
         $requiredGb = Get-CatalogModelSelectorRequiredGB -Model $model -RuntimeProfile $runtimeProfile

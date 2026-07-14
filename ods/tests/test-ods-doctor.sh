@@ -388,6 +388,122 @@ else
     skip "jq not available - skipping cloud mode behavioral validation"
 fi
 
+# 14. Cloud mode LLM backend check validation with translated litellm URL (CRLF env)
+if command -v jq >/dev/null 2>&1; then
+    # Create temp workspace for stub bin
+    TEST_TEMP_WORKSPACE=$(mktemp -d /tmp/ods-doctor-test-workspace.XXXXXX)
+    mkdir -p "$TEST_TEMP_WORKSPACE/bin"
+
+    # Write a stubbed curl that records URL called and responds successfully
+    cat << 'EOF' > "$TEST_TEMP_WORKSPACE/bin/curl"
+#!/bin/bash
+echo "$*" >> /tmp/curl_calls.log
+echo '{"status":"ok"}'
+exit 0
+EOF
+    chmod +x "$TEST_TEMP_WORKSPACE/bin/curl"
+
+    # Backup real .env using a unique file name and set global tracker
+    ENV_BACKUP_PATH=$(mktemp /tmp/ods-env-backup.XXXXXX)
+    if [[ -f "$REAL_ENV" ]]; then
+        mv "$REAL_ENV" "$ENV_BACKUP_PATH"
+    fi
+
+    # Write test .env with ODS_MODE=cloud and LLM_API_URL=http://litellm:4000 (with CRLF)
+    printf 'ODS_MODE="cloud"\r\nLLM_API_URL="http://litellm:4000"\r\n' > "$REAL_ENV"
+
+    rm -f /tmp/curl_calls.log
+
+    # Run the doctor script with mock curl in PATH
+    set +e
+    (export PATH="$TEST_TEMP_WORKSPACE/bin:$PATH"; cd "$ROOT_DIR" && bash scripts/ods-doctor.sh "$TEMP_REPORT" >/dev/null 2>&1)
+    exit_code=$?
+    set -e
+
+    # Verify JSON structure and values
+    status=$(jq -r '.runtime.llm_backend.status' "$TEMP_REPORT")
+    provider=$(jq -r '.runtime.llm_backend.provider' "$TEMP_REPORT")
+    url=$(jq -r '.runtime.llm_backend.url' "$TEMP_REPORT")
+
+    # Read curl calls before cleanup
+    curl_calls=""
+    if [[ -f /tmp/curl_calls.log ]]; then
+        curl_calls=$(cat /tmp/curl_calls.log)
+    fi
+
+    # Restore original env immediately
+    if [[ -f "$ENV_BACKUP_PATH" ]]; then
+        mv "$ENV_BACKUP_PATH" "$REAL_ENV"
+    else
+        rm -f "$REAL_ENV"
+    fi
+    ENV_BACKUP_PATH=""
+
+    # Clean up temp workspace and curl calls log immediately
+    rm -rf "$TEST_TEMP_WORKSPACE"
+    TEST_TEMP_WORKSPACE=""
+    rm -f /tmp/curl_calls.log
+
+    # Perform assertions
+    if [[ "$status" == "ok" ]] && \
+       [[ "$provider" == "openai" ]] && \
+       [[ "$url" == "http://127.0.0.1:4000" ]]; then
+        pass "Cloud mode with litellm URL translates to 127.0.0.1 and probes successfully"
+    else
+        fail "Cloud mode with litellm URL failed. got: status=$status, provider=$provider, url=$url"
+    fi
+
+    if echo "$curl_calls" | grep -q "http://127.0.0.1:4000/v1/models"; then
+        pass "Cloud mode litellm probe hit translated host URL (/v1/models)"
+    else
+        fail "Cloud mode litellm probe did not hit correct translated host. calls: $curl_calls"
+    fi
+else
+    skip "jq not available - skipping cloud mode litellm URL translation check"
+fi
+
+# 15. Cloud mode LLM backend check validation with non-host-probeable URL (CRLF env)
+if command -v jq >/dev/null 2>&1; then
+    # Backup real .env using a unique file name and set global tracker
+    ENV_BACKUP_PATH=$(mktemp /tmp/ods-env-backup.XXXXXX)
+    if [[ -f "$REAL_ENV" ]]; then
+        mv "$REAL_ENV" "$ENV_BACKUP_PATH"
+    fi
+
+    # Write test .env with ODS_MODE=cloud and LLM_API_URL=http://other-service:4000 (with CRLF)
+    printf 'ODS_MODE="cloud"\r\nLLM_API_URL="http://other-service:4000"\r\n' > "$REAL_ENV"
+
+    # Run the doctor script
+    set +e
+    (cd "$ROOT_DIR" && bash scripts/ods-doctor.sh "$TEMP_REPORT" >/dev/null 2>&1)
+    exit_code=$?
+    set -e
+
+    # Verify JSON structure and values
+    status=$(jq -r '.runtime.llm_backend.status' "$TEMP_REPORT")
+    provider=$(jq -r '.runtime.llm_backend.provider' "$TEMP_REPORT")
+    url=$(jq -r '.runtime.llm_backend.url' "$TEMP_REPORT")
+
+    # Restore original env immediately
+    if [[ -f "$ENV_BACKUP_PATH" ]]; then
+        mv "$ENV_BACKUP_PATH" "$REAL_ENV"
+    else
+        rm -f "$REAL_ENV"
+    fi
+    ENV_BACKUP_PATH=""
+
+    # Perform assertions
+    if [[ "$status" == "ok" ]] && \
+       [[ "$provider" == "cloud" ]] && \
+       [[ "$url" == "http://other-service:4000" ]]; then
+        pass "Cloud mode with non-host-probeable URL bypasses host probe and reports ok"
+    else
+        fail "Cloud mode with non-host-probeable URL failed. got: status=$status, provider=$provider, url=$url"
+    fi
+else
+    skip "jq not available - skipping cloud mode non-host-probeable URL check"
+fi
+
 echo ""
 echo "Result: $PASSED passed, $FAILED failed"
 [[ $FAILED -eq 0 ]]

@@ -46,6 +46,7 @@ load_env_safe() {
     local env_file="${1:-$ROOT_DIR/.env}"
     [[ -f "$env_file" ]] || return 0
     while IFS='=' read -r key value; do
+        value="${value%$'\r'}"
         [[ "$key" =~ ^[[:space:]]*# ]] && continue
         [[ -z "$key" ]] && continue
         [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
@@ -244,8 +245,41 @@ _doctor_check_llm_backend() {
     elif [[ "$mode" == "cloud" ]]; then
         local cloud_url="${LLM_API_URL:-}"
         if [ -n "$cloud_url" ]; then
-            # Probe configured cloud/external LLM URL
-            _doctor_check_external_llm "$cloud_url" "${ext_provider:-openai}" "$ext_model"
+            # Translate known LiteLLM/container routes to the host-mapped port
+            # E.g. http://litellm:4000 -> http://127.0.0.1:${LITELLM_PORT:-4000}
+            local probe_url="$cloud_url"
+            if [[ "$probe_url" =~ ^https?://litellm(:[0-9]+)?(.*)$ ]]; then
+                local port_part="${BASH_REMATCH[1]:-}"
+                local path_part="${BASH_REMATCH[2]:-}"
+                local port="4000"
+                if [ -n "$port_part" ]; then
+                    port="${port_part#:}"
+                elif [ -n "${LITELLM_PORT:-}" ]; then
+                    port="$LITELLM_PORT"
+                fi
+                probe_url="http://127.0.0.1:${port}${path_part}"
+            fi
+
+            # Extract host to check if it's host-probeable (e.g. contains '.' or is 'localhost')
+            local host
+            host=$(echo "$probe_url" | grep -oE '://[^/]+' | cut -d/ -f3 | cut -d: -f1)
+
+            local is_probeable=false
+            if [[ "$host" == "localhost" ]] || [[ "$host" == *"."* ]]; then
+                is_probeable=true
+            fi
+
+            if [ "$is_probeable" = true ]; then
+                _doctor_check_external_llm "$probe_url" "${ext_provider:-openai}" "$ext_model"
+            else
+                LLM_URL="$cloud_url"
+                LLM_PROVIDER="cloud"
+                LLM_STATUS="ok"
+                LLM_MODEL=""
+                LLM_RECOVERY=""
+                log_ok "LLM backend: cloud (external) — container-internal endpoint bypassed host probe"
+                log_ok "  Endpoint : $cloud_url"
+            fi
         else
             # Leave backend check provider-neutral when no probe target exists
             LLM_URL=""

@@ -70,6 +70,7 @@ def test_release_model_switchboard_catalog_ids_exist():
         "phi4-mini-q4",
         "phi3.5-mini-q4",
         "llama3.2-3b-instruct-q4",
+        "qwen2.5-3b-instruct-q4",
         "qwen2.5-coder-3b-128k-q4",
         "qwen2.5-7b-instruct-q4",
         "llama3.1-8b-instruct-q4",
@@ -93,10 +94,33 @@ def test_llama32_3b_is_not_agent_viable_until_revalidated():
     assert not _agent_viable_for_release(by_id["llama3.2-3b-instruct-q4"])
 
 
+def test_llama31_8b_is_not_agent_viable_until_revalidated():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+    compatibility = by_id["llama3.1-8b-instruct-q4"]["app_compatibility"]
+
+    assert compatibility["agent_viability"]["status"] == "not_agent_viable"
+    assert compatibility["agent_viability"]["evidence"]
+    assert compatibility["hermes_talk"]["status"] == "unsupported_until_revalidated"
+    assert compatibility["hermes_talk"]["evidence"]
+    assert not _agent_viable_for_release(by_id["llama3.1-8b-instruct-q4"])
+
+
+def test_qwen25_3b_replaces_llama31_in_low_vram_agent_viable_pool():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+
+    replacement = by_id["qwen2.5-3b-instruct-q4"]
+    assert replacement["vram_required_gb"] <= 4
+    assert replacement["context_length"] >= HERMES_CONTEXT_FLOOR
+    assert _agent_viable_for_release(replacement)
+
+
 def test_new_switchboard_models_do_not_change_install_recommendations():
     expected_switchboard_only = {
         "phi3.5-mini-q4",
         "llama3.2-3b-instruct-q4",
+        "qwen2.5-3b-instruct-q4",
         "qwen2.5-coder-3b-128k-q4",
         "qwen2.5-7b-instruct-q4",
         "llama3.1-8b-instruct-q4",

@@ -643,7 +643,7 @@ function ModelTableRow({
   const isLoaded = model.status === 'loaded' || isCurrentModel
   const isDownloaded = model.status === 'downloaded'
   const memory = getMemoryMeta(model, gpu)
-  const compatibility = getCompatibilityMeta(model, memory)
+  const compatibility = getCompatibilityMeta(model, memory, hermesMinimumContext)
   const speed = getSpeedDisplay(model)
   const tags = getModelTags(model, hermesMinimumContext)
   const iconTone = getIconTone(model, compatibility)
@@ -785,13 +785,8 @@ function PrimaryAction({
 
   if (isDownloaded) {
     const runDisabled = Boolean(runDisabledReason)
-    const contextBlocked = isAgentContextDisabledReason(runDisabledReason)
     const directChatBlocked = isOpenAiChatBlocked(getOpenAiChatCompatibility(model))
-    const compatibilityBlocked = isAgentViabilityBlocked(getAgentViabilityCompatibility(model))
-    const buttonLabel = contextBlocked
-      ? `Needs ${formatContext(hermesMinimumContext)}`
-      : directChatBlocked ? 'Chat Unsupported'
-      : compatibilityBlocked ? 'Not Agent Ready' : 'Run'
+    const buttonLabel = directChatBlocked ? 'Chat Unsupported' : 'Run'
     return (
       <span className="inline-flex" title={runDisabledReason || `Run ${model.name}`}>
         <button
@@ -805,7 +800,7 @@ function PrimaryAction({
               : 'cursor-not-allowed border border-white/[0.08] bg-black/20 text-theme-text-muted'
           }`}
         >
-          {contextBlocked || directChatBlocked || compatibilityBlocked ? <AlertCircle size={13} /> : <Play size={13} />}
+          {directChatBlocked ? <AlertCircle size={13} /> : <Play size={13} />}
           {buttonLabel}
         </button>
       </span>
@@ -1056,18 +1051,9 @@ function getRunDisabledReason({
   if (!canActivateModels) {
     return activationModeError || 'The local model runtime is unavailable. Review runtime settings before running this model.'
   }
-  const contextLength = Number(model.contextLength || 0)
-  const minimumContext = Number(hermesMinimumContext || 0)
-  if (minimumContext > 0 && contextLength > 0 && contextLength < minimumContext) {
-    return `Hermes Agent requires at least ${formatContext(minimumContext)} context; this model has ${formatContext(contextLength)}.`
-  }
   const openAiChat = getOpenAiChatCompatibility(model)
   if (isOpenAiChatBlocked(openAiChat)) {
     return openAiChat.reason || 'This model is not currently validated for direct local chat.'
-  }
-  const agentViability = getAgentViabilityCompatibility(model)
-  if (isAgentViabilityBlocked(agentViability)) {
-    return agentViability.reason || 'This model is not currently viable for ODS agent workflows.'
   }
   if (model.fitsVram !== true) {
     const required = Number(model.estimatedRequired || model.vramRequired || 0)
@@ -1080,10 +1066,6 @@ function getRunDisabledReason({
   if (activationBusy) return 'Wait for the current model swap to finish.'
   if (loadBusy) return 'Another model action is in progress.'
   return null
-}
-
-function isAgentContextDisabledReason(reason) {
-  return typeof reason === 'string' && reason.startsWith('Hermes Agent requires at least ')
 }
 
 function formatModeLabel(mode) {
@@ -1290,7 +1272,7 @@ function getMemoryMeta(model, gpu) {
   }
 }
 
-function getCompatibilityMeta(model, memory) {
+function getCompatibilityMeta(model, memory, hermesMinimumContext = 0) {
   if (!model?.fitsVram) {
     const nearLimit = memory.total > 0 && memory.required <= memory.total * 1.08
     return {
@@ -1312,6 +1294,15 @@ function getCompatibilityMeta(model, memory) {
     return {
       label: 'Direct chat only',
       detail: 'Agent blocked',
+      tone: 'amber',
+    }
+  }
+  const contextLength = Number(model?.contextLength || 0)
+  const minimumContext = Number(hermesMinimumContext || 0)
+  if (minimumContext > 0 && contextLength > 0 && contextLength < minimumContext) {
+    return {
+      label: 'Direct chat only',
+      detail: `Needs ${formatContext(minimumContext)}`,
       tone: 'amber',
     }
   }

@@ -203,7 +203,7 @@ test('keeps Run and Delete visible for downloaded models', () => {
   expect(deleteModel).toHaveBeenCalledWith('qwen3.5-9b-q4')
 })
 
-test('blocks low-context downloaded models from becoming the active agent model', () => {
+test('allows low-context downloaded models to run with an agent-readiness warning', () => {
   const loadModel = vi.fn()
   const deleteModel = vi.fn()
   useModelsMock.mockReturnValue(baseState({
@@ -214,11 +214,13 @@ test('blocks low-context downloaded models from becoming the active agent model'
 
   renderModels()
 
-  const runButton = screen.getByRole('button', { name: /needs 64k/i })
-  expect(runButton).toBeDisabled()
-  expect(runButton).toHaveAttribute('title', 'Hermes Agent requires at least 64K context; this model has 8K.')
+  const runButton = screen.getByRole('button', { name: /^run$/i })
+  expect(runButton).toBeEnabled()
+  expect(runButton).toHaveAttribute('title', 'Run Qwen 3.5 9B')
   fireEvent.click(runButton)
-  expect(loadModel).not.toHaveBeenCalled()
+  expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4')
+  expect(screen.getByText('Direct chat only')).toBeInTheDocument()
+  expect(screen.getByText('Needs 64K')).toBeInTheDocument()
 
   const deleteButton = screen.getByRole('button', { name: /delete qwen 3\.5 9b$/i })
   expect(deleteButton).toBeEnabled()
@@ -227,7 +229,7 @@ test('blocks low-context downloaded models from becoming the active agent model'
   expect(deleteModel).toHaveBeenCalledWith('qwen3.5-9b-q4')
 })
 
-test('blocks explicit Talk-incompatible models even when context is high', () => {
+test('allows explicit Talk-incompatible models to run with an agent-readiness warning', () => {
   const loadModel = vi.fn()
   const deleteModel = vi.fn()
   useModelsMock.mockReturnValue(baseState({
@@ -252,11 +254,11 @@ test('blocks explicit Talk-incompatible models even when context is high', () =>
 
   renderModels()
 
-  const runButton = screen.getByRole('button', { name: /not agent ready/i })
-  expect(runButton).toBeDisabled()
-  expect(runButton).toHaveAttribute('title', 'Direct chat works, but ODS Talk failed validation.')
+  const runButton = screen.getByRole('button', { name: /^run$/i })
+  expect(runButton).toBeEnabled()
+  expect(runButton).toHaveAttribute('title', 'Run Phi-4 Mini')
   fireEvent.click(runButton)
-  expect(loadModel).not.toHaveBeenCalled()
+  expect(loadModel).toHaveBeenCalledWith('qwen3.5-9b-q4')
   expect(screen.getByText('Direct chat only')).toBeInTheDocument()
   expect(screen.getByText('Agent blocked')).toBeInTheDocument()
 

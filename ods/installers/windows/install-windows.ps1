@@ -1728,9 +1728,11 @@ exec bash "$bashScript" "$bashInstallDir" "$($fullTierConfig.GgufFile)" "$($full
 
                         $upgradeAction = New-ScheduledTaskAction -Execute $bashPath -Argument ('"{0}"' -f $wrapperScript)
                         $upgradeTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1)
+                        $upgradeRestartInterval = New-TimeSpan -Minutes 2
                         $upgradeSettings = New-ScheduledTaskSettingsSet `
                             -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-                            -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero)
+                            -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) `
+                            -RestartCount 5 -RestartInterval $upgradeRestartInterval
                         # The upgrade owns the native llama-server hot-swap. It
                         # must run at the same limited integrity level as the
                         # host agent so later UI model swaps can stop the child.

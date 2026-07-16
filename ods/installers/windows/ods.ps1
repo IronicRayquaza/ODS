@@ -50,6 +50,7 @@ $LibDir = Join-Path $ScriptDir "lib"
 $_resolvedLemonadeExe = Resolve-ODSLemonadeExe
 if ($_resolvedLemonadeExe) { $script:LEMONADE_EXE = $_resolvedLemonadeExe }
 $script:LEMONADE_TASK_NAME = "ODSLemonadeRuntime"
+$script:ODS_MODEL_UPGRADE_TASK_NAME = "ODSModelUpgrade"
 
 # ── Resolve install directory ──
 $InstallDir = $script:ODS_INSTALL_DIR
@@ -1269,6 +1270,75 @@ function Invoke-Status {
     }
 }
 
+function Get-ODSBootstrapStatusData {
+    $statusPath = Join-Path $InstallDir "data\bootstrap-status.json"
+    if (-not (Test-Path -LiteralPath $statusPath)) { return $null }
+    try {
+        return Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json
+    } catch {
+        return $null
+    }
+}
+
+function Test-ODSBootstrapUpgradeStaleActive {
+    param([object]$StatusData)
+
+    if ($null -eq $StatusData) { return $false }
+    $state = ([string]$StatusData.status).ToLowerInvariant()
+    if (@("starting", "downloading", "verifying", "swapping") -notcontains $state) {
+        return $false
+    }
+
+    $updatedRaw = [string]$StatusData.updatedAt
+    if ([string]::IsNullOrWhiteSpace($updatedRaw)) { return $false }
+
+    try {
+        $updatedAt = [DateTimeOffset]::Parse($updatedRaw).ToUniversalTime()
+    } catch {
+        return $false
+    }
+
+    $staleSeconds = 900
+    if ($env:ODS_BOOTSTRAP_UPGRADE_STALE_SECONDS -match '^[0-9]+$') {
+        $staleSeconds = [int]$env:ODS_BOOTSTRAP_UPGRADE_STALE_SECONDS
+    }
+
+    return (([DateTimeOffset]::UtcNow - $updatedAt).TotalSeconds -gt $staleSeconds)
+}
+
+function Invoke-BootstrapUpgradeResume {
+    $statusData = Get-ODSBootstrapStatusData
+    if ($null -eq $statusData) { return }
+
+    $state = ([string]$statusData.status).ToLowerInvariant()
+    $reason = $null
+    if ($state -eq "failed" -or $state -eq "error") {
+        $reason = "previous download failed"
+    } elseif (Test-ODSBootstrapUpgradeStaleActive -StatusData $statusData) {
+        $reason = "stale download appears stopped"
+    } else {
+        return
+    }
+
+    $modelName = [string]$statusData.model
+    if ([string]::IsNullOrWhiteSpace($modelName)) {
+        $modelName = "full model"
+    }
+
+    try {
+        $task = Get-ScheduledTask -TaskName $script:ODS_MODEL_UPGRADE_TASK_NAME -ErrorAction Stop
+        if ($task.State -eq "Running") {
+            Write-AI "  Model Upgrade: retry already running"
+            return
+        }
+        Start-ScheduledTask -TaskName $script:ODS_MODEL_UPGRADE_TASK_NAME -ErrorAction Stop
+        Write-AI "  Model Upgrade: $reason; retrying in background ($modelName)"
+    } catch {
+        Write-AIWarn "Model Upgrade: $reason, but the ODSModelUpgrade scheduled task is unavailable."
+        Write-AI "  Re-run the installer or run scripts\bootstrap-upgrade.sh manually."
+    }
+}
+
 function Invoke-Start {
     param([string]$Service)
     Test-Install
@@ -1325,6 +1395,9 @@ function Invoke-Start {
             if ($hermesInStack) {
                 Invoke-HermesSoulRefresh -SyncContainer
             }
+        }
+        if (-not $Service -or $Service -eq "llama-server") {
+            Invoke-BootstrapUpgradeResume
         }
     } finally {
         Pop-Location
@@ -1439,6 +1512,9 @@ function Invoke-Restart {
             if ($hermesInStack) {
                 Invoke-HermesSoulRefresh -SyncContainer
             }
+        }
+        if (-not $Service -or $Service -eq "llama-server") {
+            Invoke-BootstrapUpgradeResume
         }
     } finally {
         Pop-Location

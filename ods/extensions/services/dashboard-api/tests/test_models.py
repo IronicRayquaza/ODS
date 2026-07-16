@@ -738,6 +738,61 @@ def test_download_model_rejects_while_bootstrap_upgrade_retry_pending(test_clien
     }
 
 
+def test_download_model_rejects_stale_active_bootstrap_upgrade_as_retry_pending(test_client, monkeypatch, tmp_path):
+    models_router, install_dir, data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
+    _write_model_library(install_dir, [
+        {
+            "id": "phi4-mini-q4",
+            "name": "Phi-4 Mini",
+            "gguf_file": "Phi-4-mini-instruct-Q4_K_M.gguf",
+            "gguf_url": "https://example.test/Phi-4-mini-instruct-Q4_K_M.gguf",
+            "size_mb": 2490,
+            "vram_required_gb": 4,
+            "context_length": 128000,
+            "quantization": "Q4_K_M",
+            "specialty": "Balanced",
+            "description": "Compact 128K model.",
+            "tokens_per_sec_estimate": 130,
+            "llm_model_name": "phi-4-mini",
+        },
+    ])
+    monkeypatch.setattr(models_router, "_STALE_ACTIVE_BOOTSTRAP_STATUS_SECONDS", 60)
+    (data_dir / "bootstrap-status.json").write_text(
+        json.dumps({
+            "status": "downloading",
+            "model": "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
+            "updatedAt": "2000-01-01T00:00:00+00:00",
+            "bytesDownloaded": 143274063,
+        }),
+        encoding="utf-8",
+    )
+    (data_dir / "bootstrap-upgrade.args").write_text(
+        "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf\nhttps://example.test/full.gguf\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        models_router,
+        "_call_agent_model",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("stale bootstrap download reached host agent")
+        ),
+    )
+
+    resp = test_client.post(
+        "/api/models/phi4-mini-q4/download",
+        headers=test_client.auth_headers,
+    )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == {
+        "error": "Cannot start model download while bootstrap full-model upgrade is pending retry",
+        "code": "model_lifecycle_busy",
+        "activeOperation": "bootstrap_upgrade_retry_pending",
+        "activeTarget": "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
+        "requestedModelId": "phi4-mini-q4",
+    }
+
+
 def test_api_models_falls_back_to_loaded_model_probe(test_client, monkeypatch, tmp_path):
     models_router, install_dir, _data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
     _write_model_library(install_dir, [{
@@ -1064,6 +1119,36 @@ def test_download_status_prefers_host_agent_normalized_status(test_client, monke
     assert resp.status_code == 200
     assert resp.json()["status"] == "failed"
     assert "not running" in resp.json()["error"]
+
+
+def test_download_status_surfaces_stale_bootstrap_upgrade(test_client, monkeypatch, tmp_path):
+    models_router, _install_dir, data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(models_router, "_get_agent_model_status", lambda: None)
+    monkeypatch.setattr(models_router, "_STALE_ACTIVE_BOOTSTRAP_STATUS_SECONDS", 60)
+    (data_dir / "bootstrap-status.json").write_text(
+        json.dumps({
+            "status": "downloading",
+            "model": "Qwen3.5-9B-Q4_K_M.gguf",
+            "percent": 3.0,
+            "bytesDownloaded": 143274063,
+            "bytesTotal": 0,
+            "speedBytesPerSec": 202069,
+            "updatedAt": "2000-01-01T00:00:00+00:00",
+        }),
+        encoding="utf-8",
+    )
+
+    resp = test_client.get("/api/models/download-status", headers=test_client.auth_headers)
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "failed"
+    assert payload["active"] is False
+    assert payload["isDownloading"] is False
+    assert payload["bootstrapStale"] is True
+    assert payload["model"] == "Qwen3.5-9B-Q4_K_M.gguf"
+    assert payload["bytesDownloaded"] == 143274063
+    assert "appears stalled" in payload["error"]
 
 
 def test_download_status_ignores_stale_terminal_agent_status(test_client, monkeypatch, tmp_path):

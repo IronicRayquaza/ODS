@@ -1277,7 +1277,15 @@ _ods_cli_maybe_resume_bootstrap_upgrade() {
 
     local bs_status
     bs_status=$(grep -o '"status"[[:space:]]*:[[:space:]]*"[^"]*"' "$status_file" | sed -n '1p' | sed 's/.*"status"[[:space:]]*:[[:space:]]*"//' | sed 's/"//' || true)
-    [[ "$bs_status" == "failed" ]] || return 0
+    local retry_reason="previous download failed"
+    if [[ "$bs_status" == "failed" || "$bs_status" == "error" ]]; then
+        retry_reason="previous download failed"
+    elif [[ "$bs_status" == "starting" || "$bs_status" == "downloading" || "$bs_status" == "verifying" || "$bs_status" == "swapping" ]]; then
+        _ods_cli_bootstrap_upgrade_status_is_stale "$status_file" || return 0
+        retry_reason="stale download appears stopped"
+    else
+        return 0
+    fi
 
     if command -v pgrep >/dev/null 2>&1 && pgrep -f "bootstrap-upgrade.sh.*$INSTALL_DIR" >/dev/null 2>&1; then
         log "  Model Upgrade: retry already running"
@@ -1304,8 +1312,31 @@ _ods_cli_maybe_resume_bootstrap_upgrade() {
         "$bootstrap_gguf_file" \
         > "$INSTALL_DIR/logs/model-upgrade.log" 2>&1 &
 
-    log "  Model Upgrade: previous download failed; retrying in background ($full_llm_model)"
+    log "  Model Upgrade: $retry_reason; retrying in background ($full_llm_model)"
     log "  Check progress: tail -f $INSTALL_DIR/logs/model-upgrade.log"
+}
+
+_ods_cli_bootstrap_upgrade_status_is_stale() {
+    local status_file="$1"
+    local stale_seconds="${ODS_BOOTSTRAP_UPGRADE_STALE_SECONDS:-900}"
+    [[ "$stale_seconds" =~ ^[0-9]+$ ]] || stale_seconds=900
+
+    local updated_at
+    updated_at=$(grep -o '"updatedAt"[[:space:]]*:[[:space:]]*"[^"]*"' "$status_file" | sed -n '1p' | sed 's/.*"updatedAt"[[:space:]]*:[[:space:]]*"//' | sed 's/"//' || true)
+    [[ -n "$updated_at" ]] || return 1
+
+    local updated_epoch=""
+    updated_epoch=$(date -u -d "$updated_at" +%s 2>/dev/null || true)
+    if [[ -z "$updated_epoch" ]]; then
+        updated_epoch=$(date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$updated_at" +%s 2>/dev/null || true)
+    fi
+    [[ "$updated_epoch" =~ ^[0-9]+$ ]] || return 1
+
+    local now_epoch
+    now_epoch=$(date -u +%s 2>/dev/null || date +%s)
+    [[ "$now_epoch" =~ ^[0-9]+$ ]] || return 1
+
+    (( now_epoch - updated_epoch > stale_seconds ))
 }
 
 # Refresh data/hermes/SOUL.md from the static template + detected install

@@ -65,6 +65,10 @@ _AGENT_MODEL_STATUS_CACHE_TTL_SECONDS = float(
 _STALE_TERMINAL_DOWNLOAD_STATUS_SECONDS = float(
     os.environ.get("DASHBOARD_STALE_TERMINAL_DOWNLOAD_STATUS_SECONDS", "1800")
 )
+_STALE_ACTIVE_BOOTSTRAP_STATUS_SECONDS = float(
+    os.environ.get("DASHBOARD_STALE_ACTIVE_BOOTSTRAP_STATUS_SECONDS", "900")
+)
+_ACTIVE_BOOTSTRAP_STATUSES = {"starting", "downloading", "verifying", "swapping"}
 _agent_model_status_cache_lock = threading.Lock()
 _agent_model_status_cache_at = 0.0
 _agent_model_status_cache_value: Optional[dict] = None
@@ -428,6 +432,9 @@ def model_download_status(api_key: str = Depends(verify_api_key)):
 
     status_path = Path(DATA_DIR) / "model-download-status.json"
     if not status_path.exists():
+        bootstrap_status = _read_bootstrap_status_file()
+        if _is_stale_active_bootstrap_status(bootstrap_status):
+            return _stale_bootstrap_download_status(bootstrap_status)
         bootstrap_info = get_bootstrap_status()
         if not bootstrap_info.active:
             return {"status": "idle", "active": False, "isDownloading": False}
@@ -490,8 +497,58 @@ def _is_cancelled_download_status(status: Any) -> bool:
     return key in {"cancelled", "canceled"}
 
 
+def _read_bootstrap_status_file() -> Optional[dict[str, Any]]:
+    status_path = Path(DATA_DIR) / "bootstrap-status.json"
+    if not status_path.exists():
+        return None
+    try:
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    return status if isinstance(status, dict) else None
+
+
+def _is_stale_active_bootstrap_status(status: Any) -> bool:
+    if not isinstance(status, dict):
+        return False
+    state = str(status.get("status") or "").casefold()
+    if state not in _ACTIVE_BOOTSTRAP_STATUSES:
+        return False
+    updated_at = _parse_status_updated_at(status.get("updatedAt"))
+    if not updated_at:
+        return False
+    age = (datetime.now(timezone.utc) - updated_at).total_seconds()
+    return age > _STALE_ACTIVE_BOOTSTRAP_STATUS_SECONDS
+
+
+def _stale_bootstrap_download_status(status: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": "failed",
+        "active": False,
+        "isDownloading": False,
+        "bootstrapStale": True,
+        "model": status.get("model"),
+        "percent": status.get("percent"),
+        "bytesDownloaded": status.get("bytesDownloaded", 0),
+        "bytesTotal": status.get("bytesTotal", 0),
+        "speedBytesPerSec": status.get("speedBytesPerSec", 0),
+        "eta": status.get("eta"),
+        "updatedAt": status.get("updatedAt"),
+        "error": "Bootstrap full-model upgrade appears stalled. Run ods restart to resume it.",
+    }
+
+
 def _bootstrap_upgrade_download_conflict() -> dict[str, Any] | None:
     """Return a lifecycle-busy payload when bootstrap upgrade owns download priority."""
+    bootstrap_status = _read_bootstrap_status_file()
+    if _is_stale_active_bootstrap_status(bootstrap_status):
+        return {
+            "error": "Cannot start model download while bootstrap full-model upgrade is pending retry",
+            "code": "model_lifecycle_busy",
+            "activeOperation": "bootstrap_upgrade_retry_pending",
+            "activeTarget": bootstrap_status.get("model") if bootstrap_status else None,
+        }
+
     bootstrap_info = get_bootstrap_status()
     if bootstrap_info.active:
         return {
@@ -501,18 +558,12 @@ def _bootstrap_upgrade_download_conflict() -> dict[str, Any] | None:
             "activeTarget": bootstrap_info.model_name,
         }
 
-    status_path = Path(DATA_DIR) / "bootstrap-status.json"
     args_path = Path(DATA_DIR) / "bootstrap-upgrade.args"
-    if not status_path.exists() or not args_path.exists():
+    if bootstrap_status is None or not args_path.exists():
         return None
 
-    try:
-        status = json.loads(status_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
-
-    state = str(status.get("status") or "").casefold()
-    model_name = str(status.get("model") or "").strip()
+    state = str(bootstrap_status.get("status") or "").casefold()
+    model_name = str(bootstrap_status.get("model") or "").strip()
     if state not in {"failed", "error"} or not model_name:
         return None
     if "\x00" in model_name or "/" in model_name or "\\" in model_name or Path(model_name).name != model_name:

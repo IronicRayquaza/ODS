@@ -106,6 +106,12 @@ if grep -q 'write_status "downloading" "" 0 0 0 "Another bootstrap model upgrade
 fi
 grep -q 'write_existing_upgrade_status "$existing_pid"' "$TARGET" \
     || fail "duplicate bootstrap-upgrade path must reconstruct active download progress"
+grep -q '_ods_cli_bootstrap_upgrade_status_is_stale' "$ROOT_DIR/ods-cli" \
+    || fail "ods-cli must detect stale active bootstrap upgrades"
+grep -q 'stale download appears stopped' "$ROOT_DIR/ods-cli" \
+    || fail "ods-cli must retry stale active bootstrap upgrades without marking live downloads failed"
+grep -q 'ODS_BOOTSTRAP_UPGRADE_STALE_SECONDS' "$ROOT_DIR/ods-cli" \
+    || fail "ods-cli stale bootstrap retry window must be operator-configurable"
 
 locked_install_dir="$tmp/install-lock-held"
 mkdir -p "$locked_install_dir/data/models" "$locked_install_dir/config/llama-server" "$locked_install_dir/bin" "$tmp/locks"

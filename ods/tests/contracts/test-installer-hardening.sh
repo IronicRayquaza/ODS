@@ -357,6 +357,8 @@ for needle in (
     "-DontStopIfGoingOnBatteries",
     "-StartWhenAvailable",
     "-ExecutionTimeLimit ([TimeSpan]::Zero)",
+    "$upgradeRestartInterval = New-TimeSpan -Minutes 2",
+    "-RestartCount 5 -RestartInterval $upgradeRestartInterval",
     "Register-ScheduledTask -TaskName $upgradeTaskName",
     "-Settings $upgradeSettings",
     "Start-ScheduledTask -TaskName $upgradeTaskName",
@@ -414,6 +416,10 @@ assert_not_contains "installers/windows/ods.ps1" 'serve --port .*--no-tray .*--l
 assert_contains "installers/windows/ods.ps1" 'Sync-ODSNativeInferenceConfig' "ods.ps1 should sync native runtime config from .env"
 assert_contains "installers/windows/ods.ps1" 'AMD_INFERENCE_PORT' "ods.ps1 should honor configured AMD Lemonade port"
 assert_contains "installers/windows/ods.ps1" 'LEMONADE_HEALTH_URL = "http://127\.0\.0\.1:\$\(\$script:LEMONADE_PORT\)/api/v1/health"' "ods.ps1 should health-check the configured Lemonade port over numeric loopback"
+assert_contains "installers/windows/ods.ps1" 'ODS_MODEL_UPGRADE_TASK_NAME = "ODSModelUpgrade"' "ods.ps1 should know the supervised full-model upgrade task name"
+assert_contains "installers/windows/ods.ps1" 'function Test-ODSBootstrapUpgradeStaleActive' "ods.ps1 should detect stale active bootstrap upgrades"
+assert_contains "installers/windows/ods.ps1" 'Start-ScheduledTask -TaskName \$script:ODS_MODEL_UPGRADE_TASK_NAME' "ods.ps1 should resume the supervised full-model upgrade task"
+assert_contains "installers/windows/ods.ps1" 'Invoke-BootstrapUpgradeResume' "ods.ps1 start/restart should attempt bootstrap upgrade recovery"
 
 echo "[contract] Windows Lemonade dashboard activation uses native runtime health"
 host_agent="bin/ods-host-agent.py"

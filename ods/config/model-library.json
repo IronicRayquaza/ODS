@@ -102,6 +102,75 @@
       "tokens_per_sec_estimate": 190,
       "llm_model_name": "qwen2.5-0.5b-instruct",
       "llama_server_image": null,
+      "app_compatibility": {
+        "agent_viability": {
+          "status": "not_agent_viable",
+          "reason": "Fleet model-UI run 2026-07-16T16-05Z on windows-laptop loaded this model successfully, but ODS Talk did not return the requested verification phrase and asked for clarification instead; keep it out of agent-required release coverage until revalidated.",
+          "evidence": "dream-fleet-test/runs/2026-07-16T16-05-53Z-release-affected-product-f22eb7f-harness-c991431-windows-laptop/model-ui/cycle-003/windows-laptop"
+        },
+        "hermes_talk": {
+          "status": "unsupported_until_revalidated",
+          "reason": "Fleet model-UI run 2026-07-16T16-05Z on windows-laptop loaded this model successfully, but ODS Talk did not return the requested verification phrase and asked for clarification instead; keep it out of ODS Talk release coverage until revalidated.",
+          "evidence": "dream-fleet-test/runs/2026-07-16T16-05-53Z-release-affected-product-f22eb7f-harness-c991431-windows-laptop/model-ui/cycle-003/windows-laptop"
+        }
+      },
+      "install_recommendation": false
+    },
+    {
+      "id": "granite3.3-2b-instruct-q4",
+      "name": "Granite 3.3 2B Instruct",
+      "family": "granite",
+      "gguf_file": "granite-3.3-2b-instruct-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/unsloth/granite-3.3-2b-instruct-GGUF/resolve/main/granite-3.3-2b-instruct-Q4_K_M.gguf",
+      "gguf_sha256": "8ec7f401c35853115d1d94cd7c350f4405f7468589759958eea54bd430c30963",
+      "size_bytes": 1545303296,
+      "size_mb": 1545,
+      "vram_required_gb": 3,
+      "context_length": 131072,
+      "quantization": "Q4_K_M",
+      "specialty": "Chat",
+      "description": "IBM's compact Granite instruct model with 131K context. Candidate low-VRAM agent model pending fleet validation.",
+      "tokens_per_sec_estimate": 145,
+      "llm_model_name": "granite-3.3-2b-instruct",
+      "llama_server_image": null,
+      "install_recommendation": false
+    },
+    {
+      "id": "smollm3-3b-q4",
+      "name": "SmolLM3 3B",
+      "family": "smollm",
+      "gguf_file": "SmolLM3-3B-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/unsloth/SmolLM3-3B-GGUF/resolve/main/SmolLM3-3B-Q4_K_M.gguf",
+      "gguf_sha256": "4de907d2d388a5508fb7cb443a06effe14cce3518b0a78d3bdd9e74d9edce989",
+      "size_bytes": 1915306528,
+      "size_mb": 1915,
+      "vram_required_gb": 4,
+      "context_length": 128000,
+      "quantization": "Q4_K_M",
+      "specialty": "Chat",
+      "description": "Hugging Face's small multilingual long-context instruct model. Candidate low-VRAM agent model pending fleet validation.",
+      "tokens_per_sec_estimate": 125,
+      "llm_model_name": "smollm3-3b",
+      "llama_server_image": null,
+      "install_recommendation": false
+    },
+    {
+      "id": "llama3.2-1b-instruct-q4",
+      "name": "Llama 3.2 1B Instruct",
+      "family": "llama",
+      "gguf_file": "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+      "gguf_sha256": "3f5a22426976ab26cfe84dba63c1d08391717abb1af893e10f1b2968d862dcc1",
+      "size_bytes": 807694368,
+      "size_mb": 808,
+      "vram_required_gb": 2,
+      "context_length": 131072,
+      "quantization": "Q4_K_M",
+      "specialty": "Fast",
+      "description": "Meta's smallest Llama 3.2 instruct model with 131K context. Candidate low-VRAM agent model pending fleet validation.",
+      "tokens_per_sec_estimate": 170,
+      "llm_model_name": "llama-3.2-1b-instruct",
+      "llama_server_image": null,
       "install_recommendation": false
     },
     {

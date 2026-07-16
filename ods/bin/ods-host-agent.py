@@ -706,6 +706,18 @@ def _upsert_env_value(env_path: Path, key: str, value: str) -> None:
     env_path.write_text("\n".join(output) + "\n", encoding="utf-8")
 
 
+def _write_activation_config_file(path: Path, content: str) -> None:
+    """Write an install-owned config file, repairing directory/file confusion."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and path.is_dir():
+        shutil.rmtree(path)
+    tmp = path.with_name(f".{path.name}.tmp")
+    if tmp.exists() and tmp.is_dir():
+        shutil.rmtree(tmp)
+    tmp.write_text(content, encoding="utf-8")
+    os.replace(str(tmp), str(path))
+
+
 def _normalize_ods_mode(value) -> str:
     """Return a supported ODS mode or ``unknown`` for missing/invalid input."""
     mode = str(value or "").strip().lower()
@@ -4577,7 +4589,7 @@ class AgentHandler(BaseHTTPRequestHandler):
             if env_backup is not None:
                 env_path.write_text(env_backup, encoding="utf-8")
             if ini_backup is not None:
-                models_ini.write_text(ini_backup, encoding="utf-8")
+                _write_activation_config_file(models_ini, ini_backup)
             if lemonade_existed is True:
                 lemonade_yaml.write_text(lemonade_backup, encoding="utf-8")
             elif lemonade_existed is False:
@@ -4751,7 +4763,7 @@ class AgentHandler(BaseHTTPRequestHandler):
 
             # Save rollback snapshot
             env_backup = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
-            ini_backup = models_ini.read_text(encoding="utf-8") if models_ini.exists() else ""
+            ini_backup = models_ini.read_text(encoding="utf-8") if models_ini.is_file() else ""
             lemonade_existed = lemonade_yaml.exists()
             lemonade_backup = (
                 lemonade_yaml.read_text(encoding="utf-8")
@@ -4838,13 +4850,12 @@ class AgentHandler(BaseHTTPRequestHandler):
                 env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
 
             # Update models.ini
-            models_ini.parent.mkdir(parents=True, exist_ok=True)
-            models_ini.write_text(
+            _write_activation_config_file(
+                models_ini,
                 f"[{llm_model_name}]\n"
                 f"filename = {gguf_file}\n"
                 f"load-on-startup = true\n"
                 f"n-ctx = {context_length}\n",
-                encoding="utf-8",
             )
 
             # Restart llama-server with the new model.

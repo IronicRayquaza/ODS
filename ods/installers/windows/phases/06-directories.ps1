@@ -90,6 +90,7 @@ $_expectedRegularFiles = @(
     ".env",
     ".env.example",
     ".env.schema.json",
+    "config\llama-server\models.ini",
     "config\litellm\local.yaml",
     "config\litellm\lemonade.yaml",
     "data\.extensions-lock",

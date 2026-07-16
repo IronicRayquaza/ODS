@@ -2670,6 +2670,35 @@ class TestModelActivateRollback:
         assert '  default: "new-model.gguf"' in hermes_template.read_text(encoding="utf-8")
         assert ["docker", "restart", "ods-hermes"] in calls
 
+    def test_activation_repairs_malformed_models_ini_directory(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir, _env_path, _env_text, models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        models_ini.unlink()
+        models_ini.mkdir()
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
+        monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
+        monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
+
+        def fake_run(cmd, **_kwargs):
+            stdout = _llama_identity_response("new-model.gguf") if cmd and cmd[0] == "curl" else ""
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 200
+        assert models_ini.is_file()
+        text = models_ini.read_text(encoding="utf-8")
+        assert "[new-model]" in text
+        assert "filename = new-model.gguf" in text
+
     def test_activation_applies_matching_runtime_profile_flags(self, tmp_path, monkeypatch):
         install_dir, env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
             _write_model_activation_fixture(tmp_path)

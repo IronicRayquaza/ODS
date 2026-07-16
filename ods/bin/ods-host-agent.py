@@ -6785,6 +6785,72 @@ def _update_perplexica_model(
         raise RuntimeError("Perplexica did not persist the active model route")
 
 
+def _perplexica_restored_snapshot_matches(verified: dict, expected: dict) -> bool:
+    """Return True when Perplexica's restored route still matches the snapshot."""
+    if all(verified.get(key) == expected.get(key) for key in ("modelProviders", "preferences")):
+        return True
+
+    preferences = expected.get("preferences")
+    providers = expected.get("modelProviders")
+    verified_preferences = verified.get("preferences")
+    verified_providers = verified.get("modelProviders")
+    if (
+        not isinstance(preferences, dict)
+        or not isinstance(providers, list)
+        or not isinstance(verified_preferences, dict)
+        or not isinstance(verified_providers, list)
+    ):
+        return False
+
+    expected_model = preferences.get("defaultChatModel")
+    expected_provider_id = preferences.get("defaultChatProvider")
+    if not expected_model or not expected_provider_id:
+        return False
+    if (
+        verified_preferences.get("defaultChatModel") != expected_model
+        or verified_preferences.get("defaultChatProvider") != expected_provider_id
+    ):
+        return False
+
+    expected_provider = next(
+        (
+            entry
+            for entry in providers
+            if isinstance(entry, dict)
+            and (
+                entry.get("id") == expected_provider_id
+                or (entry.get("type") == "openai" and entry.get("id") == expected_provider_id)
+            )
+        ),
+        None,
+    )
+    verified_provider = next(
+        (
+            entry
+            for entry in verified_providers
+            if isinstance(entry, dict) and entry.get("id") == expected_provider_id
+        ),
+        None,
+    )
+    if not isinstance(expected_provider, dict) or not isinstance(verified_provider, dict):
+        return False
+
+    expected_config = expected_provider.get("config") if isinstance(expected_provider.get("config"), dict) else {}
+    verified_config = verified_provider.get("config") if isinstance(verified_provider.get("config"), dict) else {}
+    for key in ("baseURL", "apiKey"):
+        if expected_config.get(key) != verified_config.get(key):
+            return False
+
+    verified_chat_models = verified_provider.get("chatModels")
+    if not isinstance(verified_chat_models, list):
+        return False
+    return any(
+        isinstance(entry, dict)
+        and (entry.get("key") == expected_model or entry.get("name") == expected_model)
+        for entry in verified_chat_models
+    )
+
+
 def _restore_perplexica_config(snapshot: dict) -> None:
     """Restore the Perplexica routing keys captured before model activation."""
     url = str(snapshot["url"])
@@ -6796,10 +6862,7 @@ def _restore_perplexica_config(snapshot: dict) -> None:
             raise RuntimeError(f"Perplexica rollback snapshot is missing {key}")
         _post_perplexica_config(url, key, values[key])
     verified = _perplexica_http_json(url).get("values")
-    if not isinstance(verified, dict) or any(
-        verified.get(key) != values[key]
-        for key in ("modelProviders", "preferences")
-    ):
+    if not isinstance(verified, dict) or not _perplexica_restored_snapshot_matches(verified, values):
         raise RuntimeError("Perplexica rollback could not be verified")
 
 

@@ -264,6 +264,40 @@ test('blocks explicit Talk-incompatible models even when context is high', () =>
   expect(deleteButton).toBeEnabled()
 })
 
+test('blocks direct-chat-incompatible models before Run', () => {
+  const loadModel = vi.fn()
+  const deleteModel = vi.fn()
+  const reason = 'Fleet validation could not load this model into the local chat runtime.'
+  useModelsMock.mockReturnValue(baseState({
+    loadModel,
+    deleteModel,
+    models: [model({
+      name: 'Phi-3.5 Mini',
+      status: 'downloaded',
+      contextLength: 128000,
+      appCompatibility: {
+        openaiChat: {
+          status: 'unsupported_until_revalidated',
+          reason,
+        },
+      },
+    })],
+  }))
+
+  renderModels()
+
+  const runButton = screen.getByRole('button', { name: /chat unsupported/i })
+  expect(runButton).toBeDisabled()
+  expect(runButton).toHaveAttribute('title', reason)
+  fireEvent.click(runButton)
+  expect(loadModel).not.toHaveBeenCalled()
+  expect(screen.getByText('Unavailable')).toBeInTheDocument()
+  expect(screen.getByText('Chat blocked')).toBeInTheDocument()
+
+  const deleteButton = screen.getByRole('button', { name: /delete phi-3\.5 mini$/i })
+  expect(deleteButton).toBeEnabled()
+})
+
 test('keeps Download available in cloud mode', () => {
   const downloadModel = vi.fn()
   useModelsMock.mockReturnValue(baseState({

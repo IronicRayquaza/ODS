@@ -786,9 +786,11 @@ function PrimaryAction({
   if (isDownloaded) {
     const runDisabled = Boolean(runDisabledReason)
     const contextBlocked = isAgentContextDisabledReason(runDisabledReason)
+    const directChatBlocked = isOpenAiChatBlocked(getOpenAiChatCompatibility(model))
     const compatibilityBlocked = isAgentViabilityBlocked(getAgentViabilityCompatibility(model))
     const buttonLabel = contextBlocked
       ? `Needs ${formatContext(hermesMinimumContext)}`
+      : directChatBlocked ? 'Chat Unsupported'
       : compatibilityBlocked ? 'Not Agent Ready' : 'Run'
     return (
       <span className="inline-flex" title={runDisabledReason || `Run ${model.name}`}>
@@ -803,7 +805,7 @@ function PrimaryAction({
               : 'cursor-not-allowed border border-white/[0.08] bg-black/20 text-theme-text-muted'
           }`}
         >
-          {contextBlocked || compatibilityBlocked ? <AlertCircle size={13} /> : <Play size={13} />}
+          {contextBlocked || directChatBlocked || compatibilityBlocked ? <AlertCircle size={13} /> : <Play size={13} />}
           {buttonLabel}
         </button>
       </span>
@@ -1059,6 +1061,10 @@ function getRunDisabledReason({
   if (minimumContext > 0 && contextLength > 0 && contextLength < minimumContext) {
     return `Hermes Agent requires at least ${formatContext(minimumContext)} context; this model has ${formatContext(contextLength)}.`
   }
+  const openAiChat = getOpenAiChatCompatibility(model)
+  if (isOpenAiChatBlocked(openAiChat)) {
+    return openAiChat.reason || 'This model is not currently validated for direct local chat.'
+  }
   const agentViability = getAgentViabilityCompatibility(model)
   if (isAgentViabilityBlocked(agentViability)) {
     return agentViability.reason || 'This model is not currently viable for ODS agent workflows.'
@@ -1293,6 +1299,14 @@ function getCompatibilityMeta(model, memory) {
       tone: nearLimit ? 'amber' : 'red',
     }
   }
+  const openAiChat = getOpenAiChatCompatibility(model)
+  if (isOpenAiChatBlocked(openAiChat)) {
+    return {
+      label: 'Unavailable',
+      detail: 'Chat blocked',
+      tone: 'red',
+    }
+  }
   const agentViability = getAgentViabilityCompatibility(model)
   if (isAgentViabilityBlocked(agentViability)) {
     return {
@@ -1316,8 +1330,17 @@ function getHermesTalkCompatibility(model) {
   return model?.appCompatibility?.hermesTalk || null
 }
 
+function getOpenAiChatCompatibility(model) {
+  return model?.appCompatibility?.openaiChat || null
+}
+
 function getAgentViabilityCompatibility(model) {
   return model?.appCompatibility?.agentViability || getHermesTalkCompatibility(model)
+}
+
+function isOpenAiChatBlocked(compatibility) {
+  const status = String(compatibility?.status || '').toLowerCase()
+  return BLOCKING_MODEL_COMPATIBILITY_STATUSES.includes(status)
 }
 
 function isAgentViabilityBlocked(compatibility) {

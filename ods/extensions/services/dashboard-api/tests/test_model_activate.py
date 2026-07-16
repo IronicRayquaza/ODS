@@ -614,6 +614,32 @@ class TestPerplexicaModelRoute:
 
         assert current == snapshot["values"]
 
+    def test_restore_accepts_perplexica_normalized_snapshot(self, monkeypatch):
+        snapshot = self._snapshot()
+        current = {
+            "modelProviders": [],
+            "preferences": {"defaultChatModel": "wrong"},
+        }
+
+        def fake_http(_url, payload=None):
+            if payload is None:
+                restored = json.loads(json.dumps(current))
+                restored["preferences"]["theme"] = "system"
+                restored["modelProviders"][0]["config"]["label"] = "OpenAI"
+                restored["modelProviders"][0]["chatModels"].append({
+                    "key": "extra-model",
+                    "name": "extra-model",
+                })
+                return {"values": restored}
+            current[payload["key"]] = json.loads(json.dumps(payload["value"]))
+            return {}
+
+        monkeypatch.setattr(_mod, "_perplexica_http_json", fake_http)
+
+        _mod._restore_perplexica_config(snapshot)
+
+        assert current == snapshot["values"]
+
 
 class TestDownstreamRouteVerification:
 

@@ -158,14 +158,15 @@ def test_qwen25_3b_replaces_llama31_in_low_vram_agent_viable_pool():
     assert _agent_viable_for_release(replacement)
 
 
-def test_granite33_2b_is_low_vram_agent_viable_candidate():
+def test_granite33_2b_is_not_agent_viable_until_revalidated():
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     by_id = {model["id"]: model for model in catalog["models"]}
+    compatibility = by_id["granite3.3-2b-instruct-q4"]["app_compatibility"]
 
-    replacement = by_id["granite3.3-2b-instruct-q4"]
-    assert replacement["vram_required_gb"] <= 4
-    assert replacement["context_length"] >= HERMES_CONTEXT_FLOOR
-    assert _agent_viable_for_release(replacement)
+    assert compatibility["agent_viability"]["status"] == "not_agent_viable"
+    assert "windows-laptop" in compatibility["agent_viability"]["evidence"]
+    assert compatibility["hermes_talk"]["status"] == "unsupported_until_revalidated"
+    assert not _agent_viable_for_release(by_id["granite3.3-2b-instruct-q4"])
 
 
 def test_smollm3_3b_is_low_vram_agent_viable_candidate():

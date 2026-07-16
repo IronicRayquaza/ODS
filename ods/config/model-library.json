@@ -133,6 +133,18 @@
       "tokens_per_sec_estimate": 145,
       "llm_model_name": "granite-3.3-2b-instruct",
       "llama_server_image": null,
+      "app_compatibility": {
+        "agent_viability": {
+          "status": "not_agent_viable",
+          "reason": "Fleet model-UI run 2026-07-16T18-10Z on windows-laptop loaded this model successfully and the runtime reported granite3.3-2b-instruct-q4, but ODS Talk returned a Hermes websocket closed error and then fetch failed during the streamed verification prompt; keep it out of agent-required release coverage until revalidated.",
+          "evidence": "dream-fleet-test/runs/2026-07-16T18-10-30Z-release-affected-product-bc4f77d-harness-7630b69-windows-laptop/model-ui/cycle-003/windows-laptop"
+        },
+        "hermes_talk": {
+          "status": "unsupported_until_revalidated",
+          "reason": "Fleet model-UI run 2026-07-16T18-10Z on windows-laptop loaded this model successfully and the runtime reported granite3.3-2b-instruct-q4, but ODS Talk returned a Hermes websocket closed error and then fetch failed during the streamed verification prompt; keep it out of ODS Talk release coverage until revalidated.",
+          "evidence": "dream-fleet-test/runs/2026-07-16T18-10-30Z-release-affected-product-bc4f77d-harness-7630b69-windows-laptop/model-ui/cycle-003/windows-laptop"
+        }
+      },
       "install_recommendation": false
     },
     {

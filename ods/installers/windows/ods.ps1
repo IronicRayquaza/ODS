@@ -1298,7 +1298,7 @@ function Test-ODSBootstrapUpgradeStaleActive {
         return $false
     }
 
-    $staleSeconds = 900
+    $staleSeconds = 120
     if ($env:ODS_BOOTSTRAP_UPGRADE_STALE_SECONDS -match '^[0-9]+$') {
         $staleSeconds = [int]$env:ODS_BOOTSTRAP_UPGRADE_STALE_SECONDS
     }

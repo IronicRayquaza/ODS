@@ -419,6 +419,7 @@ assert_contains "installers/windows/ods.ps1" 'LEMONADE_HEALTH_URL = "http://127\
 assert_contains "installers/windows/ods.ps1" 'ODS_MODEL_UPGRADE_TASK_NAME = "ODSModelUpgrade"' "ods.ps1 should know the supervised full-model upgrade task name"
 assert_contains "installers/windows/ods.ps1" 'function Test-ODSBootstrapUpgradeStaleActive' "ods.ps1 should detect stale active bootstrap upgrades"
 assert_contains "installers/windows/ods.ps1" 'Start-ScheduledTask -TaskName \$script:ODS_MODEL_UPGRADE_TASK_NAME' "ods.ps1 should resume the supervised full-model upgrade task"
+assert_contains "installers/windows/ods.ps1" '\$staleSeconds = 120' "ods.ps1 should retry stale full-model upgrades during the release lifecycle window"
 assert_contains "installers/windows/ods.ps1" 'Invoke-BootstrapUpgradeResume' "ods.ps1 start/restart should attempt bootstrap upgrade recovery"
 
 echo "[contract] Windows Lemonade dashboard activation uses native runtime health"

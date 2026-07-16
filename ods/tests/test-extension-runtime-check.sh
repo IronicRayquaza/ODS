@@ -66,8 +66,10 @@ fi
 if docker info >/dev/null 2>&1; then
     if echo "$out" | grep -qE '\[OK\]|\[BAD\]|\[INFO\]'; then
         pass "docker available — check lines present"
+    elif echo "$out" | grep -q "nothing to check"; then
+        pass "docker available but no services registered — script exits cleanly"
     else
-        skip "docker up but no OK/BAD/INFO lines (minimal stack is OK)"
+        fail "docker available but output contained no expected status lines"
     fi
 else
     if echo "$out" | grep -qi docker; then

@@ -210,6 +210,25 @@
       "install_recommendation": false
     },
     {
+      "id": "granite4.0-h-tiny-q4",
+      "name": "Granite 4.0 H-Tiny",
+      "family": "granite",
+      "gguf_file": "granite-4.0-h-tiny-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/ibm-granite/granite-4.0-h-tiny-GGUF/resolve/main/granite-4.0-h-tiny-Q4_K_M.gguf",
+      "gguf_sha256": "5a38b08c441ae1adbafb1d2b8a7167e0d48734d83af68b268cefea1eec553dcd",
+      "size_bytes": 4230976352,
+      "size_mb": 4231,
+      "vram_required_gb": 8,
+      "context_length": 131072,
+      "quantization": "Q4_K_M",
+      "specialty": "Chat",
+      "description": "IBM's larger Granite 4 hybrid instruction model with long-context support. A higher-capacity 8GB-class candidate for agent and chat validation.",
+      "tokens_per_sec_estimate": 80,
+      "llm_model_name": "granite-4.0-h-tiny",
+      "llama_server_image": null,
+      "install_recommendation": false
+    },
+    {
       "id": "smollm3-3b-q4",
       "name": "SmolLM3 3B",
       "family": "smollm",
@@ -264,6 +283,18 @@
       "tokens_per_sec_estimate": 120,
       "llm_model_name": "ministral-3b-instruct",
       "llama_server_image": null,
+      "app_compatibility": {
+        "agent_viability": {
+          "status": "not_agent_viable",
+          "reason": "Fleet model-UI run 2026-07-17T00-45Z on windows-laptop loaded this model successfully, but ODS Talk returned malformed repetitive output instead of the requested verification phrase; keep it out of agent-required release coverage until revalidated.",
+          "evidence": "dream-fleet-test/runs/2026-07-17T00-45-33Z/model-ui/cycle-005/windows-laptop"
+        },
+        "hermes_talk": {
+          "status": "unsupported_until_revalidated",
+          "reason": "Fleet model-UI run 2026-07-17T00-45Z on windows-laptop loaded this model successfully, but ODS Talk returned malformed repetitive output instead of the requested verification phrase; keep it out of ODS Talk release coverage until revalidated.",
+          "evidence": "dream-fleet-test/runs/2026-07-17T00-45-33Z/model-ui/cycle-005/windows-laptop"
+        }
+      },
       "install_recommendation": false
     },
     {

@@ -43,6 +43,19 @@ def _official_model_catalog():
     return json.loads(catalog_path.read_text(encoding="utf-8"))["models"]
 
 
+def _compatibility_blocks_release_coverage(entry):
+    status = str((entry or {}).get("status") or "").strip().lower()
+    return status in {
+        "blocked",
+        "incompatible",
+        "not_agent_viable",
+        "not_recommended",
+        "not_supported",
+        "unsupported",
+        "unsupported_until_revalidated",
+    }
+
+
 def test_current_model_matches_complete_phi_aliases_and_runtime_prefixes():
     catalog = {model["id"]: model for model in _official_model_catalog()}
     mini = catalog["phi4-mini-q4"]
@@ -203,6 +216,44 @@ def test_model_payload_projects_explicit_app_compatibility(data_dir, tmp_path):
     assert compatibility["agentViability"]["evidence"] == "fleet-run/example"
     assert compatibility["hermesTalk"]["status"] == "unsupported_until_revalidated"
     assert compatibility["hermesTalk"]["reason"] == "Talk proof failed"
+
+
+def test_real_catalog_has_six_windows_8gb_release_swap_candidates(data_dir, tmp_path):
+    install_dir = tmp_path / "ods"
+    (install_dir / "data" / "models").mkdir(parents=True)
+    catalog = _official_model_catalog()
+
+    payload = build_models_payload(
+        _gpu(total_mb=8188),
+        "qwen3.5-9b",
+        0,
+        install_dir,
+        data_dir,
+        catalog=catalog,
+        evidence=[],
+    )
+
+    candidates = [
+        model for model in payload["models"]
+        if model["id"] != "qwen3.5-9b-q4"
+        and model["status"] in {"available", "downloaded"}
+        and model["fitsVram"] is not False
+        and model["contextLength"] >= 64000
+        and not _compatibility_blocks_release_coverage(model["appCompatibility"]["openaiChat"])
+        and not _compatibility_blocks_release_coverage(model["appCompatibility"]["agentViability"])
+        and not _compatibility_blocks_release_coverage(model["appCompatibility"]["hermesTalk"])
+    ]
+    candidate_ids = {model["id"] for model in candidates}
+
+    assert len(candidates) >= 6
+    assert {
+        "phi4-mini-q4",
+        "phi4-mini-reasoning-q4",
+        "smollm3-3b-q4",
+        "gemma3-4b-it-q4",
+        "ministral-3b-instruct-q4",
+        "qwen2.5-3b-instruct-q4",
+    }.issubset(candidate_ids)
 
 
 def test_installer_recommended_model_survives_bootstrap_env(data_dir, tmp_path):

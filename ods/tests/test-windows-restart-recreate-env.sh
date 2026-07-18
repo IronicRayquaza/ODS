@@ -46,6 +46,13 @@ else
     fail "all-service restart must discover running services and avoid disabled compose services"
 fi
 
+if grep -qF -- 'docker compose force-recreate returned' <<<"$restart_block" &&
+   grep -qF -- '$retryArgs = @("up", "-d", "--no-build", "--pull", "never") + $restartTargets' <<<"$restart_block"; then
+    pass "all-service restart retries start after partial force-recreate failure"
+else
+    fail "all-service restart must recover from partial force-recreate failures"
+fi
+
 if grep -qF -- '-ComposeArgs @("restart"' <<<"$restart_block"; then
     fail "Invoke-Restart must not use docker compose restart because it preserves stale container env"
 else

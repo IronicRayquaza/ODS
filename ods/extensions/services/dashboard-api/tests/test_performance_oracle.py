@@ -345,13 +345,13 @@ def test_real_catalog_has_six_windows_8gb_release_swap_candidates(data_dir, tmp_
     catalog = _official_model_catalog()
 
     payload = build_models_payload(
-        _gpu(total_mb=8188),
+        _gpu(name="NVIDIA GeForce RTX 5070 Laptop GPU", total_mb=8188),
         "qwen3.5-9b",
         0,
         install_dir,
         data_dir,
         catalog=catalog,
-        evidence=[],
+        evidence=load_evidence(),
     )
 
     candidates = [
@@ -368,13 +368,14 @@ def test_real_catalog_has_six_windows_8gb_release_swap_candidates(data_dir, tmp_
 
     assert len(candidates) >= 6
     assert {
-        "phi4-mini-q4",
         "granite4.0-h-micro-q4",
         "granite4.0-h-tiny-q4",
         "gemma3-4b-it-q4",
         "qwen2.5-3b-instruct-q4",
         "qwen3-4b-q4",
+        "qwen3-1.7b-q4",
     }.issubset(candidate_ids)
+    assert "phi4-mini-q4" not in candidate_ids
     assert "smollm3-3b-q4" not in candidate_ids
 
 

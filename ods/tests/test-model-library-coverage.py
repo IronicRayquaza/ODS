@@ -83,6 +83,7 @@ def test_release_model_switchboard_catalog_ids_exist():
         "llama3.2-3b-instruct-q4",
         "qwen2.5-3b-instruct-q4",
         "qwen3-4b-q4",
+        "qwen3-1.7b-q4",
         "qwen2.5-coder-3b-128k-q4",
         "qwen2.5-7b-instruct-q4",
         "llama3.1-8b-instruct-q4",
@@ -218,6 +219,18 @@ def test_qwen3_4b_is_low_vram_agent_viable_candidate():
     assert _agent_viable_for_release(replacement)
 
 
+def test_qwen3_17b_is_low_vram_agent_viable_candidate():
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    by_id = {model["id"]: model for model in catalog["models"]}
+
+    replacement = by_id["qwen3-1.7b-q4"]
+    assert replacement["vram_required_gb"] <= 3
+    assert replacement["context_length"] >= HERMES_CONTEXT_FLOOR
+    assert replacement["gguf_sha256"] == "d2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5"
+    assert replacement["gguf_url"].startswith("https://huggingface.co/ggml-org/Qwen3-1.7B-GGUF/")
+    assert _agent_viable_for_release(replacement)
+
+
 def test_qwen25_coder_3b_is_not_agent_viable_until_revalidated():
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     by_id = {model["id"]: model for model in catalog["models"]}
@@ -258,6 +271,7 @@ def test_new_switchboard_models_do_not_change_install_recommendations():
         "llama3.2-3b-instruct-q4",
         "qwen2.5-3b-instruct-q4",
         "qwen3-4b-q4",
+        "qwen3-1.7b-q4",
         "qwen2.5-coder-3b-128k-q4",
         "qwen2.5-7b-instruct-q4",
         "llama3.1-8b-instruct-q4",

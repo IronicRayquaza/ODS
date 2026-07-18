@@ -409,6 +409,24 @@
       "install_recommendation": false
     },
     {
+      "id": "qwen3-1.7b-q4",
+      "name": "Qwen3 1.7B",
+      "family": "qwen",
+      "gguf_file": "Qwen3-1.7B-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/ggml-org/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_K_M.gguf",
+      "gguf_sha256": "d2387ca2dbfee2ffabce7120d3770dadca0b293052bc2f0e138fdc940d9bc7b5",
+      "size_mb": 1282,
+      "vram_required_gb": 3,
+      "context_length": 131072,
+      "quantization": "Q4_K_M",
+      "specialty": "Fast",
+      "description": "Qwen3's compact 1.7B chat model in Q4_K_M quantization. A very small Qwen-family candidate for low-VRAM app and agent validation.",
+      "tokens_per_sec_estimate": 145,
+      "llm_model_name": "qwen3-1.7b",
+      "llama_server_image": null,
+      "install_recommendation": false
+    },
+    {
       "id": "qwen2.5-coder-3b-128k-q4",
       "name": "Qwen 2.5 Coder 3B 128K",
       "family": "qwen",

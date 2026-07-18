@@ -47,13 +47,21 @@ run_doctor() {
 }
 
 subid_status() {
+    # Prints: <status> <rootless_docker> <hint_count> <hint_kind>
+    # hint_kind: fixed-range | non-overlapping | none — the fail hint may
+    # suggest the standard 100000-165535 block, but the warn hint must ask
+    # for a non-overlapping extension because a small allocation (e.g.
+    # 100000:1000) can already occupy part of that fixed block.
     python3 -c '
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as f:
     report = json.load(f)
 check = report["runtime"]["rootless_subid_check"]
-hints = [h for h in report.get("autofix_hints", []) if "subordinate" in h]
-print(check["status"], report["runtime"]["rootless_docker"], len(hints))
+hints = [h for h in report.get("autofix_hints", []) if "subordinate" in h.lower()]
+kind = "none"
+if hints:
+    kind = "fixed-range" if "100000-165535" in hints[0] else "non-overlapping"
+print(check["status"], report["runtime"]["rootless_docker"], len(hints), kind)
 ' "$1"
 }
 
@@ -63,7 +71,7 @@ printf 'someone-else:100000:65536\n' >"$TMP_DIR/subuid-missing"
 printf '%s:100000:1000\n' "$CURRENT_USER" >"$TMP_DIR/subuid-small"
 
 if run_doctor "$TMP_DIR/subuid-ok" "$TMP_DIR/subgid-ok" "$TMP_DIR/report-ok.json"; then
-    read -r status rootless hints <<<"$(subid_status "$TMP_DIR/report-ok.json")"
+    read -r status rootless hints _ <<<"$(subid_status "$TMP_DIR/report-ok.json")"
     [[ "$status" == "pass" ]] && pass "full 65536 range reports pass" || fail "expected pass, got $status"
     [[ "$rootless" == "True" ]] && pass "report marks the daemon rootless" || fail "rootless_docker not True"
     [[ "$hints" == "0" ]] && pass "no subordinate-ID fix hint on pass" || fail "unexpected fix hint on pass"
@@ -73,17 +81,21 @@ else
 fi
 
 if run_doctor "$TMP_DIR/subuid-missing" "$TMP_DIR/subgid-ok" "$TMP_DIR/report-missing.json"; then
-    read -r status _ hints <<<"$(subid_status "$TMP_DIR/report-missing.json")"
+    read -r status _ hints kind <<<"$(subid_status "$TMP_DIR/report-missing.json")"
     [[ "$status" == "fail" ]] && pass "missing user entry reports fail" || fail "expected fail, got $status"
     [[ "$hints" == "1" ]] && pass "missing entry surfaces the usermod fix hint" || fail "fix hint missing on fail"
+    [[ "$kind" == "fixed-range" ]] && pass "missing entry hint suggests the standard 100000-165535 range" \
+        || fail "missing entry hint should carry the exact usermod command (got $kind)"
 else
     fail "doctor did not produce a report for the missing-entry fixture"
 fi
 
 if run_doctor "$TMP_DIR/subuid-small" "$TMP_DIR/subgid-ok" "$TMP_DIR/report-small.json"; then
-    read -r status _ hints <<<"$(subid_status "$TMP_DIR/report-small.json")"
+    read -r status _ hints kind <<<"$(subid_status "$TMP_DIR/report-small.json")"
     [[ "$status" == "warn" ]] && pass "sub-65536 range reports warn" || fail "expected warn, got $status"
-    [[ "$hints" == "1" ]] && pass "small range surfaces the usermod fix hint" || fail "fix hint missing on warn"
+    [[ "$hints" == "1" ]] && pass "small range surfaces a fix hint" || fail "fix hint missing on warn"
+    [[ "$kind" == "non-overlapping" ]] && pass "small range hint asks for a non-overlapping extension" \
+        || fail "small range hint must not reuse the fixed 100000-165535 range (got $kind)"
 else
     fail "doctor did not produce a report for the small-range fixture"
 fi

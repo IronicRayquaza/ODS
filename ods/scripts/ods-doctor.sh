@@ -1382,13 +1382,27 @@ if runtime["docker_daemon"] and not runtime["webui_http"]:
 
 # Rootless daemon without (enough) subordinate IDs: images fail to extract
 # with "uid/gid map out of range" long after doctor reports healthy Docker.
+# Two hints: the fixed 100000-165535 range is only safe to suggest when the
+# user has NO allocation; with an existing-but-small range that command
+# could overlap what is already allocated, so ask for a non-overlapping
+# extension instead.
 _rootless_subid = report["runtime"]["rootless_subid_check"]
-if _rootless_subid["status"] in {"warn", "fail"}:
+if _rootless_subid["status"] == "fail":
     fix_hints.append(
-        "Rootless Docker: subordinate ID ranges for "
-        f"{_rootless_subid['user']} are missing or below 65536 "
+        "Rootless Docker: no subordinate ID allocation for "
+        f"{_rootless_subid['user']} "
         f"(subuids={_rootless_subid['subuid_total']}, subgids={_rootless_subid['subgid_total']}). "
         f"Run: sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 {_rootless_subid['user']} "
+        "then restart the rootless Docker daemon (systemctl --user restart docker)."
+    )
+elif _rootless_subid["status"] == "warn":
+    fix_hints.append(
+        "Rootless Docker: subordinate ID allocation for "
+        f"{_rootless_subid['user']} is below 65536 "
+        f"(subuids={_rootless_subid['subuid_total']}, subgids={_rootless_subid['subgid_total']}). "
+        "Extend it to at least 65536 IDs with a range that does not overlap "
+        "existing entries in /etc/subuid and /etc/subgid "
+        f"(sudo usermod --add-subuids <start>-<start+65535> --add-subgids <start>-<start+65535> {_rootless_subid['user']}), "
         "then restart the rootless Docker daemon (systemctl --user restart docker)."
     )
 

@@ -4578,6 +4578,7 @@ class AgentHandler(BaseHTTPRequestHandler):
         hermes_live_snapshot: dict | None = None
         hermes_backups: dict[Path, str] = {}
         perplexica_snapshot: dict | None = None
+        opencode_snapshot: dict | None = None
         committed = False
         rollback_attempted = False
         runtime_restart_strategy: str | None = None
@@ -4608,6 +4609,8 @@ class AgentHandler(BaseHTTPRequestHandler):
                 )
             elif hermes_live_snapshot is not None:
                 _remove_hermes_live_config(hermes_live_config)
+            if opencode_snapshot is not None:
+                _restore_opencode_config(opencode_snapshot)
 
         def restore_previous_runtime():
             rollback_env = load_env(env_path)
@@ -4649,6 +4652,8 @@ class AgentHandler(BaseHTTPRequestHandler):
                 openclaw_recreated = _recreate_openclaw_if_present()
                 if perplexica_snapshot is not None:
                     _restore_perplexica_config(perplexica_snapshot)
+                if opencode_snapshot is not None:
+                    _restart_opencode_if_present()
                 previous_gguf = str(rollback_env.get("GGUF_FILE") or "")
                 previous_model = str(
                     rollback_env.get("LLM_MODEL")
@@ -4784,6 +4789,7 @@ class AgentHandler(BaseHTTPRequestHandler):
             except FileNotFoundError:
                 pass
             perplexica_snapshot = _capture_perplexica_config(env_pre)
+            opencode_snapshot = _capture_opencode_config(env_pre)
 
             # Update .env
             if env_path.exists():
@@ -5028,6 +5034,15 @@ class AgentHandler(BaseHTTPRequestHandler):
                         gguf_file=gguf_file,
                         lemonade_model_id=lemonade_model_id,
                     )
+                if opencode_snapshot is not None:
+                    _update_opencode_config(
+                        env,
+                        opencode_snapshot,
+                        model_name=llm_model_name,
+                        context_length=int(context_length),
+                    )
+                    _restart_opencode_if_present()
+                _restart_existing_container("ods-webui")
                 if litellm_restarted:
                     _verify_litellm_route(env)
                 if openclaw_recreated:
@@ -6632,6 +6647,268 @@ def _restart_existing_container(container: str) -> bool:
             f"docker restart {container} failed (exit {result.returncode}): {detail[:300]}"
         )
     return True
+
+
+def _opencode_config_dir(env: dict) -> Path:
+    configured = (
+        env.get("OPENCODE_CONFIG_DIR")
+        or os.environ.get("OPENCODE_CONFIG_DIR")
+        or "~/.config/opencode"
+    )
+    return Path(os.path.expandvars(os.path.expanduser(str(configured)))).resolve()
+
+
+def _opencode_config_dir_explicit(env: dict) -> bool:
+    return bool(env.get("OPENCODE_CONFIG_DIR") or os.environ.get("OPENCODE_CONFIG_DIR"))
+
+
+def _opencode_binary_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    if platform.system() == "Windows":
+        candidates.append(Path.home() / ".opencode" / "bin" / "opencode.exe")
+    else:
+        candidates.append(Path.home() / ".opencode" / "bin" / "opencode")
+    discovered = shutil.which("opencode")
+    if discovered:
+        candidates.append(Path(discovered))
+    return candidates
+
+
+def _opencode_available(config_dir: Path, *, explicit_config_dir: bool = False) -> bool:
+    if config_dir.exists():
+        return True
+    if explicit_config_dir:
+        return False
+    return any(candidate.is_file() for candidate in _opencode_binary_candidates())
+
+
+def _capture_opencode_config(env: dict) -> dict | None:
+    """Snapshot OpenCode's mutable route config if OpenCode is installed."""
+    config_dir = _opencode_config_dir(env)
+    paths = [config_dir / "opencode.json", config_dir / "config.json"]
+    explicit_config_dir = _opencode_config_dir_explicit(env)
+    if (
+        not _opencode_available(config_dir, explicit_config_dir=explicit_config_dir)
+        and not any(path.exists() for path in paths)
+    ):
+        return None
+    files = []
+    for path in paths:
+        exists = path.exists()
+        files.append({
+            "path": str(path),
+            "exists": exists,
+            "text": path.read_text(encoding="utf-8") if exists else "",
+        })
+    return {"config_dir": str(config_dir), "files": files}
+
+
+def _opencode_route(env: dict) -> tuple[str, str]:
+    """Return host-visible OpenCode base URL and API key for the active LLM."""
+    mode = str(env.get("ODS_MODE") or env.get("LLM_BACKEND") or "").strip().lower()
+    if mode == "lemonade" or _is_windows_host_lemonade(env):
+        port = str(env.get("LITELLM_PORT") or "4000")
+        api_key = str(
+            env.get("LITELLM_KEY")
+            or env.get("LITELLM_MASTER_KEY")
+            or env.get("LITELLM_LEMONADE_API_KEY")
+            or "no-key"
+        )
+        return f"http://127.0.0.1:{port}/v1", api_key
+
+    port = str(
+        env.get("ODS_NATIVE_LLAMA_PORT")
+        or env.get("OLLAMA_PORT")
+        or env.get("AMD_INFERENCE_PORT")
+        or "8080"
+    )
+    return f"http://127.0.0.1:{port}/v1", "no-key"
+
+
+def _load_json_file(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, ValueError):
+        value = {}
+    return value if isinstance(value, dict) else {}
+
+
+def _write_json_file_atomic(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    if platform.system() != "Windows":
+        tmp.chmod(0o600)
+    tmp.replace(path)
+
+
+def _update_opencode_config(
+    env: dict,
+    snapshot: dict,
+    *,
+    model_name: str,
+    context_length: int,
+) -> None:
+    """Point OpenCode at the just-activated model and verify both config names."""
+    config_dir = Path(str(snapshot["config_dir"]))
+    primary = config_dir / "opencode.json"
+    compat = config_dir / "config.json"
+    existing = next((Path(item["path"]) for item in snapshot.get("files", []) if item.get("exists")), primary)
+    data = _load_json_file(existing)
+    base_url, api_key = _opencode_route(env)
+    model_key = str(model_name or "").strip()
+    if not model_key:
+        raise RuntimeError("OpenCode model route has an empty model name")
+    context = max(int(context_length or 0), 1)
+    output = min(32768, context) if context > 0 else 32768
+
+    provider_id = "llama-server"
+    providers = data.setdefault("provider", {})
+    if not isinstance(providers, dict):
+        providers = {}
+        data["provider"] = providers
+    provider = providers.setdefault(provider_id, {})
+    if not isinstance(provider, dict):
+        provider = {}
+        providers[provider_id] = provider
+    provider.update({
+        "npm": "@ai-sdk/openai-compatible",
+        "name": "ODS inference",
+        "options": {"baseURL": base_url, "apiKey": api_key},
+    })
+    models = provider.setdefault("models", {})
+    if not isinstance(models, dict):
+        models = {}
+        provider["models"] = models
+    models[model_key] = {
+        "name": model_key,
+        "limit": {"context": context, "output": output},
+    }
+    data["model"] = f"{provider_id}/{model_key}"
+    data["small_model"] = f"{provider_id}/{model_key}"
+    data.setdefault("$schema", "https://opencode.ai/config.json")
+
+    for path in (primary, compat):
+        _write_json_file_atomic(path, data)
+        check = _load_json_file(path)
+        check_provider = (check.get("provider") or {}).get(provider_id) or {}
+        if check.get("model") != f"{provider_id}/{model_key}":
+            raise RuntimeError(f"OpenCode config verification failed for {path}")
+        if check_provider.get("options") != {"baseURL": base_url, "apiKey": api_key}:
+            raise RuntimeError(f"OpenCode route verification failed for {path}")
+
+
+def _restore_opencode_config(snapshot: dict) -> None:
+    for item in snapshot.get("files", []):
+        raw_path = str(item.get("path") or "")
+        if not raw_path:
+            continue
+        path = Path(raw_path)
+        if item.get("exists"):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(str(item.get("text") or ""), encoding="utf-8")
+            if platform.system() != "Windows":
+                path.chmod(0o600)
+        else:
+            path.unlink(missing_ok=True)
+
+
+def _opencode_url(env: dict) -> str:
+    port = str(env.get("OPENCODE_PORT") or "3003").strip()
+    if not port.isdigit() or not 1 <= int(port) <= 65535:
+        port = "3003"
+    return f"http://127.0.0.1:{port}/config"
+
+
+def _opencode_http_reachable(env: dict) -> bool:
+    try:
+        with urllib_request.urlopen(_opencode_url(env), timeout=2) as response:
+            return 200 <= int(response.status) < 500
+    except Exception:
+        return False
+
+
+def _restart_windows_opencode(env: dict) -> bool:
+    exe = Path.home() / ".opencode" / "bin" / "opencode.exe"
+    if not exe.exists():
+        return False
+    port = str(env.get("OPENCODE_PORT") or "3003")
+    script = r"""
+$ErrorActionPreference = "Stop"
+$exe = [Environment]::ExpandEnvironmentVariables('%USERPROFILE%\.opencode\bin\opencode.exe')
+$workDir = [Environment]::ExpandEnvironmentVariables('%USERPROFILE%\.opencode')
+$port = $env:ODS_OPENCODE_PORT
+$targets = Get-CimInstance Win32_Process -Filter "Name = 'opencode.exe'" -ErrorAction SilentlyContinue |
+  Where-Object { $_.CommandLine -match '(?i)\b(serve|web)\b' -and $_.CommandLine -match ('(?i)--port\s+' + [regex]::Escape($port)) }
+foreach ($target in @($targets)) {
+  Stop-Process -Id $target.ProcessId -Force -ErrorAction SilentlyContinue
+}
+if (Test-Path $exe) {
+  Start-Process -FilePath $exe -ArgumentList @('serve','--port',$port,'--hostname','127.0.0.1') -WorkingDirectory $workDir -WindowStyle Hidden
+  Write-Output 'restarted'
+}
+"""
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={**os.environ, "ODS_OPENCODE_PORT": port},
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(f"OpenCode restart failed (exit {result.returncode}): {detail[:300]}")
+    return "restarted" in result.stdout
+
+
+def _restart_opencode_if_present() -> bool:
+    """Restart OpenCode's host UI when installed so it rereads the model config."""
+    env = load_env(INSTALL_DIR / ".env")
+    active = _opencode_http_reachable(env)
+    system_name = platform.system()
+    if system_name == "Windows":
+        restarted = _restart_windows_opencode(env)
+        if active and not restarted:
+            raise RuntimeError("OpenCode is reachable but its Windows runtime could not be restarted")
+        return restarted
+    if system_name == "Darwin":
+        label = str(env.get("OPENCODE_PLIST_LABEL") or "com.ods.opencode-web")
+        target = f"gui/{os.getuid()}/{label}"
+        result = subprocess.run(
+            ["launchctl", "kickstart", "-k", target],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            return True
+        if active:
+            detail = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(f"OpenCode launchd restart failed: {detail[:300]}")
+        return False
+
+    if system_name == "Linux":
+        systemctl = shutil.which("systemctl")
+        if not systemctl:
+            if active:
+                raise RuntimeError("OpenCode is reachable but systemctl is unavailable for restart")
+            return False
+        restart_env = os.environ.copy()
+        restart_env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+        result = subprocess.run(
+            [systemctl, "--user", "restart", "opencode-web.service"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=restart_env,
+        )
+        if result.returncode == 0:
+            return True
+        detail = (result.stderr or result.stdout or "").strip()
+        if active:
+            raise RuntimeError(f"OpenCode systemd restart failed: {detail[:300]}")
+        logger.info("Skipping OpenCode restart; user service is not active: %s", detail[:300])
+    return False
 
 
 def _perplexica_config_url(env: dict) -> str:

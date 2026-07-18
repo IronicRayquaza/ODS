@@ -35,6 +35,11 @@ _restart_windows_native_llama_server = _mod._restart_windows_native_llama_server
 _write_windows_native_litellm_config = _mod._write_windows_native_litellm_config
 
 
+@pytest.fixture(autouse=True)
+def _isolate_opencode_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(tmp_path / "opencode-config"))
+
+
 def test_host_agent_backlog_handles_dashboard_poll_bursts():
     assert _mod.ThreadedHTTPServer.request_queue_size >= 64
 
@@ -1472,6 +1477,7 @@ def _write_model_activation_fixture(
         "LLM_MODEL=old-model\n"
         "CTX_SIZE=2048\n"
         "OLLAMA_PORT=8080\n"
+        f"OPENCODE_CONFIG_DIR={install_dir / 'config' / 'opencode'}\n"
     )
     if lemonade_api_key:
         env_text += f"LITELLM_LEMONADE_API_KEY={lemonade_api_key}\n"
@@ -2979,6 +2985,7 @@ class TestModelActivateRollback:
             "dependent:ods-hermes",
             "hermes-route:new-model.gguf",
             "hermes-dashboard-ready",
+            "dependent:ods-webui",
             "litellm-route",
         ]
 
@@ -3034,6 +3041,7 @@ class TestModelActivateRollback:
             "dependent:ods-hermes",
             "hermes-route:new-model.gguf",
             "hermes-dashboard-ready",
+            "dependent:ods-webui",
         ]
 
     def test_activation_succeeds_without_optional_dependents(self, tmp_path, monkeypatch):
@@ -3116,6 +3124,89 @@ class TestModelActivateRollback:
             "lemonade_model_id": "",
         }
         assert updates[0][0]["GGUF_FILE"] == "new-model.gguf"
+
+    def test_activation_refreshes_openwebui_and_opencode_after_model_readiness(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir, _env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        opencode_dir = install_dir / "config" / "opencode"
+        opencode_dir.mkdir(parents=True)
+        old_config = {
+            "$schema": "https://opencode.ai/config.json",
+            "model": "llama-server/old-model",
+            "provider": {
+                "llama-server": {
+                    "options": {"baseURL": "http://127.0.0.1:8080/v1", "apiKey": "no-key"},
+                    "models": {"old-model": {"name": "old-model"}},
+                }
+            },
+        }
+        (opencode_dir / "opencode.json").write_text(json.dumps(old_config), encoding="utf-8")
+        events = []
+
+        def restart_container(container):
+            events.append(f"container:{container}")
+            return container == "ods-webui"
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: events.append("runtime"))
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(_mod, "_capture_perplexica_config", lambda _env: None)
+        monkeypatch.setattr(_mod, "_restart_existing_container", restart_container)
+        monkeypatch.setattr(_mod, "_restart_opencode_if_present", lambda: events.append("opencode") or True)
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 200
+        assert "opencode" in events
+        assert "container:ods-webui" in events
+        for name in ("opencode.json", "config.json"):
+            config = json.loads((opencode_dir / name).read_text(encoding="utf-8"))
+            provider = config["provider"]["llama-server"]
+            assert config["model"] == "llama-server/new-model"
+            assert config["small_model"] == "llama-server/new-model"
+            assert provider["options"] == {"baseURL": "http://127.0.0.1:8080/v1", "apiKey": "no-key"}
+            assert provider["models"]["new-model"]["limit"]["context"] == 4096
+
+    def test_openwebui_refresh_failure_restores_opencode_config(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir, _env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        opencode_dir = install_dir / "config" / "opencode"
+        opencode_dir.mkdir(parents=True)
+        old_text = json.dumps({
+            "$schema": "https://opencode.ai/config.json",
+            "model": "llama-server/old-model",
+            "provider": {"llama-server": {"models": {"old-model": {"name": "old-model"}}}},
+        })
+        (opencode_dir / "opencode.json").write_text(old_text, encoding="utf-8")
+
+        def restart_container(container):
+            if container == "ods-webui":
+                raise RuntimeError("simulated Open WebUI refresh failure")
+            return False
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(_mod, "_capture_perplexica_config", lambda _env: None)
+        monkeypatch.setattr(_mod, "_restart_existing_container", restart_container)
+        monkeypatch.setattr(_mod, "_restart_opencode_if_present", lambda: True)
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 500
+        response = handler.parse_response()
+        assert response["rolled_back"] is True
+        assert "Open WebUI refresh failure" in response["error"]
+        assert (opencode_dir / "opencode.json").read_text(encoding="utf-8") == old_text
+        assert not (opencode_dir / "config.json").exists()
 
     def test_perplexica_update_failure_restores_snapshot_during_rollback(
         self, tmp_path, monkeypatch,

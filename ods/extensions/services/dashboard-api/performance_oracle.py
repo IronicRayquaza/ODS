@@ -223,10 +223,10 @@ def _app_compatibility_entry(raw: Any, default_label: str) -> dict[str, Any]:
     return payload
 
 
-def _local_performance_agent_block(performance: Optional[dict[str, Any]]) -> dict[str, Any] | None:
+def _exact_performance_agent_block(performance: Optional[dict[str, Any]]) -> dict[str, Any] | None:
     if not isinstance(performance, dict):
         return None
-    if performance.get("source") != "measured_local":
+    if performance.get("source") not in {"measured_local", "published_exact"}:
         return None
     try:
         tokens_per_sec = float(performance.get("tokensPerSec") or 0)
@@ -256,17 +256,17 @@ def model_app_compatibility(
         "hermesTalk": hermes_talk,
         "agentViability": _agent_viability_entry(raw.get("agent_viability"), hermes_talk),
     }
-    local_speed_block = _local_performance_agent_block(performance)
-    if local_speed_block:
+    exact_speed_block = _exact_performance_agent_block(performance)
+    if exact_speed_block:
         compatibility["hermesTalk"] = {
             "status": "unsupported_until_revalidated",
             "label": "Too slow for ODS Talk",
-            "reason": local_speed_block["reason"],
+            "reason": exact_speed_block["reason"],
         }
         compatibility["agentViability"] = {
             "status": "not_agent_viable",
             "label": "Too slow for agents",
-            "reason": local_speed_block["reason"],
+            "reason": exact_speed_block["reason"],
         }
     return compatibility
 

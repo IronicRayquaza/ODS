@@ -262,6 +262,49 @@ def test_measured_local_too_slow_blocks_agent_compatibility(data_dir, tmp_path):
     assert "0.5 tok/s" in compatibility["agentViability"]["reason"]
 
 
+def test_published_exact_too_slow_blocks_agent_compatibility(data_dir, tmp_path):
+    install_dir = tmp_path / "ods"
+    (install_dir / "data" / "models").mkdir(parents=True)
+    model = {
+        "id": "phi4-mini-q4",
+        "name": "Phi-4 Mini",
+        "gguf_file": "Phi-4-mini-instruct-Q4_K_M.gguf",
+        "size_mb": 2490,
+        "vram_required_gb": 4,
+        "context_length": 128000,
+        "quantization": "Q4_K_M",
+        "specialty": "Balanced",
+        "description": "Compact 128K model.",
+        "llm_model_name": "phi-4-mini",
+    }
+    evidence = [{
+        "model_id": "phi4-mini-q4",
+        "model_names": ["phi-4-mini", "Phi-4-mini-instruct-Q4_K_M.gguf"],
+        "quantization": "Q4_K_M",
+        "backend": "nvidia",
+        "gpu_name": "NVIDIA GeForce RTX 4060",
+        "vram_gb": 8,
+        "context_length": 128000,
+        "runtime": "llama-server",
+        "tokens_per_second": 0.5,
+    }]
+
+    payload = build_models_payload(
+        _gpu(),
+        None,
+        0,
+        install_dir,
+        data_dir,
+        catalog=[model],
+        evidence=evidence,
+    )
+
+    compatibility = payload["models"][0]["appCompatibility"]
+    assert payload["models"][0]["performance"]["source"] == "published_exact"
+    assert compatibility["hermesTalk"]["status"] == "unsupported_until_revalidated"
+    assert compatibility["agentViability"]["status"] == "not_agent_viable"
+
+
 def test_real_catalog_has_six_windows_8gb_release_swap_candidates(data_dir, tmp_path):
     install_dir = tmp_path / "ods"
     (install_dir / "data" / "models").mkdir(parents=True)

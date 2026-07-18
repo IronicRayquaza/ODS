@@ -35,7 +35,8 @@ usage() {
     echo "  SESSIONS_DIR   Sessions directory (default: \$OPENCLAW_DIR/agents/main/sessions)"
     echo "  MAX_SIZE       Max session file size in bytes (default: 256000)"
     echo ""
-    echo "Exit: 0 (always; missing paths are skipped with a log message)."
+    echo "Exit: 0 on success or when paths are missing (skipped with a log message);"
+    echo "      1 when no usable Python is found (refused before touching any session)."
 }
 
 case "${1:-}" in

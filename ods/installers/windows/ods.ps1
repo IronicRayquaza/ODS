@@ -1480,7 +1480,7 @@ function Invoke-Restart {
                 Invoke-HermesSoulRefresh
             }
             $composeExit = Invoke-ODSDockerCompose -InstallDir $InstallDir -ComposeFlags $flags `
-                -ComposeArgs @("up", "-d", "--force-recreate", $Service)
+                -ComposeArgs @("up", "-d", "--force-recreate", "--no-build", "--pull", "never", $Service)
             if ($composeExit -ne 0) {
                 Write-AIError "docker compose up --force-recreate failed (exit code: $composeExit)"
                 Write-ODSComposeDiagnostics -InstallDir $InstallDir -ComposeFlags $flags `
@@ -1502,7 +1502,7 @@ function Invoke-Restart {
             }
             Write-AI "Restarting all services..."
             $composeExit = Invoke-ODSDockerCompose -InstallDir $InstallDir -ComposeFlags $flags `
-                -ComposeArgs @("up", "-d", "--force-recreate")
+                -ComposeArgs @("up", "-d", "--force-recreate", "--no-build", "--pull", "never")
             if ($composeExit -ne 0) {
                 Write-AIError "docker compose up --force-recreate failed (exit code: $composeExit)"
                 Write-ODSComposeDiagnostics -InstallDir $InstallDir -ComposeFlags $flags -Phase "ods.ps1 restart (all)"

@@ -23,16 +23,16 @@ restart_block="$(awk '
     && pass "Invoke-Restart block extracted" \
     || fail "Invoke-Restart block missing"
 
-if grep -qF -- '-ComposeArgs @("up", "-d", "--force-recreate", $Service)' <<<"$restart_block"; then
+if grep -qF -- '-ComposeArgs @("up", "-d", "--force-recreate", "--no-build", "--pull", "never", $Service)' <<<"$restart_block"; then
     pass "single-service restart recreates the selected container with current .env"
 else
-    fail "single-service restart must use docker compose up -d --force-recreate <service>"
+    fail "single-service restart must use guarded docker compose up -d --force-recreate <service>"
 fi
 
-if grep -qF -- '-ComposeArgs @("up", "-d", "--force-recreate")' <<<"$restart_block"; then
+if grep -qF -- '-ComposeArgs @("up", "-d", "--force-recreate", "--no-build", "--pull", "never")' <<<"$restart_block"; then
     pass "all-service restart recreates containers with current .env"
 else
-    fail "all-service restart must use docker compose up -d --force-recreate"
+    fail "all-service restart must use guarded docker compose up -d --force-recreate"
 fi
 
 if grep -qF -- '-ComposeArgs @("restart"' <<<"$restart_block"; then
@@ -45,6 +45,19 @@ if grep -qF 'docker compose up --force-recreate failed' <<<"$restart_block"; the
     pass "restart failure message names the recreate command"
 else
     fail "restart failure message should name docker compose up --force-recreate"
+fi
+
+compose_helper="$(awk '
+    /function Initialize-ODSComposeDockerClientConfig/ { in_block=1 }
+    in_block { print }
+    in_block && /function Get-ODSComposeEnvValue/ { exit }
+' "$ROOT_DIR/installers/windows/lib/compose-diagnostics.ps1")"
+
+if grep -qF 'docker-client-public' <<<"$compose_helper" &&
+   grep -qF '& docker @dockerClientArgs compose @ComposeFlags @ComposeArgs' <<<"$compose_helper"; then
+    pass "Windows CLI compose helper uses install-scoped Docker client config"
+else
+    fail "Windows CLI compose helper must avoid Docker Desktop credential-helper state"
 fi
 
 echo

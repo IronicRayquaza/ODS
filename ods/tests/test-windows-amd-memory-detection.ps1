@@ -1,0 +1,62 @@
+$ErrorActionPreference = "Stop"
+
+$root = Split-Path -Parent $PSScriptRoot
+$detectionPath = Join-Path $root "installers\windows\lib\detection.ps1"
+. $detectionPath
+
+function Assert-Equal {
+    param($Actual, $Expected, [string]$Label)
+    if ($Actual -ne $Expected) {
+        throw "$Label expected '$Expected', got '$Actual'"
+    }
+}
+
+Assert-Equal (Test-WindowsAmdDiscreteGpuName "AMD Radeon RX 9070 XT") $true "RX discrete classification"
+Assert-Equal (Test-WindowsAmdDiscreteGpuName "AMD Radeon PRO W7900") $true "Radeon PRO classification"
+Assert-Equal (Test-WindowsAmdDiscreteGpuName "AMD Radeon 8060S Graphics") $false "Strix integrated classification"
+
+$hybridAdapters = @(
+    [pscustomobject]@{ Name = "AMD Radeon(TM) Graphics" },
+    [pscustomobject]@{ Name = "AMD Radeon RX 9070 XT" }
+)
+Assert-Equal (Select-WindowsAmdPrimaryGpu -Gpus $hybridAdapters).Name `
+    "AMD Radeon RX 9070 XT" "Hybrid adapter selection"
+
+Assert-Equal (Test-WindowsAmdUnifiedMemory `
+    -GpuName "AMD Radeon RX 9070 XT" -ProcessorNames "AMD Ryzen 9 9950X" `
+    -AdapterRamMB 4095 -SystemRamGB 64) $false "RX 9070 XT must not use system RAM"
+
+Assert-Equal (Test-WindowsAmdUnifiedMemory `
+    -GpuName "AMD Radeon 8060S Graphics" -ProcessorNames "AMD Ryzen AI MAX+ 395" `
+    -AdapterRamMB 2048 -SystemRamGB 128) $true "Strix Halo unified classification"
+
+Assert-Equal (Test-WindowsAmdUnifiedMemory `
+    -GpuName "AMD Radeon 780M Graphics" -ProcessorNames "AMD Ryzen 7 7840U" `
+    -AdapterRamMB 2048 -SystemRamGB 32) $true "Integrated Radeon classification"
+
+$expectedName = "AMD Radeon RX 9070 XT"
+$registryValue = [uint64]17095983104
+function Get-ChildItem {
+    param($LiteralPath, $ErrorAction)
+    return @([pscustomobject]@{ PSPath = "mock:\\video\\0001" })
+}
+function Get-ItemProperty {
+    param($LiteralPath, $ErrorAction)
+    return [pscustomobject]@{
+        DriverDesc = $expectedName
+        'HardwareInformation.qwMemorySize' = $registryValue
+    }
+}
+
+$registryVram = Get-WindowsAmdDedicatedVramMB `
+    -GpuName $expectedName `
+    -AdapterRamBytes ([uint64]4293918720)
+Assert-Equal $registryVram 16304 "64-bit registry VRAM"
+
+$registryValue = [BitConverter]::GetBytes([uint64]17095983104)
+$registryByteVram = Get-WindowsAmdDedicatedVramMB `
+    -GpuName $expectedName `
+    -AdapterRamBytes ([uint64]4293918720)
+Assert-Equal $registryByteVram 16304 "Byte-array registry VRAM"
+
+Write-Host "[PASS] Windows AMD discrete and unified memory detection"

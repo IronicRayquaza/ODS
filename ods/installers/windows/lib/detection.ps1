@@ -12,6 +12,82 @@
 #   Strix Halo detection: small dedicated VRAM + large system RAM = unified memory.
 # ============================================================================
 
+function Test-WindowsAmdDiscreteGpuName {
+    param([string]$GpuName)
+
+    return [bool]($GpuName -match '(?i)\bRadeon\s+(?:RX|PRO(?:\s+W)?|VII)\b|\bFirePro\b')
+}
+
+function Select-WindowsAmdPrimaryGpu {
+    param([object[]]$Gpus)
+
+    if (-not $Gpus -or $Gpus.Count -eq 0) { return $null }
+    $discrete = @($Gpus | Where-Object {
+        Test-WindowsAmdDiscreteGpuName -GpuName ([string]$_.Name)
+    } | Select-Object -First 1)
+    if ($discrete.Count -gt 0) { return $discrete[0] }
+    return $Gpus[0]
+}
+
+function Get-WindowsAmdDedicatedVramMB {
+    <#
+    .SYNOPSIS
+        Resolve dedicated VRAM without Win32_VideoController's 32-bit cap.
+    #>
+    param(
+        [string]$GpuName,
+        [uint64]$AdapterRamBytes = 0
+    )
+
+    $bestBytes = $AdapterRamBytes
+    $videoClass = 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}'
+    try {
+        foreach ($key in @(Get-ChildItem -LiteralPath $videoClass -ErrorAction SilentlyContinue)) {
+            $properties = Get-ItemProperty -LiteralPath $key.PSPath -ErrorAction SilentlyContinue
+            if (-not $properties -or [string]$properties.DriverDesc -ne $GpuName) { continue }
+
+            $rawValue = $properties.'HardwareInformation.qwMemorySize'
+            $registryBytes = [uint64]0
+            if ($rawValue -is [byte[]] -and $rawValue.Length -ge 8) {
+                $registryBytes = [BitConverter]::ToUInt64($rawValue, 0)
+            } elseif ($null -ne $rawValue) {
+                try { $registryBytes = [uint64]$rawValue } catch { $registryBytes = 0 }
+            }
+
+            if ($registryBytes -gt $bestBytes) { $bestBytes = $registryBytes }
+        }
+    } catch {
+        # Registry metadata is optional; retain the WMI fallback.
+    }
+
+    return [math]::Floor($bestBytes / 1048576)
+}
+
+function Test-WindowsAmdUnifiedMemory {
+    param(
+        [string]$GpuName,
+        [string]$ProcessorNames,
+        [int]$AdapterRamMB,
+        [int]$SystemRamGB
+    )
+
+    if (Test-WindowsAmdDiscreteGpuName -GpuName $GpuName) { return $false }
+
+    $hasStrixSignature = (
+        $GpuName -match '(?i)Strix|AI\s*(?:MAX|300|395)|Radeon\s+80[56]0S' -or
+        $ProcessorNames -match '(?i)Ryzen\s+AI\s+MAX|Strix\s+Halo'
+    )
+    $hasIntegratedSignature = (
+        $GpuName -match '(?i)Radeon(?:\(TM\))?\s+Graphics$|Radeon\s+(?:\d{3,4}[MS]|Vega(?:\s+\d+)?)\b'
+    )
+
+    return [bool](
+        $AdapterRamMB -le 4096 -and
+        $SystemRamGB -ge 32 -and
+        ($hasStrixSignature -or $hasIntegratedSignature)
+    )
+}
+
 function Get-GpuInfo {
     <#
     .SYNOPSIS
@@ -70,19 +146,28 @@ function Get-GpuInfo {
             Where-Object { $_.Name -match "AMD|Radeon" }
 
         if ($gpus) {
-            $primary = @($gpus)[0]
+            $gpuList = @($gpus)
+            # Hybrid systems often enumerate the integrated adapter first.
+            # Prefer an explicitly discrete Radeon when one is present.
+            $primary = Select-WindowsAmdPrimaryGpu -Gpus $gpuList
             $gpuName = $primary.Name
             $deviceId = $primary.PNPDeviceID
 
             # WMI AdapterRAM is a 32-bit field (maxes at 4 GB for discrete GPUs)
             # For APUs with unified memory, this is typically small (512MB–2GB)
-            $adapterRamMB = 0
-            if ($primary.AdapterRAM) {
-                $adapterRamMB = [math]::Floor([uint64]$primary.AdapterRAM / 1048576)
-            }
+            $adapterRamBytes = $(if ($primary.AdapterRAM) { [uint64]$primary.AdapterRAM } else { [uint64]0 })
+            $adapterRamMB = Get-WindowsAmdDedicatedVramMB `
+                -GpuName ([string]$gpuName) `
+                -AdapterRamBytes $adapterRamBytes
 
             # System RAM for unified memory calculation
             $systemRamGB = [math]::Floor((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1073741824)
+
+            $processorNames = ""
+            try {
+                $processorNames = (@(Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue) |
+                    ForEach-Object { [string]$_.Name }) -join " | "
+            } catch { }
 
             # Strix Halo detection heuristic:
             #   - Small AdapterRAM (WMI caps at 4GB) + large system RAM (>= 64GB) = unified memory APU
@@ -90,16 +175,13 @@ function Get-GpuInfo {
             $isUnified = $false
             $effectiveVramMB = $adapterRamMB
 
-            if ($adapterRamMB -le 4096 -and $systemRamGB -ge 32) {
-                # Likely an APU with unified memory
-                $isUnified = $true
+            $isUnified = Test-WindowsAmdUnifiedMemory `
+                -GpuName ([string]$gpuName) `
+                -ProcessorNames $processorNames `
+                -AdapterRamMB $adapterRamMB `
+                -SystemRamGB $systemRamGB
+            if ($isUnified) {
                 # Effective VRAM: ~75% of system RAM is usable for GPU on Strix Halo
-                $effectiveVramMB = [math]::Floor($systemRamGB * 0.75 * 1024)
-            }
-
-            # Check for Strix Halo specific identifiers
-            if ($gpuName -match "Strix|AI MAX|AI 300|AI 395") {
-                $isUnified = $true
                 $effectiveVramMB = [math]::Floor($systemRamGB * 0.75 * 1024)
             }
 
@@ -118,7 +200,7 @@ function Get-GpuInfo {
                 Backend       = "amd"
                 Name          = $gpuName
                 VramMB        = $effectiveVramMB
-                Count         = @($gpus).Count
+                Count         = $gpuList.Count
                 MemoryType    = $(if ($isUnified) { "unified" } else { "discrete" })
                 DeviceId      = $deviceId
                 DriverVersion = $driverVer

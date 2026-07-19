@@ -179,11 +179,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         com.ods.host-agent \
         com.ods.opencode-web \
         com.ods.llama-server \
-        com.ods.full-model-download \
-        com.dreamserver.llama-server \
-        com.dreamserver.full-model-download \
-        com.dreamserver.host-agent \
-        com.dreamserver.opencode-web; do
+        com.ods.full-model-download; do
         launchctl bootout "gui/$(id -u)/${_label}" >/dev/null 2>&1 || true
         rm -f "$HOME/Library/LaunchAgents/${_label}.plist" 2>/dev/null || true
     done

@@ -314,7 +314,7 @@ _macos_patch_hermes_persisted_config() {
         # dashboard-api is preferred because its application imports yaml.
         selected_image=""
         for candidate in "$helper_image" "$project_image" \
-            "ods-dashboard-api:latest" "dream-server-dashboard-api:latest" "$hermes_image"; do
+            "ods-dashboard-api:latest" "$hermes_image"; do
             [[ -n "$candidate" ]] || continue
             docker image inspect "$candidate" >/dev/null 2>&1 || continue
             if docker run --rm --pull never --network none --user 0:0 \
@@ -2209,11 +2209,7 @@ else
     launchctl bootout "gui/$(id -u)/${OPENCODE_PLIST_LABEL}" 2>/dev/null || true
     for _legacy_plist_label in \
         com.ods.llama-server \
-        com.ods.full-model-download \
-        com.dreamserver.llama-server \
-        com.dreamserver.full-model-download \
-        com.dreamserver.host-agent \
-        com.dreamserver.opencode-web; do
+        com.ods.full-model-download; do
         launchctl bootout "gui/$(id -u)/${_legacy_plist_label}" 2>/dev/null || true
         rm -f "$HOME/Library/LaunchAgents/${_legacy_plist_label}.plist" 2>/dev/null || true
     done

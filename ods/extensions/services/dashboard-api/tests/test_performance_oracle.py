@@ -205,6 +205,11 @@ def test_model_payload_projects_explicit_app_compatibility(data_dir, tmp_path):
                 "evidence": "fleet-run/example",
             },
             "hermes_talk": {"status": "unsupported_until_revalidated", "reason": "Talk proof failed"},
+            "perplexica": {
+                "status": "unsupported_until_revalidated",
+                "reason": "Perplexica probe failed",
+                "evidence": "fleet-run/perplexica",
+            },
         },
     }]
 
@@ -217,6 +222,9 @@ def test_model_payload_projects_explicit_app_compatibility(data_dir, tmp_path):
     assert compatibility["agentViability"]["evidence"] == "fleet-run/example"
     assert compatibility["hermesTalk"]["status"] == "unsupported_until_revalidated"
     assert compatibility["hermesTalk"]["reason"] == "Talk proof failed"
+    assert compatibility["perplexica"]["status"] == "unsupported_until_revalidated"
+    assert compatibility["perplexica"]["reason"] == "Perplexica probe failed"
+    assert compatibility["perplexica"]["evidence"] == "fleet-run/perplexica"
 
 
 def test_measured_local_too_slow_blocks_agent_compatibility(data_dir, tmp_path):
@@ -360,27 +368,31 @@ def test_real_catalog_has_six_windows_8gb_release_swap_candidates(data_dir, tmp_
         and model["status"] in {"available", "downloaded"}
         and model["fitsVram"] is not False
         and model["contextLength"] >= 64000
-        and not _compatibility_blocks_release_coverage(model["appCompatibility"]["openaiChat"])
-        and not _compatibility_blocks_release_coverage(model["appCompatibility"]["agentViability"])
-        and not _compatibility_blocks_release_coverage(model["appCompatibility"]["hermesTalk"])
+        and all(
+            not _compatibility_blocks_release_coverage(entry)
+            for entry in model["appCompatibility"].values()
+        )
     ]
     candidate_ids = {model["id"] for model in candidates}
     by_id = {model["id"]: model for model in candidates}
 
     assert len(candidates) >= 6
     assert {
-        "granite4.0-h-350m-q4",
         "granite4.0-h-1b-q4",
-        "granite3.3-8b-instruct-q4",
+        "granite3.2-2b-instruct-q4",
+        "granite3.1-2b-instruct-q4",
         "granite4.0-h-micro-q4",
         "granite4.0-h-tiny-q4",
-        "gemma3-4b-it-q4",
+        "phi3-mini-128k-q4",
     }.issubset(candidate_ids)
-    assert by_id["granite3.3-8b-instruct-q4"]["contextLength"] == 65536
-    assert by_id["granite3.3-8b-instruct-q4"]["estimatedRequired"] == 6.8
-    assert by_id["granite3.3-8b-instruct-q4"]["runtimeProfile"]["id"] == "nvidia-8gb-64k"
+    assert by_id["granite3.2-2b-instruct-q4"]["contextLength"] == 131072
+    assert by_id["granite3.1-2b-instruct-q4"]["contextLength"] == 131072
+    assert by_id["phi3-mini-128k-q4"]["contextLength"] == 131072
     assert "phi4-mini-q4" not in candidate_ids
+    assert "gemma3-4b-it-q4" not in candidate_ids
+    assert "granite4.0-h-350m-q4" not in candidate_ids
     assert "granite4.0-1b-q4" not in candidate_ids
+    assert "granite3.3-8b-instruct-q4" not in candidate_ids
     assert "smollm3-3b-q4" not in candidate_ids
     assert "qwen2.5-3b-instruct-q4" not in candidate_ids
     assert "qwen3-4b-q4" not in candidate_ids

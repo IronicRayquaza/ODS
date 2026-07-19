@@ -1297,6 +1297,14 @@ function getCompatibilityMeta(model, memory, hermesMinimumContext = 0) {
       tone: 'amber',
     }
   }
+  const appBlock = getBlockedAppCompatibility(model)
+  if (appBlock) {
+    return {
+      label: 'App limited',
+      detail: `${formatCompatibilityAppName(appBlock.key)} blocked`,
+      tone: 'amber',
+    }
+  }
   const contextLength = Number(model?.contextLength || 0)
   const minimumContext = Number(hermesMinimumContext || 0)
   if (minimumContext > 0 && contextLength > 0 && contextLength < minimumContext) {
@@ -1329,6 +1337,31 @@ function getAgentViabilityCompatibility(model) {
   return model?.appCompatibility?.agentViability || getHermesTalkCompatibility(model)
 }
 
+function getBlockedAppCompatibility(model) {
+  const compatibility = model?.appCompatibility || {}
+  for (const [key, entry] of Object.entries(compatibility)) {
+    if (CORE_MODEL_COMPATIBILITY_KEYS.has(key)) continue
+    if (isAgentViabilityBlocked(entry) || isOpenAiChatBlocked(entry)) return { key, entry }
+  }
+  return null
+}
+
+function formatCompatibilityAppName(key) {
+  const known = {
+    litellm: 'LiteLLM',
+    openWebui: 'Open WebUI',
+    opencode: 'OpenCode',
+    openclaw: 'OpenClaw',
+    perplexica: 'Perplexica',
+    privacyShield: 'Privacy Shield',
+    tokenSpy: 'Token Spy',
+  }
+  if (known[key]) return known[key]
+  return String(key || 'App')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/^./, value => value.toUpperCase())
+}
+
 function isOpenAiChatBlocked(compatibility) {
   const status = String(compatibility?.status || '').toLowerCase()
   return BLOCKING_MODEL_COMPATIBILITY_STATUSES.includes(status)
@@ -1347,6 +1380,12 @@ const BLOCKING_MODEL_COMPATIBILITY_STATUSES = [
   'unsupported',
   'unsupported_until_revalidated',
 ]
+
+const CORE_MODEL_COMPATIBILITY_KEYS = new Set([
+  'agentViability',
+  'hermesTalk',
+  'openaiChat',
+])
 
 function isHermesTalkBlocked(compatibility) {
   const status = String(compatibility?.status || '').toLowerCase()

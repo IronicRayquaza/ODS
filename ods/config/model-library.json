@@ -276,6 +276,14 @@
       "tokens_per_sec_estimate": 110,
       "llm_model_name": "gemma-3-4b-it",
       "llama_server_image": null,
+      "app_compatibility": {
+        "perplexica": {
+          "status": "unsupported_until_revalidated",
+          "label": "Perplexica revalidation required",
+          "reason": "Fleet model-UI run 2026-07-19T03:40Z on windows-laptop loaded this model and ODS Talk passed, but the Perplexica app probe answered with a search-style failure instead of the requested verification phrase; keep it out of all-app release coverage until Perplexica compatibility is revalidated.",
+          "evidence": "dream-fleet-test/runs/2026-07-19T03-40-01Z-release-product-54b2f703190f-harness-2a6a4e6a55b8-hosts-windows-laptop/model-ui/cycle-003/windows-laptop"
+        }
+      },
       "install_recommendation": false
     },
     {
@@ -347,6 +355,75 @@
       "description": "IBM's tiny Granite 4 hybrid instruction model. A smallest-footprint long-context candidate for low-VRAM app and agent validation.",
       "tokens_per_sec_estimate": 190,
       "llm_model_name": "granite-4.0-h-350m",
+      "llama_server_image": null,
+      "app_compatibility": {
+        "agent_viability": {
+          "status": "not_agent_viable",
+          "reason": "Fleet model-UI run 2026-07-19T03:40Z on windows-laptop loaded this model successfully, but ODS Talk returned only \"ODS\" instead of the requested ODSVAL verification phrase; classify it as not agent-viable until revalidated.",
+          "evidence": "dream-fleet-test/runs/2026-07-19T03-40-01Z-release-product-54b2f703190f-harness-2a6a4e6a55b8-hosts-windows-laptop/model-ui/cycle-005/windows-laptop"
+        },
+        "hermes_talk": {
+          "status": "unsupported_until_revalidated",
+          "reason": "Fleet model-UI run 2026-07-19T03:40Z on windows-laptop loaded this model successfully, but ODS Talk could not echo the requested ODSVAL verification phrase.",
+          "evidence": "dream-fleet-test/runs/2026-07-19T03-40-01Z-release-product-54b2f703190f-harness-2a6a4e6a55b8-hosts-windows-laptop/model-ui/cycle-005/windows-laptop"
+        }
+      },
+      "install_recommendation": false
+    },
+    {
+      "id": "granite3.2-2b-instruct-q4",
+      "name": "Granite 3.2 2B Instruct",
+      "family": "granite",
+      "gguf_file": "granite-3.2-2b-instruct-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/ibm-research/granite-3.2-2b-instruct-GGUF/resolve/main/granite-3.2-2b-instruct-Q4_K_M.gguf",
+      "gguf_sha256": "9bc086149f093169fb8e3e7517cd31752bfd9d70e0e7bb3ab351c0a5386cf8c9",
+      "size_bytes": 1545296256,
+      "size_mb": 1546,
+      "vram_required_gb": 4,
+      "context_length": 131072,
+      "quantization": "Q4_K_M",
+      "specialty": "Tool Use",
+      "description": "IBM Research's compact Granite 3.2 instruct model with 131K context and tool-use oriented chat template. A low-VRAM long-context candidate for app and agent validation.",
+      "tokens_per_sec_estimate": 130,
+      "llm_model_name": "granite-3.2-2b-instruct",
+      "llama_server_image": null,
+      "install_recommendation": false
+    },
+    {
+      "id": "granite3.1-2b-instruct-q4",
+      "name": "Granite 3.1 2B Instruct",
+      "family": "granite",
+      "gguf_file": "granite-3.1-2b-instruct-Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/bartowski/granite-3.1-2b-instruct-GGUF/resolve/main/granite-3.1-2b-instruct-Q4_K_M.gguf",
+      "gguf_sha256": "774269c82fde2720ea18dcf457fb5bd028fe096139a0735f4ad59c0a270cfc9c",
+      "size_bytes": 1545295424,
+      "size_mb": 1546,
+      "vram_required_gb": 4,
+      "context_length": 131072,
+      "quantization": "Q4_K_M",
+      "specialty": "Tool Use",
+      "description": "A compact Granite 3.1 instruct quant with 131K context. A same-family fallback candidate for low-VRAM app and agent validation.",
+      "tokens_per_sec_estimate": 128,
+      "llm_model_name": "granite-3.1-2b-instruct",
+      "llama_server_image": null,
+      "install_recommendation": false
+    },
+    {
+      "id": "phi3-mini-128k-q4",
+      "name": "Phi-3 Mini 128K",
+      "family": "phi",
+      "gguf_file": "Phi-3-mini-128k-instruct.Q4_K_M.gguf",
+      "gguf_url": "https://huggingface.co/QuantFactory/Phi-3-mini-128k-instruct-GGUF/resolve/main/Phi-3-mini-128k-instruct.Q4_K_M.gguf",
+      "gguf_sha256": "3b27c1a245243b3eadf6db453ddefd419a31e388820824beeba1c60eee17d05e",
+      "size_bytes": 2393231712,
+      "size_mb": 2393,
+      "vram_required_gb": 4,
+      "context_length": 131072,
+      "quantization": "Q4_K_M",
+      "specialty": "Long Context",
+      "description": "Microsoft Phi-3 Mini 128K instruction model quantized for GGUF. A compact long-context fallback candidate for low-VRAM app and agent validation.",
+      "tokens_per_sec_estimate": 105,
+      "llm_model_name": "Phi-3-mini-128k-instruct",
       "llama_server_image": null,
       "install_recommendation": false
     },
@@ -663,6 +740,18 @@
       "tokens_per_sec_estimate": 72,
       "llm_model_name": "granite-3.3-8b-instruct",
       "llama_server_image": null,
+      "app_compatibility": {
+        "agent_viability": {
+          "status": "not_agent_viable",
+          "reason": "Fleet model-UI run 2026-07-19T03:40Z on windows-laptop loaded this model through the NVIDIA 8GB 64K profile, but ODS Talk timed out after 180s; keep it out of release-grade agent/app coverage until revalidated or profiled differently.",
+          "evidence": "dream-fleet-test/runs/2026-07-19T03-40-01Z-release-product-54b2f703190f-harness-2a6a4e6a55b8-hosts-windows-laptop/model-ui/cycle-006/windows-laptop"
+        },
+        "hermes_talk": {
+          "status": "unsupported_until_revalidated",
+          "reason": "Fleet model-UI run 2026-07-19T03:40Z on windows-laptop loaded this model through the NVIDIA 8GB 64K profile, but ODS Talk timed out after 180s.",
+          "evidence": "dream-fleet-test/runs/2026-07-19T03-40-01Z-release-product-54b2f703190f-harness-2a6a4e6a55b8-hosts-windows-laptop/model-ui/cycle-006/windows-laptop"
+        }
+      },
       "runtime_profiles": [
         {
           "id": "nvidia-8gb-64k",

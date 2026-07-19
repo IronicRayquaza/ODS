@@ -16,6 +16,23 @@ _BASE_COMPOSE_SERVICES = frozenset({"llama-server", "open-webui", "dashboard", "
 router = APIRouter(tags=["templates"])
 
 
+def _gpu_backend_error(service_id: str) -> str | None:
+    """Return a compatibility error for a service on the current GPU backend."""
+    service_config = SERVICES.get(service_id)
+    if service_config is None:
+        service_config = next(
+            (entry for entry in EXTENSION_CATALOG if entry.get("id") == service_id),
+            None,
+        )
+    if not service_config or GPU_BACKEND == "apple":
+        return None
+
+    gpu_backends = service_config.get("gpu_backends", ["amd", "nvidia", "apple"])
+    if "all" in gpu_backends or GPU_BACKEND in gpu_backends:
+        return None
+    return f"requires one of {gpu_backends}; current backend is {GPU_BACKEND}"
+
+
 @router.get("/api/templates")
 async def list_templates(api_key: str = Depends(verify_api_key)):
     """List all available service templates."""
@@ -46,7 +63,6 @@ async def preview_template(template_id: str, api_key: str = Depends(verify_api_k
     warnings = []
 
     for svc_id in template.get("services", []):
-        svc_config = SERVICES.get(svc_id)
         svc_status = services_by_id.get(svc_id)
 
         # Core services are always running — treat as already enabled
@@ -72,13 +88,11 @@ async def preview_template(template_id: str, api_key: str = Depends(verify_api_k
             already_enabled.append(svc_id)
             continue
 
-        # Check GPU compatibility (from manifest data in SERVICES)
-        if svc_config:
-            gpu_backends = svc_config.get("gpu_backends", ["amd", "nvidia", "apple"])
-            if GPU_BACKEND != "apple" and GPU_BACKEND not in gpu_backends and "all" not in gpu_backends:
-                incompatible.append(svc_id)
-                warnings.append(f"{svc_id} gpu_backends {gpu_backends} - your system: {GPU_BACKEND}")
-                continue
+        compatibility_error = _gpu_backend_error(svc_id)
+        if compatibility_error:
+            incompatible.append(svc_id)
+            warnings.append(f"{svc_id}: {compatibility_error}")
+            continue
 
         to_enable.append(svc_id)
 
@@ -128,6 +142,12 @@ async def apply_template(template_id: str, api_key: str = Depends(verify_api_key
         deps_enabled: list[str] = []
         with _extensions_lock():
             for dep in missing_deps:
+                compatibility_error = _gpu_backend_error(dep)
+                if compatibility_error:
+                    raise HTTPException(
+                        status_code=424,
+                        detail=f"Dependency {dep} is incompatible: {compatibility_error}",
+                    )
                 if dep in prior_results:
                     prior_outcome = prior_results[dep]
                     prior_succeeded = prior_outcome in {
@@ -171,14 +191,11 @@ async def apply_template(template_id: str, api_key: str = Depends(verify_api_key
             results[svc_id] = "core_service"
             continue
 
-        svc_config = SERVICES.get(svc_id)
-        if svc_config:
-            gpu_backends = svc_config.get("gpu_backends", ["amd", "nvidia", "apple"])
-            if GPU_BACKEND != "apple" and GPU_BACKEND not in gpu_backends and "all" not in gpu_backends:
-                detail = f"requires one of {gpu_backends}; current backend is {GPU_BACKEND}"
-                results[svc_id] = f"skipped: incompatible GPU backend: {detail}"
-                warnings.append(f"{svc_id}: {detail}")
-                continue
+        compatibility_error = _gpu_backend_error(svc_id)
+        if compatibility_error:
+            results[svc_id] = f"skipped: incompatible GPU backend: {compatibility_error}"
+            warnings.append(f"{svc_id}: {compatibility_error}")
+            continue
 
         try:
             _validate_service_id(svc_id)

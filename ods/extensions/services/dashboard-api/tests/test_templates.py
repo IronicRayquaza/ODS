@@ -6,6 +6,13 @@ import pytest
 import yaml
 
 
+@pytest.fixture(autouse=True)
+def _disable_agent_cache_invalidation():
+    """Keep template unit tests isolated from the host-agent network."""
+    with patch("routers.extensions._call_agent_invalidate_compose_cache"):
+        yield
+
+
 # --- Template loading tests ---
 
 
@@ -549,6 +556,42 @@ async def test_template_apply_skips_dependent_after_prior_activation_failure(tmp
     assert "Dependency dep-svc was not enabled" in result["results"]["child-svc"]
     assert result["enabled_count"] == 0
     assert result["skipped_services"] == ["dep-svc", "child-svc"]
+
+
+@pytest.mark.asyncio
+async def test_template_apply_enforces_gpu_compatibility_for_dependencies(tmp_path):
+    """A compatible target cannot activate an incompatible transitive dependency."""
+    mock_templates = [{
+        "id": "test-tmpl",
+        "name": "Test",
+        "services": ["child-svc"],
+    }]
+    mock_activate = MagicMock()
+    mock_lock = MagicMock()
+    mock_lock.__enter__ = MagicMock(return_value=None)
+    mock_lock.__exit__ = MagicMock(return_value=False)
+
+    with (
+        patch("routers.templates.TEMPLATES", mock_templates),
+        patch("routers.templates._BASE_COMPOSE_SERVICES", frozenset()),
+        patch("routers.templates.SERVICES", {
+            "child-svc": {"gpu_backends": ["all"]},
+            "cuda-dep": {"gpu_backends": ["nvidia"]},
+        }),
+        patch("routers.templates.GPU_BACKEND", "amd"),
+        patch("routers.templates.USER_EXTENSIONS_DIR", tmp_path / "user-ext"),
+        patch("helpers.get_cached_services", return_value=[]),
+        patch("routers.extensions._activate_service", mock_activate),
+        patch("routers.extensions._extensions_lock", return_value=mock_lock),
+        patch("routers.extensions._get_missing_deps_transitive", return_value=["cuda-dep"]),
+        patch("routers.extensions._validate_service_id"),
+    ):
+        from routers.templates import apply_template
+        result = await apply_template("test-tmpl", api_key="test")
+
+    mock_activate.assert_not_called()
+    assert result["skipped_services"] == ["child-svc"]
+    assert "Dependency cuda-dep is incompatible" in result["results"]["child-svc"]
 
 
 @pytest.mark.asyncio

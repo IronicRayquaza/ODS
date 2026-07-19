@@ -83,6 +83,7 @@ def _post_agent_json(path: str, body: dict, timeout: int = 65) -> dict:
             detail=exc.detail or "Host agent request failed",
         ) from exc
     except AgentUnavailable as exc:
+        logger.warning("Host agent unavailable at %s: %s", path, exc)
         raise HTTPException(status_code=503, detail=f"Host agent unavailable: {exc}") from exc
     except AgentProtocolError as exc:
         raise HTTPException(status_code=500, detail=f"Host agent call failed: {exc}") from exc

@@ -27,5 +27,5 @@ service:
     min_context: 0
     probe:
       kind: completion
-      path: /chat/completions
+      path: /v1/chat/completions
       auth: env:SHIELD_API_KEY

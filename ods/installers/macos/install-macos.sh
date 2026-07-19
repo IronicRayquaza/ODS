@@ -314,7 +314,7 @@ _macos_patch_hermes_persisted_config() {
         # dashboard-api is preferred because its application imports yaml.
         selected_image=""
         for candidate in "$helper_image" "$project_image" \
-            "ods-dashboard-api:latest" "dream-server-dashboard-api:latest" "$hermes_image"; do
+            "ods-dashboard-api:latest" "$hermes_image"; do
             [[ -n "$candidate" ]] || continue
             docker image inspect "$candidate" >/dev/null 2>&1 || continue
             if docker run --rm --pull never --network none --user 0:0 \
@@ -1387,6 +1387,7 @@ if [[ "${ODS_DISABLE_CATALOG_MODEL_SELECTOR:-false}" != "true" && "$SELECTED_TIE
                 --ram-gb "${SYSTEM_RAM_GB:-0}" \
                 --profile "${MODEL_PROFILE_EFFECTIVE:-${MODEL_PROFILE:-qwen}}" \
                 --tier "$SELECTED_TIER" \
+                --max-size-mb "${LLM_MODEL_SIZE_MB:-0}" \
                 --host-arch "$(uname -m 2>/dev/null || echo unknown)" \
                 --installable-only \
                 --env 2>>"$ODS_LOG_FILE" || true)"
@@ -2269,11 +2270,7 @@ else
     launchctl bootout "gui/$(id -u)/${OPENCODE_PLIST_LABEL}" 2>/dev/null || true
     for _legacy_plist_label in \
         com.ods.llama-server \
-        com.ods.full-model-download \
-        com.dreamserver.llama-server \
-        com.dreamserver.full-model-download \
-        com.dreamserver.host-agent \
-        com.dreamserver.opencode-web; do
+        com.ods.full-model-download; do
         launchctl bootout "gui/$(id -u)/${_legacy_plist_label}" 2>/dev/null || true
         rm -f "$HOME/Library/LaunchAgents/${_legacy_plist_label}.plist" 2>/dev/null || true
     done
@@ -2683,7 +2680,7 @@ for service in (data.get("services") or {}).values():
         <string>127.0.0.1</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>${HOME}</string>
+    <string>${INSTALL_DIR}</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>HOME</key>
@@ -2893,6 +2890,9 @@ for ((idx=0; idx<${#HEALTH_NAMES[@]}; idx++)); do
             fi
         else
             # Host-native service -- poll HTTP on 127.0.0.1.
+            # Bound each probe: a listening-but-still-loading server accepts the
+            # connection and would otherwise block past the loop's own budget
+            # (matches the --max-time 10 used elsewhere in this installer).
             HTTP_CODE=$(curl -s --connect-timeout 5 --max-time 10 \
                 -o /dev/null -w "%{http_code}" "$URL" 2>/dev/null || echo "000")
             if [[ "$HTTP_CODE" -ge 200 ]] && [[ "$HTTP_CODE" -lt 400 ]]; then

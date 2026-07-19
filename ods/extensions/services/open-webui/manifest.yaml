@@ -26,5 +26,5 @@ service:
     min_context: 0
     probe:
       kind: chat
-      path: /api/chat/completions
+      path: /openai/v1/chat/completions
       auth: webui-session

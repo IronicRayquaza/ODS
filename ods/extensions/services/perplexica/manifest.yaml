@@ -27,5 +27,5 @@ service:
     min_context: 65536
     probe:
       kind: custom
-      path: /api/chat
+      path: /api/search
       auth: none

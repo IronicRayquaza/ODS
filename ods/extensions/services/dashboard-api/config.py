@@ -68,6 +68,8 @@ def normalize_llm_contract(value: Any) -> dict[str, Any] | None:
 
     swap_safe = bool(consumes and (route == "gateway" or pinning == "dynamic"))
     normalized["swap_safe"] = swap_safe
+    # camelCase alias: the fleet model-ui harness gates required probes on llm.swapSafe
+    normalized["swapSafe"] = swap_safe
     normalized["badge"] = "swap-safe" if swap_safe else "not-swap-safe"
     if not consumes:
         normalized["swap_safe_reason"] = "This service does not declare LLM inference consumption."
@@ -196,16 +198,6 @@ def load_extension_manifests(
                 service_id = service.get("id")
                 if not service_id:
                     raise ValueError("service.id is required")
-                compose_file = str(service.get("compose_file") or "").strip()
-                if service.get("type") == "docker" and compose_file:
-                    compose_path = ext_dir / compose_file
-                    if not compose_path.exists():
-                        logger.debug(
-                            "Skipping docker service %s because %s is not installed",
-                            service_id,
-                            compose_path,
-                        )
-                        continue
                 supported = service.get("gpu_backends", ["amd", "nvidia", "apple"])
                 if gpu_backend == "apple":
                     if service.get("type") == "host-systemd":

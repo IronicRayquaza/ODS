@@ -1016,7 +1016,7 @@ def test_load_model_delegates_when_live_backend_reports_different_model(test_cli
         "status": "activated",
         "path": "/v1/model/activate",
         "body": {"model_id": "qwen3.5-9b-q4"},
-        "timeout": 600,
+        "timeout": 2700,
     }
 
 
@@ -1094,7 +1094,7 @@ def test_load_model_delegates_when_loaded_backend_is_not_ready(test_client, monk
         "status": "activated",
         "path": "/v1/model/activate",
         "body": {"model_id": "qwen3.5-9b-q4"},
-        "timeout": 600,
+        "timeout": 2700,
     }
 
 
@@ -1125,7 +1125,7 @@ def test_load_model_delegates_local_gguf_without_catalog_entry(test_client, monk
         "status": "activated",
         "path": "/v1/model/activate",
         "body": {"model_id": "OpenAI-20B-NEO-CODE-DI-Uncensored-Q8_0"},
-        "timeout": 600,
+        "timeout": 2700,
     }
 
 
@@ -1321,7 +1321,7 @@ def test_load_model_resolves_local_gguf_by_stem_with_mixed_case_extension(
         "status": "activated",
         "path": "/v1/model/activate",
         "body": {"model_id": "MixedCaseModel"},
-        "timeout": 600,
+        "timeout": 2700,
     }
 
 
@@ -1362,7 +1362,7 @@ def test_local_gguf_ui_id_loads_and_deletes_spaced_filename(test_client, monkeyp
     assert load_response.status_code == 200
     assert delete_response.status_code == 200
     assert calls == [
-        ("/v1/model/activate", {"model_id": "My-Custom-Model.Q8_0"}, 600),
+        ("/v1/model/activate", {"model_id": "My-Custom-Model.Q8_0"}, 2700),
         ("/v1/model/delete", {"gguf_file": "My Custom Model.Q8_0.GGUF"}, 30),
     ]
 

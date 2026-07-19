@@ -1048,11 +1048,11 @@ def load_model(model_id: str, api_key: str = Depends(verify_api_key)):
             detail={**bootstrap_conflict, "requestedModelId": model_id},
         )
 
-    # Long timeout — model loading can take minutes
+    # Activation includes downstream synchronization and a bounded rollback.
     result = _call_agent_model(
         "/v1/model/activate",
         {"model_id": model_id},
-        timeout=600,
+        timeout=2700,
         retry_download_busy_seconds=_MODEL_DOWNLOAD_BUSY_ACTIVATION_GRACE_SECONDS,
     )
     return result

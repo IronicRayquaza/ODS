@@ -1286,7 +1286,20 @@ def _write_progress(service_id: str, status: str, phase_label: str = "",
     tmp_file.write_text(json.dumps(data), encoding="utf-8")
     # os.replace (not os.rename) — Windows os.rename raises FileExistsError
     # when the destination exists; os.replace always overwrites atomically.
-    os.replace(str(tmp_file), str(progress_file))
+    last_error: PermissionError | None = None
+    for attempt in range(6):
+        try:
+            os.replace(str(tmp_file), str(progress_file))
+            return
+        except PermissionError as exc:
+            last_error = exc
+            if attempt == 5:
+                break
+            # Windows can briefly hold the bind-mounted progress file open
+            # while dashboard-api polls it; retry without changing install state.
+            time.sleep(0.05 * (attempt + 1))
+    if last_error is not None:
+        raise last_error
 
 
 def _model_file_ready(path: Path) -> bool:

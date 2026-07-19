@@ -103,6 +103,33 @@ class TestHostAgentShutdown:
         assert "shutdown" in calls
 
 
+class TestProgressWrites:
+
+    def test_write_progress_retries_windows_replace_race(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(_mod, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
+        real_replace = os.replace
+        calls = []
+
+        def flaky_replace(src, dst):
+            calls.append((src, dst))
+            if len(calls) == 1:
+                raise PermissionError("[WinError 5] Access is denied")
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(_mod.os, "replace", flaky_replace)
+
+        _mod._write_progress("aider", "pulling", "Downloading image...")
+
+        progress = tmp_path / "extension-progress" / "aider.json"
+        assert len(calls) == 2
+        assert progress.exists()
+        payload = json.loads(progress.read_text(encoding="utf-8"))
+        assert payload["service_id"] == "aider"
+        assert payload["status"] == "pulling"
+        assert payload["phase_label"] == "Downloading image..."
+
+
 class TestResolveAgentBindAddr:
 
     def test_explicit_bind_wins(self):

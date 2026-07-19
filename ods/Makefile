@@ -72,6 +72,9 @@ test: ## Run unit and contract tests
 	@echo "=== macOS model download retry contract ==="
 	@bash tests/test-macos-download-retries.sh
 	@echo ""
+	@echo "=== macOS uninstall LaunchAgent cleanup ==="
+	@bash tests/test-macos-uninstall-launchagents.sh
+	@echo ""
 	@echo "=== fleet-multi-distro keep-going on docker pull failure ==="
 	@bash tests/test-fleet-multi-distro-keep-going.sh
 	@echo ""

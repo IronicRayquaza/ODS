@@ -127,6 +127,7 @@ async def apply_template(template_id: str, api_key: str = Depends(verify_api_key
         _get_missing_deps_transitive, _read_direct_deps, _validate_service_id,
         _install_from_library, _is_installable,
         _call_agent_invalidate_compose_cache,
+        _has_error_progress, _write_error_progress,
     )
 
     # Blocking sections run in the thread pool so the event loop stays
@@ -141,6 +142,9 @@ async def apply_template(template_id: str, api_key: str = Depends(verify_api_key
     def _activate_with_lock(sid: str, missing_deps, prior_results):
         deps_enabled: list[str] = []
         with _extensions_lock():
+            # Validate the whole dependency plan before the first compose
+            # mutation. A later incompatibility must not leave earlier deps
+            # silently enabled.
             for dep in missing_deps:
                 compatibility_error = _gpu_backend_error(dep)
                 if compatibility_error:
@@ -160,13 +164,25 @@ async def apply_template(template_id: str, api_key: str = Depends(verify_api_key
                         status_code=424,
                         detail=f"Dependency {dep} was not enabled: {prior_outcome}",
                     )
-                dep_result = _activate_service(dep)
-                if dep_result.get("action") == "enabled":
-                    deps_enabled.append(dep)
-            main_result = _activate_service(sid)
+
+            try:
+                for dep in missing_deps:
+                    if dep in prior_results:
+                        continue
+                    dep_result = _activate_service(dep)
+                    if dep_result.get("action") == "enabled":
+                        deps_enabled.append(dep)
+                main_result = _activate_service(sid)
+            except HTTPException as exc:
+                # Compose activation is additive. Surface any dependency that
+                # was already enabled before a later activation failed so the
+                # caller can start and report it instead of losing that state.
+                if deps_enabled:
+                    _call_agent_invalidate_compose_cache()
+                return deps_enabled, None, exc
             if deps_enabled or main_result.get("action") == "enabled":
                 _call_agent_invalidate_compose_cache()
-        return deps_enabled, main_result
+        return deps_enabled, main_result, None
 
     service_list = get_cached_services()
     if service_list is None:
@@ -204,11 +220,29 @@ async def apply_template(template_id: str, api_key: str = Depends(verify_api_key
             # _install_from_library produces a directory with compose.yaml
             # already in place (not compose.yaml.disabled), so _activate_service
             # will report "already_enabled" afterwards — we still want to start it.
-            if _is_installable(svc_id) and not (USER_EXTENSIONS_DIR / svc_id).is_dir():
+            installable = _is_installable(svc_id)
+            installed_dir_exists = (USER_EXTENSIONS_DIR / svc_id).is_dir()
+            has_install_error = (
+                await asyncio.to_thread(_has_error_progress, svc_id)
+                if installable and installed_dir_exists
+                else False
+            )
+            needs_library_install = installable and (
+                not installed_dir_exists or has_install_error
+            )
+            if needs_library_install:
                 try:
                     await asyncio.to_thread(_install_with_lock, svc_id)
-                    await asyncio.to_thread(_call_agent_hook, svc_id, "post_install")
                     library_installed.append(svc_id)
+                    post_install_ok = await asyncio.to_thread(
+                        _call_agent_hook, svc_id, "post_install",
+                    )
+                    if not post_install_ok:
+                        message = "post_install hook failed; retry template apply after fixing the hook"
+                        await asyncio.to_thread(_write_error_progress, svc_id, message)
+                        results[svc_id] = f"skipped: {message}"
+                        warnings.append(f"{svc_id}: {message}")
+                        continue
                 except HTTPException as exc:
                     detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
                     logger.warning(
@@ -222,12 +256,21 @@ async def apply_template(template_id: str, api_key: str = Depends(verify_api_key
             # _activate_service checks both user-installed and built-in extension dirs.
             missing_deps = await asyncio.to_thread(_get_missing_deps_transitive, svc_id)
 
-            deps_enabled, result = await asyncio.to_thread(
+            deps_enabled, result, activation_error = await asyncio.to_thread(
                 _activate_with_lock, svc_id, missing_deps, results,
             )
             for dep in deps_enabled:
                 enabled_services.append(dep)
                 results[dep] = "enabled_as_dependency"
+
+            if activation_error is not None:
+                detail = (
+                    activation_error.detail
+                    if isinstance(activation_error.detail, str)
+                    else str(activation_error.detail)
+                )
+                results[svc_id] = f"skipped: {detail}"
+                continue
 
             action = result.get("action", "skipped")
             if svc_id in library_installed:
@@ -277,6 +320,7 @@ async def apply_template(template_id: str, api_key: str = Depends(verify_api_key
             else:
                 results[svc_id] = "enabled_but_start_failed"
             failed_services.append(svc_id)
+            continue
 
         post_start_ok = await asyncio.to_thread(_call_agent_hook, svc_id, "post_start")
         if not post_start_ok:

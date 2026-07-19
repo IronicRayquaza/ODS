@@ -643,7 +643,17 @@ function Get-NativeInferenceStatus {
 
     if (-not (Test-Path $script:INFERENCE_PID_FILE)) { return $result }
 
-    $savedPid = [int](Get-Content $script:INFERENCE_PID_FILE -Raw).Trim()
+    # Guard the PID parse: this runs with $ErrorActionPreference = "Stop", so
+    # casting an empty or non-numeric PID file to [int] throws a terminating
+    # error and crashes `ods status`/`start`/`stop`. Mirror the numeric guard
+    # used elsewhere and treat a bad PID file as "not running" (and clear it).
+    $rawPid = (Get-Content $script:INFERENCE_PID_FILE -Raw)
+    if (-not $rawPid) { $rawPid = "" }
+    if ($rawPid.Trim() -notmatch '^\d+$') {
+        Remove-Item $script:INFERENCE_PID_FILE -Force -ErrorAction SilentlyContinue
+        return $result
+    }
+    $savedPid = [int]$rawPid.Trim()
     try {
         $proc = Get-Process -Id $savedPid -ErrorAction SilentlyContinue
         if ($proc -and -not $proc.HasExited) {
@@ -1263,8 +1273,13 @@ function Invoke-ConfigShow {
     Get-Content $envFile | ForEach-Object {
         $line = $_.Trim()
         if ($line -match "^#" -or $line -eq "") { return }
-        if ($line -match "(SECRET|PASS|TOKEN|KEY)=") {
-            $key = ($line -split "=")[0]
+        # Redact any key whose NAME contains a sensitive keyword, mirroring the
+        # Linux CLI's `ods config show` over-mask policy. Anchoring keywords to
+        # the "=" (the old behavior) let *_PASSWORD, *_SALT, and similar values
+        # print in cleartext because the keyword is not the last token before "=".
+        $key = ($line -split '=', 2)[0].Trim()
+        if ($line.Contains('=') -and
+            $key -match '(?i)secret|password|pass|token|key|salt|bearer|user|email') {
             Write-Host "  $key=***" -ForegroundColor DarkGray
         } else {
             Write-Host "  $line" -ForegroundColor White
@@ -2082,7 +2097,20 @@ switch ($Command.ToLower()) {
     "restart" { Invoke-Restart -Service ($Arguments | Select-Object -First 1) }
     "logs"    {
         $svc = $Arguments | Select-Object -First 1
-        $n = $(if ($Arguments.Count -ge 2) { [int]$Arguments[1] } else { 100 })
+        # Validate the optional line count instead of a bare [int] cast, which
+        # throws an unhandled .NET conversion error on non-numeric input
+        # (e.g. `ods logs llama-server 5m`). Mirrors the [int]::TryParse guard
+        # used elsewhere in this script; the Unix CLIs pass the value straight
+        # to `docker compose --tail`, which rejects bad input gracefully too.
+        $n = 100
+        if ($Arguments.Count -ge 2) {
+            $parsedLines = 0
+            if ([int]::TryParse([string]$Arguments[1], [ref]$parsedLines) -and $parsedLines -gt 0) {
+                $n = $parsedLines
+            } else {
+                Write-AIWarn "Invalid line count '$($Arguments[1])'; using $n."
+            }
+        }
         Invoke-Logs -Service $svc -Lines $n
     }
     "config"  {

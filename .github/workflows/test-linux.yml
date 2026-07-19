@@ -98,6 +98,9 @@ jobs:
       - name: Validate Env Tests
         run: bash tests/test-validate-env.sh
 
+      - name: Safe Env Loading Tests
+        run: bash tests/test-safe-env.sh
+
       - name: Validate Simulation Summary Tests
         run: bash tests/test-validate-sim-summary.sh
 
@@ -143,6 +146,9 @@ jobs:
 
       - name: Support Bundle Evidence Tests
         run: bash tests/test-support-bundle.sh
+
+      - name: Config Migration Tests
+        run: bash tests/test-migrate-config.sh
 
       - name: Issue-to-PR Security Contract Tests
         run: bash tests/test-issue-to-pr-security.sh

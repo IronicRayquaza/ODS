@@ -47,9 +47,15 @@ test: ## Run unit and contract tests
 	@bash tests/contracts/test-overlay-map-coherence.sh
 	@bash tests/contracts/test-plist-log-paths.sh
 	@echo ""
+	@echo "=== safe .env loading (quote/CRLF handling) ==="
+	@bash tests/test-safe-env.sh
+	@echo ""
 	@echo "=== Bind address sweep ==="
 	@bash tests/test-bind-address-sweep.sh
 	@bash tests/test-n8n-cookie-policy.sh
+	@echo ""
+	@echo "=== config migration (version check under set -e) ==="
+	@bash tests/test-migrate-config.sh
 	@echo ""
 	@echo "=== ods-cli pipefail tolerance ==="
 	@bash tests/test-ods-cli-pipefail-tolerance.sh
@@ -57,8 +63,14 @@ test: ## Run unit and contract tests
 	@echo "=== Bash 3.2 guard contracts ==="
 	@bash tests/test-bash32-guards.sh
 	@echo ""
+	@echo "=== CLI update post-verification ==="
+	@bash tests/test-cli-update-verification.sh
+	@echo ""
 	@echo "=== ods config show secret-mask matrix ==="
 	@bash tests/test-ods-config-secret-mask.sh
+	@echo ""
+	@echo "=== macOS ods config show secret-mask ==="
+	@bash tests/test-macos-config-show-secret-mask.sh
 	@echo ""
 	@echo "=== bootstrap OpenClaw compose-guard regression ==="
 	@bash tests/test-bootstrap-openclaw-compose-guard.sh
@@ -71,6 +83,10 @@ test: ## Run unit and contract tests
 	@echo ""
 	@echo "=== macOS model download retry contract ==="
 	@bash tests/test-macos-download-retries.sh
+	@echo ""
+	@echo "=== macOS CLI .env quote handling ==="
+	@bash tests/test-macos-env-quote-strip.sh
+	@echo ""
 	@echo "=== fleet-multi-distro keep-going on docker pull failure ==="
 	@bash tests/test-fleet-multi-distro-keep-going.sh
 	@echo ""

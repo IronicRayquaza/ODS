@@ -2525,10 +2525,13 @@ class TestModelActivationModeAndMacosBridge:
         _mod.AgentHandler._do_model_activate(handler, "target-model")
 
         assert handler.response_code == 200
-        assert handler.parse_response() == {
-            "status": "activated",
-            "model_id": "target-model",
-        }
+        receipt = handler.parse_response()
+        assert receipt["status"] == "activated"
+        assert receipt["model_id"] == "target-model"
+        assert receipt["llm_model"] == "new-model"
+        assert receipt["gguf_file"] == "new-model.gguf"
+        assert receipt["context_length"] == 4096
+        assert receipt["consumers"]["dashboard"] == "live_env"
         assert events[:5] == [
             ("bridge-preflight", "127.0.0.1"),
             ("stop-old-direct-listener", ".llama-server.pid"),

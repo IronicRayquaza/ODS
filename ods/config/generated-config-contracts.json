@@ -56,7 +56,10 @@
       "label": "OpenCode provider/model config",
       "target_paths": [
         "~/.config/opencode/opencode.json",
-        "~/.config/opencode/config.json"
+        "~/.config/opencode/opencode.jsonc",
+        "~/.config/opencode/config.json",
+        "~/.local/share/opencode/opencode.json",
+        "~/.local/share/opencode/opencode.jsonc"
       ],
       "writers": [
         {

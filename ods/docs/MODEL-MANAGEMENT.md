@@ -39,12 +39,17 @@ serving again.
 
 Open WebUI, Token Spy, Privacy Shield, and OpenAI-compatible SDK clients follow
 the stable ODS endpoint and do not persist a separate model route. Optional
-apps that are not installed are skipped. A stopped Perplexica container is
-reconciled from the updated Compose environment the next time ODS starts it.
+apps that are not installed are skipped. Optional services that were stopped
+remain stopped: persisted Hermes/OpenCode state and Compose environment are
+updated without starting them, and Perplexica reconciles its app-owned state
+from that environment the next time ODS starts it.
 
 Direct edits to `.env`, `models.ini`, or app-owned settings bypass this
-transaction. Use the manual procedure below only for recovery or unsupported
-custom models, and verify every affected consumer afterward.
+transaction. The Dashboard Settings editor therefore treats active model,
+tier, artifact integrity, Lemonade identity, and runtime-profile fields as
+read-only; use Model Manager instead. Use the manual procedure below only for
+recovery or unsupported custom models, and verify every affected consumer
+afterward.
 
 ## Where Models Live
 

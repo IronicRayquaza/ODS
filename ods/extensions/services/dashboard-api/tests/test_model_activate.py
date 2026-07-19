@@ -43,6 +43,23 @@ def _isolate_opencode_config(monkeypatch, tmp_path):
         "_opencode_config_paths",
         lambda: (config_dir / "opencode.json", config_dir / "config.json"),
     )
+    monkeypatch.setattr(
+        _mod,
+        "_capture_container_state",
+        lambda container: {
+            "exists": _mod._container_exists(container),
+            "running": (
+                container != "ods-perplexica" and _mod._container_exists(container)
+            ),
+        },
+    )
+    monkeypatch.setattr(_mod, "_wait_for_container_health", lambda _container: None)
+    monkeypatch.setattr(
+        _mod,
+        "_capture_managed_opencode_state",
+        lambda: {"system": _mod.platform.system(), "active": False},
+    )
+    monkeypatch.setattr(_mod, "_opencode_installed", lambda: False)
 
 
 def test_host_agent_backlog_handles_dashboard_poll_bursts():
@@ -508,6 +525,7 @@ class TestOpenCodeModelRoute:
         calls = []
         monkeypatch.setattr(_mod.platform, "system", lambda: "Linux")
         monkeypatch.setattr(_mod.os, "getuid", lambda: 1001, raising=False)
+        monkeypatch.setattr(_mod, "_wait_for_opencode_health", lambda: None)
 
         def fake_run(command, **kwargs):
             calls.append((command, kwargs))
@@ -515,9 +533,13 @@ class TestOpenCodeModelRoute:
 
         monkeypatch.setattr(_mod.subprocess, "run", fake_run)
 
-        assert _mod._restart_managed_opencode() is True
+        state = {
+            "system": "Linux",
+            "active": True,
+            "env": _mod._opencode_user_service_env(),
+        }
+        assert _mod._restart_managed_opencode(state) is True
         assert [call[0] for call in calls] == [
-            ["systemctl", "--user", "is-active", "--quiet", "opencode-web.service"],
             ["systemctl", "--user", "restart", "opencode-web.service"],
         ]
         assert calls[0][1]["env"]["XDG_RUNTIME_DIR"] == "/run/user/1001"
@@ -525,7 +547,7 @@ class TestOpenCodeModelRoute:
             "unix:path=/run/user/1001/bus"
         )
 
-    def test_windows_on_demand_runtime_is_not_force_restarted(self, monkeypatch):
+    def test_windows_inactive_runtime_is_not_force_restarted(self, monkeypatch):
         monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
         monkeypatch.setattr(
             _mod.subprocess,
@@ -533,7 +555,26 @@ class TestOpenCodeModelRoute:
             lambda *_args, **_kwargs: pytest.fail("Windows OpenCode is not ODS-managed"),
         )
 
-        assert _mod._restart_managed_opencode() is False
+        assert _mod._restart_managed_opencode({
+            "system": "Windows",
+            "active": False,
+        }) is False
+
+    def test_windows_active_runtime_is_restarted_and_proved(self, monkeypatch):
+        actions = []
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(
+            _mod,
+            "_run_windows_opencode_control",
+            lambda action: actions.append(action) or True,
+        )
+        monkeypatch.setattr(_mod, "_wait_for_opencode_health", lambda: actions.append("health"))
+
+        assert _mod._restart_managed_opencode({
+            "system": "Windows",
+            "active": True,
+        }) is True
+        assert actions == ["restart", "health"]
 
 
 class TestPerplexicaModelRoute:
@@ -1345,6 +1386,18 @@ class TestModelActivateRequest:
             {"requested_context_length": 16384, "requested_tier": "SH_COMPACT"},
         )]
 
+    def test_normalizes_model_id_whitespace(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-agent-key")
+        monkeypatch.setattr(_mod, "_begin_model_activation", lambda _model: (True, None))
+        monkeypatch.setattr(_mod, "_end_model_activation", lambda: None)
+        handler = _ResponseHandler(request_body={"model_id": "  target-model  "})
+        handler._do_model_activate = lambda model_id, **_kwargs: calls.append(model_id)
+
+        _mod.AgentHandler._handle_model_activate(handler)
+
+        assert calls == ["target-model"]
+
     @pytest.mark.parametrize(
         "request_body",
         [
@@ -1352,6 +1405,7 @@ class TestModelActivateRequest:
             {"model_id": "target", "context_length": 512},
             {"model_id": "target", "tier": "UNKNOWN"},
             {"model_id": "target", "tier": "../1"},
+            {"model_id": "target\nINJECTED=value"},
         ],
     )
     def test_rejects_invalid_cli_metadata(self, monkeypatch, request_body):
@@ -1439,6 +1493,20 @@ def _write_model_activation_fixture(
     return install_dir, env_path, env_text, models_ini, ini_text, lemonade_yaml, lemonade_text
 
 
+def test_text_snapshot_restores_exact_line_endings(tmp_path):
+    path = tmp_path / "config.env"
+    original = b"MODEL=old\r\nEMPTY=\r\n"
+    path.write_bytes(original)
+    original_owner = (path.stat().st_uid, path.stat().st_gid)
+    snapshot = _mod._snapshot_text_file(path)
+
+    _mod._atomic_write_text(path, "MODEL=new\n")
+    _mod._restore_text_file(path, snapshot)
+
+    assert path.read_bytes() == original
+    assert (path.stat().st_uid, path.stat().st_gid) == original_owner
+
+
 class TestModelActivateRollback:
 
     @pytest.fixture(autouse=True)
@@ -1447,6 +1515,57 @@ class TestModelActivateRollback:
         monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
         monkeypatch.setattr(_mod, "_container_exists", lambda _container: False)
         monkeypatch.setattr(_mod, "_container_running", lambda _container: False)
+
+    def test_activation_requires_persisted_env_before_any_mutation(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        install_dir, env_path, _env_text, models_ini, ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        env_path.unlink()
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(
+            _mod,
+            "_compose_restart_llama_server",
+            lambda *_args: pytest.fail("missing .env must fail before restart"),
+        )
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 500
+        assert "requires the persisted environment" in handler.parse_response()["error"]
+        assert not env_path.exists()
+        assert models_ini.read_text(encoding="utf-8") == ini_text
+
+    def test_malformed_model_library_cannot_fall_back_to_unverified_local_model(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        install_dir, env_path, env_text, models_ini, ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        (install_dir / "config" / "model-library.json").write_text(
+            '{"models": [',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(
+            _mod,
+            "_compose_restart_llama_server",
+            lambda *_args: pytest.fail("malformed catalog must fail before restart"),
+        )
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 500
+        assert "Model library is unavailable or malformed" in handler.parse_response()["error"]
+        assert env_path.read_text(encoding="utf-8") == env_text
+        assert models_ini.read_text(encoding="utf-8") == ini_text
 
     @pytest.mark.parametrize(
         ("bind_addr", "expected_identity_url"),
@@ -1504,6 +1623,33 @@ class TestModelActivateRollback:
         assert len(launches) == 1
         curl_calls = [cmd for cmd in calls if cmd and cmd[0] == "curl"]
         assert [cmd[-1] for cmd in curl_calls] == [expected_identity_url]
+
+    def test_apple_missing_native_binary_fails_before_config_mutation(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        install_dir, env_path, env_text, models_ini, ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path, gpu_backend="apple")
+        )
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Darwin")
+        monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
+        monkeypatch.setattr(
+            _mod,
+            "_restart_macos_native_llama_server",
+            lambda *_args: pytest.fail("preflight failure must not restart the runtime"),
+        )
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 500
+        receipt = handler.parse_response()
+        assert "llama-server binary not found" in receipt["error"]
+        assert "rolled_back" not in receipt
+        assert env_path.read_text(encoding="utf-8") == env_text
+        assert models_ini.read_text(encoding="utf-8") == ini_text
 
     def test_success_response_disconnect_does_not_roll_back(self, tmp_path, monkeypatch):
         install_dir, env_path, _env_text, models_ini, _ini_text, _yaml, _yaml_text = (
@@ -1703,7 +1849,13 @@ class TestModelActivateRollback:
         _mod.AgentHandler._do_model_activate(handler, "Research.Model-Q8_0")
 
         assert handler.response_code == 200
-        assert handler.parse_response() == {"status": "activated", "model_id": "Research.Model-Q8_0"}
+        receipt = handler.parse_response()
+        assert receipt["status"] == "activated"
+        assert receipt["model_id"] == "Research.Model-Q8_0"
+        assert receipt["llm_model"] == "Research.Model-Q8_0"
+        assert receipt["gguf_file"] == "Research.Model-Q8_0.gguf"
+        assert receipt["tier"] is None
+        assert receipt["context_length"] == 65536
         env_text = env_path.read_text(encoding="utf-8")
         assert "GGUF_FILE=Research.Model-Q8_0.gguf" in env_text
         assert "LLM_MODEL=Research.Model-Q8_0" in env_text
@@ -1801,10 +1953,13 @@ class TestModelActivateRollback:
         _mod.AgentHandler._do_model_activate(handler, "My-Custom-Model.Q8_0")
 
         assert handler.response_code == 200
-        assert handler.parse_response() == {
-            "status": "activated",
-            "model_id": "My-Custom-Model.Q8_0",
-        }
+        receipt = handler.parse_response()
+        assert receipt["status"] == "activated"
+        assert receipt["model_id"] == "My-Custom-Model.Q8_0"
+        assert receipt["llm_model"] == "My-Custom-Model.Q8_0"
+        assert receipt["gguf_file"] == "My Custom Model.Q8_0.GGUF"
+        assert receipt["tier"] is None
+        assert receipt["context_length"] == 32768
         env_text = env_path.read_text(encoding="utf-8")
         assert "GGUF_FILE=My Custom Model.Q8_0.GGUF" in env_text
         assert "LLM_MODEL=My-Custom-Model.Q8_0" in env_text
@@ -1941,6 +2096,19 @@ class TestModelActivateRollback:
         )
         hermes_live.write_text(hermes_text, encoding="utf-8")
         hermes_template.write_text(hermes_text, encoding="utf-8")
+        opencode_dir = tmp_path / "windows-home" / ".config" / "opencode"
+        opencode_dir.mkdir(parents=True)
+        opencode_config = opencode_dir / "opencode.json"
+        opencode_compat = opencode_dir / "config.json"
+        opencode_config.write_text(
+            json.dumps({
+                "model": "llama-server/Old-Model",
+                "provider": {
+                    "llama-server": {"models": {"Old-Model": {"name": "old"}}},
+                },
+            }),
+            encoding="utf-8",
+        )
 
         def fake_run(cmd, **_kwargs):
             if cmd and cmd[0] == "curl" and cmd[-1].endswith("/models"):
@@ -1969,6 +2137,11 @@ class TestModelActivateRollback:
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(
+            _mod,
+            "_opencode_config_paths",
+            lambda: (opencode_config, opencode_compat),
+        )
         monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
         monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
         monkeypatch.setattr(_mod, "_restart_windows_lemonade", lambda _env: None)
@@ -1982,6 +2155,12 @@ class TestModelActivateRollback:
         assert "model: openai/Modern-Model" in lemonade_yaml.read_text(encoding="utf-8")
         assert 'default: "Modern-Model"' in hermes_live.read_text(encoding="utf-8")
         assert 'default: "Modern-Model"' in hermes_template.read_text(encoding="utf-8")
+        for path in (opencode_config, opencode_compat):
+            config = json.loads(path.read_text(encoding="utf-8"))
+            assert config["model"] == "llama-server/Modern-Model"
+            models = config["provider"]["llama-server"]["models"]
+            assert "Modern-Model" in models
+            assert "Old-Model" not in models
 
     def test_windows_lemonade_rollback_removes_new_litellm_config(
         self, tmp_path, monkeypatch,
@@ -2033,7 +2212,9 @@ class TestModelActivateRollback:
             lambda env: restarts.append(env["GGUF_FILE"]),
         )
         monkeypatch.setattr(_mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True)
-        monkeypatch.setattr(_mod, "_capture_perplexica_config", lambda _env: snapshot)
+        monkeypatch.setattr(
+            _mod, "_capture_perplexica_config", lambda _env, _state=None: snapshot
+        )
         monkeypatch.setattr(
             _mod,
             "_restore_perplexica_config",
@@ -2418,12 +2599,12 @@ class TestModelActivateRollback:
         hermes_live.write_text("model:\n  default: \"old-live\"\n", encoding="utf-8")
         hermes_template.write_text("model:\n  default: \"old-template\"\n", encoding="utf-8")
 
-        original_read_text = Path.read_text
+        original_read_bytes = Path.read_bytes
 
-        def fake_read_text(path, *args, **kwargs):
+        def fake_read_bytes(path, *args, **kwargs):
             if path == hermes_live:
                 raise PermissionError("container-owned")
-            return original_read_text(path, *args, **kwargs)
+            return original_read_bytes(path, *args, **kwargs)
 
         container_config = {"text": hermes_live.read_text(encoding="utf-8")}
         container_writes = []
@@ -2432,7 +2613,7 @@ class TestModelActivateRollback:
             container_writes.append(text)
             container_config["text"] = text
 
-        monkeypatch.setattr(Path, "read_text", fake_read_text)
+        monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
         monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
         monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
@@ -2631,7 +2812,7 @@ class TestModelActivateRollback:
             events.append(f"ready:{kwargs['gguf_file']}")
             return True
 
-        def restart_dependent(container):
+        def restart_dependent(container, _state=None):
             nonlocal litellm_restarts
             events.append(f"dependent:{container}")
             if container == "ods-litellm":
@@ -2656,8 +2837,6 @@ class TestModelActivateRollback:
             "ready:new-model.gguf",
             "dependent:ods-litellm",
             "runtime:old-model.gguf",
-            "dependent:ods-litellm",
-            "dependent:ods-hermes",
             "ready:old-model.gguf",
         ]
 
@@ -2687,7 +2866,9 @@ class TestModelActivateRollback:
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
         monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
         monkeypatch.setattr(_mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True)
-        monkeypatch.setattr(_mod, "_restart_existing_container", lambda _container: False)
+        monkeypatch.setattr(
+            _mod, "_restart_existing_container", lambda _container, _state=None: False
+        )
         monkeypatch.setattr(
             _mod,
             "_container_exists",
@@ -2715,7 +2896,7 @@ class TestModelActivateRollback:
         ("system_name", "expected_model_id"),
         [
             ("Linux", "new-model"),
-            ("Windows", "new-model.gguf"),
+            ("Windows", "new-model"),
         ],
     )
     def test_activation_updates_both_opencode_configs_without_losing_user_settings(
@@ -2759,7 +2940,7 @@ class TestModelActivateRollback:
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
         monkeypatch.setattr(_mod, "_opencode_config_paths", lambda: (primary, compat))
         monkeypatch.setattr(_mod.platform, "system", lambda: system_name)
-        monkeypatch.setattr(_mod, "_restart_managed_opencode", lambda: False)
+        monkeypatch.setattr(_mod, "_restart_managed_opencode", lambda _state=None: False)
         monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
         monkeypatch.setattr(_mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True)
         handler = _ResponseHandler()
@@ -2804,7 +2985,9 @@ class TestModelActivateRollback:
         monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
         monkeypatch.setattr(_mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True)
         monkeypatch.setattr(
-            _mod, "_capture_perplexica_config", lambda _env: perplexica_snapshot
+            _mod,
+            "_capture_perplexica_config",
+            lambda _env, _state=None: perplexica_snapshot,
         )
         monkeypatch.setattr(
             _mod,
@@ -2856,6 +3039,15 @@ class TestModelActivateRollback:
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
         monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
         monkeypatch.setattr(_mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(
+            _mod,
+            "_resolve_requested_tier_contract",
+            lambda _tier, _env: {
+                "GGUF_FILE": "new-model.gguf",
+                "MAX_CONTEXT": "4096",
+                "LLM_MODEL": "new-model",
+            },
+        )
         handler = _ResponseHandler()
 
         _mod.AgentHandler._do_model_activate(
@@ -2866,10 +3058,15 @@ class TestModelActivateRollback:
         )
 
         assert handler.response_code == 200
-        assert handler.parse_response() == {
-            "status": "activated",
-            "model_id": "target-model",
-        }
+        receipt = handler.parse_response()
+        assert receipt["status"] == "activated"
+        assert receipt["model_id"] == "target-model"
+        assert receipt["llm_model"] == "new-model"
+        assert receipt["gguf_file"] == "new-model.gguf"
+        assert receipt["tier"] == "0"
+        assert receipt["context_length"] == 2048
+        assert receipt["consumers"]["dashboard"] == "live_env"
+        assert receipt["consumers"]["open-webui"] == "dynamic_route"
         env = _mod.load_env(env_path)
         assert env["TIER"] == "0"
         assert env["CTX_SIZE"] == "2048"
@@ -2914,7 +3111,9 @@ class TestModelActivateRollback:
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
         monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
         monkeypatch.setattr(_mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True)
-        monkeypatch.setattr(_mod, "_capture_perplexica_config", lambda _env: snapshot)
+        monkeypatch.setattr(
+            _mod, "_capture_perplexica_config", lambda _env, _state=None: snapshot
+        )
         monkeypatch.setattr(
             _mod,
             "_update_perplexica_model",
@@ -2945,7 +3144,9 @@ class TestModelActivateRollback:
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
         monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
         monkeypatch.setattr(_mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True)
-        monkeypatch.setattr(_mod, "_capture_perplexica_config", lambda _env: snapshot)
+        monkeypatch.setattr(
+            _mod, "_capture_perplexica_config", lambda _env, _state=None: snapshot
+        )
 
         def fail_update(*_args, **_kwargs):
             raise RuntimeError("simulated Perplexica update failure")
@@ -3067,6 +3268,415 @@ class TestModelActivateRollback:
         assert handler.response_code == 500
         assert env_path.read_text(encoding="utf-8") == env_text
         assert models_ini.read_text(encoding="utf-8") == ini_text
+
+    def test_activation_preserves_stopped_consumers(self, tmp_path, monkeypatch):
+        install_dir, _env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        states = {
+            name: {"exists": True, "running": False}
+            for name in (
+                "ods-litellm",
+                "ods-hermes",
+                "ods-openclaw",
+                "ods-perplexica",
+            )
+        }
+        docker_calls = []
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "_capture_container_state", lambda name: states[name])
+        monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
+        monkeypatch.setattr(
+            _mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True
+        )
+        monkeypatch.setattr(
+            _mod.subprocess,
+            "run",
+            lambda cmd, **_kwargs: (
+                docker_calls.append(cmd)
+                or subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+            ),
+        )
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 200
+        receipt = handler.parse_response()["consumers"]
+        assert receipt["litellm"] == "stopped"
+        assert receipt["openclaw"] == "stopped"
+        assert receipt["perplexica"] == "stopped"
+        assert not any(call[:2] in (["docker", "restart"], ["docker", "stop"]) for call in docker_calls)
+
+    def test_active_lemonade_consumer_requires_running_litellm(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir, env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path, gpu_backend="amd")
+        )
+        env_path.write_text(
+            env_path.read_text(encoding="utf-8")
+            + "LLM_BACKEND=lemonade\nAMD_INFERENCE_RUNTIME=lemonade\n",
+            encoding="utf-8",
+        )
+        expected_env = env_path.read_text(encoding="utf-8")
+        states = {
+            "ods-litellm": {"exists": True, "running": False},
+            "ods-hermes": {"exists": True, "running": True},
+            "ods-openclaw": {"exists": False, "running": False},
+            "ods-perplexica": {"exists": False, "running": False},
+        }
+        restarts = []
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "_capture_container_state", lambda name: states[name])
+        monkeypatch.setattr(
+            _mod, "_compose_restart_llama_server", lambda _env: restarts.append(True)
+        )
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 500
+        response = handler.parse_response()
+        assert "Active Lemonade consumers require LiteLLM" in response["error"]
+        assert "ods-hermes" in response["error"]
+        assert "rolled_back" not in response
+        assert env_path.read_text(encoding="utf-8") == expected_env
+        assert restarts == []
+
+    def test_dependent_health_failure_rolls_back_previous_route(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir, env_path, env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        hermes_live = install_dir / "data" / "hermes" / "config.yaml"
+        hermes_template = (
+            install_dir / "extensions" / "services" / "hermes" / "cli-config.yaml.template"
+        )
+        hermes_live.parent.mkdir(parents=True)
+        hermes_template.parent.mkdir(parents=True)
+        old_config = (
+            "model:\n"
+            '  default: "old-model.gguf"\n'
+            "  context_length: 2048\n"
+        )
+        hermes_live.write_text(old_config, encoding="utf-8")
+        hermes_template.write_text(old_config, encoding="utf-8")
+        states = {
+            "ods-litellm": {"exists": False, "running": False},
+            "ods-hermes": {"exists": True, "running": True},
+            "ods-openclaw": {"exists": False, "running": False},
+            "ods-perplexica": {"exists": False, "running": False},
+        }
+        runtime_models = []
+        health_checks = 0
+
+        def check_health(container):
+            nonlocal health_checks
+            assert container == "ods-hermes"
+            health_checks += 1
+            if health_checks == 1:
+                raise RuntimeError("simulated unhealthy Hermes")
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "_capture_container_state", lambda name: states[name])
+        monkeypatch.setattr(
+            _mod,
+            "_compose_restart_llama_server",
+            lambda env: runtime_models.append(env["GGUF_FILE"]),
+        )
+        monkeypatch.setattr(
+            _mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_restart_existing_container",
+            lambda name, _state=None: name == "ods-hermes",
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_restore_container_state",
+            lambda name, _state, **_kwargs: name == "ods-hermes",
+        )
+        monkeypatch.setattr(_mod, "_verify_running_hermes_route", lambda *_args: None)
+        monkeypatch.setattr(_mod, "_wait_for_container_health", check_health)
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 500
+        assert handler.parse_response()["rolled_back"] is True
+        assert runtime_models == ["new-model.gguf", "old-model.gguf"]
+        assert health_checks == 2
+        assert env_path.read_text(encoding="utf-8") == env_text
+        assert hermes_live.read_text(encoding="utf-8") == old_config
+
+    def test_runtime_profile_cannot_exceed_requested_tier_context(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir, env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(
+            _mod,
+            "_resolve_requested_tier_contract",
+            lambda _tier, _env: {
+                "GGUF_FILE": "new-model.gguf",
+                "LLM_MODEL": "new-model",
+                "MAX_CONTEXT": "4096",
+            },
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_select_runtime_profile",
+            lambda _model, _env: {
+                "id": "larger-context-profile",
+                "label": "Larger context",
+                "context_length": 8192,
+                "env": {},
+            },
+        )
+        monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
+        monkeypatch.setattr(
+            _mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True
+        )
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(
+            handler,
+            "target-model",
+            requested_tier="1",
+        )
+
+        assert handler.response_code == 200
+        assert handler.parse_response()["context_length"] == 4096
+        assert _mod.load_env(env_path)["MAX_CONTEXT"] == "4096"
+
+    def test_tier_model_identity_mismatch_fails_before_mutation(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir, env_path, env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        restarts = []
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(
+            _mod,
+            "_resolve_requested_tier_contract",
+            lambda _tier, _env: {
+                "GGUF_FILE": "new-model.gguf",
+                "LLM_MODEL": "different-model",
+                "MAX_CONTEXT": "4096",
+            },
+        )
+        monkeypatch.setattr(
+            _mod, "_compose_restart_llama_server", lambda _env: restarts.append(True)
+        )
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(
+            handler,
+            "target-model",
+            requested_tier="1",
+        )
+
+        assert handler.response_code == 400
+        assert handler.parse_response()["code"] == "tier_model_mismatch"
+        assert env_path.read_text(encoding="utf-8") == env_text
+        assert restarts == []
+
+    def test_symlinked_config_is_rejected_before_mutation(self, tmp_path, monkeypatch):
+        install_dir, env_path, env_text, models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        outside = tmp_path / "outside.ini"
+        outside.write_text("outside\n", encoding="utf-8")
+        models_ini.unlink()
+        try:
+            models_ini.symlink_to(outside)
+        except OSError as exc:
+            pytest.skip(f"symlink creation is unavailable: {exc}")
+        restarts = []
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(
+            _mod, "_compose_restart_llama_server", lambda _env: restarts.append(True)
+        )
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 500
+        response = handler.parse_response()
+        assert "symlinked configuration file" in response["error"]
+        assert "rolled_back" not in response
+        assert env_path.read_text(encoding="utf-8") == env_text
+        assert outside.read_text(encoding="utf-8") == "outside\n"
+        assert restarts == []
+
+    def test_concurrent_env_change_is_not_overwritten(self, tmp_path, monkeypatch):
+        install_dir, env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        calls = 0
+        restarts = []
+
+        def capture_state(_name):
+            nonlocal calls
+            calls += 1
+            if calls == 4:
+                env_path.write_text("GPU_BACKEND=nvidia\nLLM_MODEL=external-edit\n", encoding="utf-8")
+            return {"exists": False, "running": False}
+
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "_capture_container_state", capture_state)
+        monkeypatch.setattr(
+            _mod, "_compose_restart_llama_server", lambda _env: restarts.append(True)
+        )
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 500
+        response = handler.parse_response()
+        assert "Configuration changed during model activation" in response["error"]
+        assert "rolled_back" not in response
+        assert "LLM_MODEL=external-edit" in env_path.read_text(encoding="utf-8")
+        assert restarts == []
+
+    def test_rollback_restores_absent_models_ini(self, tmp_path, monkeypatch):
+        install_dir, env_path, env_text, models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        models_ini.unlink()
+        readiness = iter((False, True))
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
+        monkeypatch.setattr(
+            _mod,
+            "_wait_for_model_readiness",
+            lambda *_args, **_kwargs: next(readiness),
+        )
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 500
+        assert handler.parse_response()["rolled_back"] is True
+        assert env_path.read_text(encoding="utf-8") == env_text
+        assert not models_ini.exists()
+
+    def test_jsonc_opencode_update_preserves_settings_and_removes_stale_model(
+        self, tmp_path, monkeypatch,
+    ):
+        config_path = tmp_path / "opencode.jsonc"
+        config_path.write_text(
+            """{
+              // User preference must survive.
+              "theme": "system",
+              "model": "llama-server/old-model",
+              "provider": {
+                "llama-server": {
+                  "models": {"old-model": {"name": "Old"}},
+                },
+              },
+            }
+            """,
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(_mod, "_opencode_config_paths", lambda: (config_path,))
+        snapshot = _mod._capture_opencode_config()
+
+        _mod._update_opencode_config(
+            {"GPU_BACKEND": "nvidia", "OLLAMA_PORT": "8080"},
+            snapshot,
+            "new-model",
+            4096,
+        )
+
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        assert config["theme"] == "system"
+        assert config["model"] == "llama-server/new-model"
+        models = config["provider"]["llama-server"]["models"]
+        assert "new-model" in models
+        assert "old-model" not in models
+
+    def test_current_opencode_config_wins_when_seeding_compat_file(
+        self, tmp_path, monkeypatch,
+    ):
+        current = tmp_path / ".config" / "opencode" / "opencode.json"
+        compat = current.parent / "config.json"
+        legacy = tmp_path / ".local" / "share" / "opencode" / "opencode.jsonc"
+        current.parent.mkdir(parents=True)
+        legacy.parent.mkdir(parents=True)
+        current.write_text('{"theme":"current"}', encoding="utf-8")
+        legacy.write_text('{"theme":"legacy"}', encoding="utf-8")
+        monkeypatch.setattr(
+            _mod,
+            "_opencode_config_paths",
+            lambda: (current, compat, legacy),
+        )
+        snapshot = _mod._capture_opencode_config()
+
+        _mod._update_opencode_config(
+            {"GPU_BACKEND": "nvidia", "OLLAMA_PORT": "8080"},
+            snapshot,
+            "new-model",
+            4096,
+        )
+
+        assert json.loads(compat.read_text(encoding="utf-8"))["theme"] == "current"
+
+    def test_litellm_is_verified_before_active_opencode_restarts(
+        self, tmp_path, monkeypatch,
+    ):
+        install_dir, _env_path, _env_text, _models_ini, _ini_text, _yaml, _yaml_text = (
+            _write_model_activation_fixture(tmp_path)
+        )
+        config_dir = tmp_path / "opencode-order"
+        config_dir.mkdir()
+        primary = config_dir / "opencode.json"
+        compat = config_dir / "config.json"
+        primary.write_text("{}", encoding="utf-8")
+        events = []
+        states = {
+            "ods-litellm": {"exists": True, "running": True},
+            "ods-hermes": {"exists": False, "running": False},
+            "ods-openclaw": {"exists": False, "running": False},
+            "ods-perplexica": {"exists": False, "running": False},
+        }
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "_opencode_config_paths", lambda: (primary, compat))
+        monkeypatch.setattr(_mod, "_capture_container_state", lambda name: states[name])
+        monkeypatch.setattr(
+            _mod,
+            "_capture_managed_opencode_state",
+            lambda: {"system": "Linux", "active": True},
+        )
+        monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: events.append("runtime"))
+        monkeypatch.setattr(
+            _mod,
+            "_wait_for_model_readiness",
+            lambda *_args, **_kwargs: events.append("runtime-ready") or True,
+        )
+        monkeypatch.setattr(
+            _mod,
+            "_restart_existing_container",
+            lambda name, _state=None: events.append(f"restart:{name}") or name == "ods-litellm",
+        )
+        monkeypatch.setattr(_mod, "_verify_litellm_route", lambda _env: events.append("litellm-ready"))
+        monkeypatch.setattr(
+            _mod,
+            "_restart_managed_opencode",
+            lambda _state=None: events.append("opencode-restart") or True,
+        )
+        handler = _ResponseHandler()
+
+        _mod.AgentHandler._do_model_activate(handler, "target-model")
+
+        assert handler.response_code == 200
+        assert events.index("litellm-ready") < events.index("opencode-restart")
 
 
 class TestLemonadeYamlRollback:

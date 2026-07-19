@@ -213,6 +213,46 @@ try {
 }
 
 Write-Host "[PASS] Windows local LLM endpoint and Lemonade model resolver"
+# --- Get-WindowsODSEnvMap quote handling ---
+# The parser must strip exactly one MATCHING pair of surrounding quotes.
+# Stripping each quote type independently corrupts values that contain or
+# end with the other quote character (mirrors lib/safe-env.sh on Linux).
+$envFixture = Join-Path ([System.IO.Path]::GetTempPath()) ("ods-envmap-test-" + [System.IO.Path]::GetRandomFileName() + ".env")
+@'
+PLAIN=plain-value
+DQ="hello world"
+SQ='single quoted'
+DQ_INNER_SQ="'literal'"
+SQ_INNER_DQ='"x"'
+MISMATCH=trailing-quote"
+LONE_DQ="
+EMPTY_DQ=""
+'@ | Set-Content -LiteralPath $envFixture -Encoding Ascii
+
+try {
+    $map = Get-WindowsODSEnvMap -Path $envFixture
+    $expected = @{
+        "PLAIN"       = 'plain-value'
+        "DQ"          = 'hello world'
+        "SQ"          = 'single quoted'
+        "DQ_INNER_SQ" = "'literal'"
+        "SQ_INNER_DQ" = '"x"'
+        "MISMATCH"    = 'trailing-quote"'
+        "LONE_DQ"     = '"'
+        "EMPTY_DQ"    = ''
+    }
+    foreach ($key in $expected.Keys) {
+        if ($map[$key] -cne $expected[$key]) {
+            throw "EnvMap quote handling: $key = <$($map[$key])> expected <$($expected[$key])>"
+        }
+    }
+    Write-Host "[PASS] Get-WindowsODSEnvMap strips only matched surrounding quote pairs"
+}
+finally {
+    Remove-Item -LiteralPath $envFixture -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host "[PASS] Windows local LLM endpoint resolver"
 PS_EOF
 
 if command -v cygpath >/dev/null 2>&1; then

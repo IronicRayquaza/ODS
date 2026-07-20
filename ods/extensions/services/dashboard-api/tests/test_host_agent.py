@@ -5300,7 +5300,8 @@ class TestWindowsObservability:
             auth_headers.append(url.get_header("Authorization"))
             if requested_url.endswith("/health"):
                 return Response({
-                    "status": "ok", "version": "10.0.0", "model_loaded": "model",
+                    "status": "ok", "version": "10.0.0",
+                    "model_loaded": r"C:\Users\private\model.gguf",
                     "all_models_loaded": [{"checkpoint": r"C:\Users\private\model.gguf", "last_use": 123}],
                 })
             return Response({"output_tokens": 7, "tokens_per_second": 188.49})
@@ -5310,7 +5311,7 @@ class TestWindowsObservability:
         payload = _mod._windows_llm_status()
 
         assert payload["health"] == {
-            "status": "ok", "version": "10.0.0", "model_loaded": "model",
+            "status": "ok", "version": "10.0.0", "model_loaded": "model.gguf",
         }
         assert set(payload["stats"]) == {
             "time_to_first_token", "tokens_per_second", "input_tokens",

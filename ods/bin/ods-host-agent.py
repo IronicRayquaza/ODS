@@ -2020,9 +2020,17 @@ def _windows_llm_status() -> dict | None:
             ).hexdigest()
         except (OSError, ValueError, json.JSONDecodeError, urllib_error.URLError):
             logger.debug("Windows host inference stats unavailable", exc_info=True)
+        model_loaded = raw_health.get("model_loaded")
+        if isinstance(model_loaded, str):
+            # Runtime releases may expose an absolute checkpoint path here.
+            # The dashboard needs an identity, never the host directory layout.
+            model_loaded = re.split(r"[\\/]", model_loaded.strip())[-1] or None
+        elif model_loaded is not None:
+            model_loaded = None
         health = {
-            key: raw_health.get(key)
-            for key in ("status", "version", "model_loaded")
+            "status": raw_health.get("status"),
+            "version": raw_health.get("version"),
+            "model_loaded": model_loaded,
         }
         payload = {
             "schema_version": "ods.host-llm-status.v1",

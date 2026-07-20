@@ -18,7 +18,6 @@ service:
   ui_path: /health
   type: docker
   gpu_backends: [all]
-  compose_file: compose.yaml
   category: core
   depends_on: []
   startup_check: true

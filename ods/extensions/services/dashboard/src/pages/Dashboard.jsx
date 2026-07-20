@@ -719,19 +719,23 @@ export default function Dashboard({ status, loading }) {
         })
       }
     } else {
+      const hasLiveUtilization = Number.isFinite(status.gpu.utilization)
+      const hasLiveVramUsage = Number.isFinite(status.gpu.vramUsed)
       systemMetrics.push({
         icon: Activity,
         label: 'GPU',
-        value: `${status.gpu.utilization}%`,
+        value: hasLiveUtilization ? `${status.gpu.utilization}%` : '—',
         subvalue: status.gpu.name.replace('NVIDIA ', '').replace('AMD ', ''),
-        percent: status.gpu.utilization,
+        percent: hasLiveUtilization ? status.gpu.utilization : undefined,
       })
       systemMetrics.push({
         icon: HardDrive,
         label: 'VRAM',
-        value: `${status.gpu.vramUsed.toFixed(1)} GB`,
+        value: hasLiveVramUsage ? `${status.gpu.vramUsed.toFixed(1)} GB` : '—',
         subvalue: `of ${status.gpu.vramTotal} GB`,
-        percent: status.gpu.vramTotal > 0 ? (status.gpu.vramUsed / status.gpu.vramTotal) * 100 : 0,
+        percent: hasLiveVramUsage && status.gpu.vramTotal > 0
+          ? (status.gpu.vramUsed / status.gpu.vramTotal) * 100
+          : undefined,
       })
     }
   }

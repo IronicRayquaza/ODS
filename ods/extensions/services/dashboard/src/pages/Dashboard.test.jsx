@@ -122,6 +122,25 @@ describe('Dashboard system overview', () => {
     expect(screen.getByText('Accumulated Output')).toBeInTheDocument()
   })
 
+  it('renders unavailable host GPU counters as unavailable instead of zero', async () => {
+    await renderDashboard({
+      ...baseStatus,
+      gpu: {
+        name: 'AMD Radeon RX 9070 XT',
+        vramUsed: null,
+        vramTotal: 16,
+        utilization: null,
+        temperature: null,
+        memoryType: 'discrete',
+      },
+    })
+
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(3)
+    expect(screen.getByText('Radeon RX 9070 XT')).toBeInTheDocument()
+    expect(screen.getByText('of 16 GB')).toBeInTheDocument()
+    expect(screen.queryByText('0%')).not.toBeInTheDocument()
+  })
+
   it('does not render feature discovery suggestions as a dashboard home banner', async () => {
     mockFeatureSuggestions = [{
       featureId: 'lan-web',

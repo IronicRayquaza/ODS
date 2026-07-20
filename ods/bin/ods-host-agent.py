@@ -5516,6 +5516,13 @@ class AgentHandler(BaseHTTPRequestHandler):
                     raise RuntimeError(
                         f"Could not resolve Lemonade model ID for {gguf_file}"
                     )
+                if _switchboard_adapters is not None:
+                    switchboard_adapter = _switchboard_adapters.LemonadeAdapter(
+                        wait_ready=_sb_wait_ready,
+                        expected_gguf=gguf_file,
+                        context_length=int(context_length),
+                        lemonade_model_id=lemonade_model_id,
+                    )
 
             hermes_model_name = (
                 gguf_file

@@ -121,6 +121,32 @@ class TestContainerLlamaAdapter:
         assert run["ok"] is False and run["phase"] == "verify_identity"
 
 
+class TestNativeLlamaAdapter:
+    def test_windows_native_delegation_and_kind(self):
+        calls = []
+        adapter = ad.NativeLlamaAdapter(
+            restart=lambda _e: calls.append("restart"),
+            wait_ready=lambda *a, **k: (calls.append("wait"), True)[1],
+            expected_gguf="Win.gguf",
+            context_length=8192,
+        )
+        run = rc.run_runtime_activation(adapter, {})
+        assert run["ok"] is True and run["identity"] == "Win.gguf"
+        assert adapter.kind == "llama-server"
+        assert calls == ["restart", "wait"]
+
+    def test_native_restart_failure_is_stage_boundary(self):
+        adapter = ad.NativeLlamaAdapter(
+            restart=lambda _e: (_ for _ in ()).throw(RuntimeError("launchd bootout failed")),
+            wait_ready=lambda *a, **k: True,
+            expected_gguf="Mac.gguf",
+            context_length=8192,
+        )
+        run = rc.run_runtime_activation(adapter, {})
+        assert run["ok"] is False and run["phase"] == "stage"
+        assert "launchd bootout failed" in run["detail"]
+
+
 class TestHostAgentWiring:
     def test_compose_llama_path_flows_through_reconciler(self, tmp_path, monkeypatch):
         import subprocess

@@ -98,6 +98,17 @@ class ContainerLlamaAdapter:
                       identity=self._expected_gguf)
 
 
+class NativeLlamaAdapter(ContainerLlamaAdapter):
+    """Native llama.cpp runtime (Windows process / macOS launchd+PID paths).
+
+    Identical sequencing to the container adapter; only the injected restart
+    mechanics differ (PR 2B). A distinct class keeps the runtime family
+    explicit in state/evidence and lets 2C-era policy diverge if needed.
+    """
+
+    kind = "llama-server"
+
+
 class FakeAdapter:
     """Shared transaction fake for the boundary test matrix (test-only).
 

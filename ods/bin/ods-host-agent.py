@@ -5433,19 +5433,42 @@ class AgentHandler(BaseHTTPRequestHandler):
                     )
             elif windows_native_llama:
                 runtime_restart_strategy = "windows-native-llama"
-                _restart_windows_native_llama_server(env_path, env)
+                if _switchboard_adapters is not None:
+                    switchboard_adapter = _switchboard_adapters.NativeLlamaAdapter(
+                        restart=lambda _e: _restart_windows_native_llama_server(
+                            env_path, _e
+                        ),
+                        wait_ready=_sb_wait_ready,
+                        expected_gguf=gguf_file,
+                        context_length=int(context_length),
+                    )
+                else:
+                    _restart_windows_native_llama_server(env_path, env)
             elif gpu_backend == "apple":
                 # macOS: manage native llama-server process via PID file
                 if not all((apple_llama_bin, apple_llama_log, apple_pid_file)):
                     raise RuntimeError("macOS native runtime preflight state is unavailable")
 
                 runtime_restart_strategy = "macos-native-llama"
-                _restart_macos_native_llama_server(
-                    env_path,
-                    apple_llama_bin,
-                    apple_llama_log,
-                    apple_pid_file,
-                )
+                if _switchboard_adapters is not None:
+                    switchboard_adapter = _switchboard_adapters.NativeLlamaAdapter(
+                        restart=lambda _e: _restart_macos_native_llama_server(
+                            env_path,
+                            apple_llama_bin,
+                            apple_llama_log,
+                            apple_pid_file,
+                        ),
+                        wait_ready=_sb_wait_ready,
+                        expected_gguf=gguf_file,
+                        context_length=int(context_length),
+                    )
+                else:
+                    _restart_macos_native_llama_server(
+                        env_path,
+                        apple_llama_bin,
+                        apple_llama_log,
+                        apple_pid_file,
+                    )
             elif _in_container:
                 override_image = (
                     llama_server_image

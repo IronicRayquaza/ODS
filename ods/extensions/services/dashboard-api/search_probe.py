@@ -121,7 +121,7 @@ def classify_search_result(
 
     if claims_empty and searxng_hit_count == 0:
         # Agent honestly reported empty results and SearXNG confirms engines are
-        # returning nothing — upstream throttling, not a Dream Server bug.
+        # returning nothing — upstream throttling, not an ODS bug.
         return "skip", "search_engines_throttled"
 
     if searxng_hit_count >= 1:

@@ -199,7 +199,7 @@ class TestAgentSkippedTool:
 class TestAgentIgnoredToolResults:
     def test_fail_when_searxng_has_results_but_agent_has_no_url(self):
         """SearXNG found results, tool was called, but agent produced no URL —
-        the bridge is swallowing results. Real Dream Server bug."""
+        the bridge is swallowing results. Real ODS bug."""
         verdict, reason = _classify(
             agent_reply="I searched but unfortunately the results were not helpful.",
             tool_was_called=True,

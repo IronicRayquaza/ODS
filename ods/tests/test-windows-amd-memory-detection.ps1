@@ -18,6 +18,8 @@ Assert-Equal (Test-WindowsAmdDiscreteGpuName "AMD Radeon Vega 64") $true "Vega d
 Assert-Equal (Test-WindowsAmdDiscreteGpuName "AMD Radeon 8060S Graphics") $false "Strix integrated classification"
 Assert-Equal (Test-WindowsAmdIntegratedGpuName "AMD Radeon(TM) Graphics") $true "Generic integrated classification"
 Assert-Equal (Test-WindowsAmdIntegratedGpuName "AMD Radeon Vega 8 Graphics") $true "Vega integrated classification"
+Assert-Equal (Test-WindowsAmdIntegratedGpuName "AMD Radeon(TM) 780M Graphics") $true "TM mobile integrated classification"
+Assert-Equal (Test-WindowsAmdIntegratedGpuName "AMD Radeon(TM) RX Vega 11 Graphics") $true "TM RX Vega integrated classification"
 
 $hybridAdapters = @(
     [pscustomobject]@{ Name = "AMD Radeon(TM) Graphics" },

@@ -18,8 +18,8 @@ function Test-WindowsAmdIntegratedGpuName {
     if ([string]::IsNullOrWhiteSpace($GpuName)) { return $false }
     return [bool](
         $GpuName -match '(?i)\bRadeon(?:\(TM\))?\s+Graphics$' -or
-        $GpuName -match '(?i)\bRadeon\s+\d{3,4}[MS](?:\s+Graphics)?$' -or
-        $GpuName -match '(?i)\bRadeon\s+Vega\s+\d{1,2}\s+Graphics$' -or
+        $GpuName -match '(?i)\bRadeon(?:\(TM\))?\s+\d{3,4}[MS](?:\s+Graphics)?$' -or
+        $GpuName -match '(?i)\bRadeon(?:\(TM\))?\s+(?:RX\s+)?Vega\s+\d{1,2}\s+Graphics$' -or
         $GpuName -match '(?i)\bStrix\s+Halo\b'
     )
 }

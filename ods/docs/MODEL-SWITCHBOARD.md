@@ -701,7 +701,7 @@ Merge gate: freeze the PR 9 head SHA, run section 7 with default settings, and s
 
 ## 6. Harness PRs
 
-Harness changes live in `dream-fleet-test-versioned`, are committed and pushed before deployment, and record both product and harness SHAs in every run directory and result file.
+Harness changes live in the private fleet harness repository, are committed and pushed before deployment, and record both product and harness SHAs in every run directory and result file.
 
 ### 6.1 Baseline verification commands
 
@@ -742,7 +742,7 @@ git diff --check
 Harness:
 
 ```bash
-cd dream-fleet-test-versioned
+cd "$FLEET_HARNESS_DIR"
 bash tests/run.sh
 git diff --check
 ```
@@ -860,11 +860,11 @@ Harness PR B validates exactly eight entries per expected host, six distinct via
 Canonical release invocation on Tower2 after the normal identity/lock preflight:
 
 ```bash
-cd /home/michael/dream-fleet-test
+cd "$FLEET_HARNESS_DIR"
 export MODEL_UI_PRODUCT_SHA=<40-character-pushed-product-sha>
 export MODEL_UI_MODEL_PLAN_FILE=/absolute/path/to/switchboard-release-model-plan.json
-export DREAM_FLEET_MODEL_UI_TIER=release
-export DREAM_FLEET_MODEL_UI_CYCLES=8
+export FLEET_MODEL_UI_TIER=release   # harness tier variable; exact name in the harness repo docs
+export FLEET_MODEL_UI_CYCLES=8       # harness cycle variable; exact name in the harness repo docs
 ./run.sh --phase release \
   --hosts tower2,strix-halo,spark,dgx-gpu01,m5-mbp,mac-mini,windows-laptop,strixy \
   --skip-smoke

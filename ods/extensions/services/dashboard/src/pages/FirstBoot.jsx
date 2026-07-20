@@ -42,7 +42,7 @@ const STACK_OPTIONS = [
   {
     id: 'everything',
     title: 'Full ODS Stack',
-    blurb: 'Adds agents, voice, RAG, images, research, privacy, and observability (~16GB).',
+    blurb: 'Adds agents, voice, RAG, research, privacy, and observability (~16GB). Image generation installs separately from Extensions.',
     templateId: 'onboarding-full-stack',
     Icon: Boxes,
   },
@@ -534,7 +534,7 @@ function ConfirmStep({
       <dl className="bg-theme-card border border-theme-border rounded-xl divide-y divide-theme-border mb-8">
         <Row label="Setup label" value={deviceName.trim() || 'ods'} hint="owner-card audit note" />
         <Row label="First user" value={username.trim()} />
-        <Row label="Stack" value={stackTitle} hint="applied before setup completes" />
+        <Row label="Stack" value={stackTitle} hint="services start in the background — verify on the dashboard after setup" />
       </dl>
 
       {ownerCardStatusLoading && (

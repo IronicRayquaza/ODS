@@ -2,9 +2,9 @@ schema_version: ods.templates.v1
 template:
   id: onboarding-full-stack
   name: Full ODS Stack
-  description: "The complete first-party ODS stack: agents, workflows, RAG, voice, images, research, privacy, and observability."
+  description: "The complete first-party ODS stack: agents, workflows, RAG, voice, research, privacy, and observability. Image generation (ComfyUI) is tier-gated by the installer — add it from Extensions afterward."
   icon: Layers
-  tags: [onboarding, full-stack, agents, voice, rag, images]
+  tags: [onboarding, full-stack, agents, voice, rag]
   services:
     - litellm
     - searxng
@@ -16,7 +16,6 @@ template:
     - embeddings
     - hermes
     - hermes-proxy
-    - comfyui
     - ape
     - perplexica
     - privacy-shield
@@ -24,5 +23,4 @@ template:
   tier_minimum: T2
   estimated_disk_gb: 16
   service_notes:
-    comfyui: "Requires a compatible AMD or NVIDIA GPU and is skipped on unsupported backends"
     langfuse: "Adds the observability data stack and has the largest service footprint"

@@ -138,6 +138,26 @@ function Get-WindowsODSLemonadeProcesses {
     }
 }
 
+function Test-WindowsODSLemonadeOwnsPort {
+    <#
+    .SYNOPSIS
+        Return true when a listening port belongs to a known Lemonade process.
+    #>
+    param(
+        [hashtable]$PortResult,
+        [object[]]$LemonadeProcesses = @()
+    )
+
+    if (-not $PortResult -or -not $PortResult.InUse -or [int]$PortResult.ProcessId -le 0) {
+        return $false
+    }
+
+    $listenerPid = [int]$PortResult.ProcessId
+    return [bool]@($LemonadeProcesses | Where-Object {
+        $_.ProcessId -and [int]$_.ProcessId -eq $listenerPid
+    }).Count
+}
+
 function Stop-WindowsODSLemonadePortConflicts {
     <#
     .SYNOPSIS
@@ -313,10 +333,21 @@ if ($enablePrivacyShield) {
 }
 
 $_portConflicts = @()
+$_managedLemonadeProcesses = @()
+if ($_usesNativeLemonade) {
+    $_managedLemonadeProcesses = @(Get-WindowsODSLemonadeProcesses)
+}
 foreach ($svc in $_portsToCheck.Keys) {
     $port   = $_portsToCheck[$svc]
     $result = Test-WindowsPortInUse -Port $port
     if ($result.InUse) {
+        if ($svc -eq "Lemonade (LLM)" -and
+            (Test-WindowsODSLemonadeOwnsPort `
+                -PortResult $result `
+                -LemonadeProcesses $_managedLemonadeProcesses)) {
+            Write-AI "  Port $port is already owned by the managed Lemonade runtime; it will be reused."
+            continue
+        }
         $_portConflicts += "  Port $port ($svc) in use by: $($result.ProcessName) (PID $($result.ProcessId))"
         $requirementsMet = $false
     }

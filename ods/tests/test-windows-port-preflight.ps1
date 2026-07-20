@@ -14,7 +14,11 @@ if ($errors.Count -gt 0) {
     throw "Phase 04 failed to parse: $($errors[0].Message)"
 }
 
-foreach ($name in @("Resolve-WindowsLlmPreflightPort", "Test-WindowsPortInUse")) {
+foreach ($name in @(
+    "Resolve-WindowsLlmPreflightPort",
+    "Test-WindowsPortInUse",
+    "Test-WindowsODSLemonadeOwnsPort"
+)) {
     $functionAst = $ast.Find({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
@@ -40,6 +44,8 @@ try {
     Remove-Item Env:LLAMA_SERVER_PORT -ErrorAction SilentlyContinue
 
     Assert-Equal (Resolve-WindowsLlmPreflightPort -GpuBackend "amd") 8080 "AMD default"
+    Assert-Equal (Resolve-WindowsLlmPreflightPort -GpuBackend "amd" -LemonadeDefaultPort 18081) `
+        18081 "AMD contract default"
     Assert-Equal (Resolve-WindowsLlmPreflightPort -GpuBackend "nvidia") 11434 "Docker default"
     Assert-Equal (Resolve-WindowsLlmPreflightPort -GpuBackend "amd" -CloudMode) 0 "Cloud mode"
 
@@ -92,6 +98,19 @@ try {
     } finally {
         $listener.Stop()
     }
+
+    $managedProcesses = @(
+        [pscustomobject]@{ ProcessId = 4101; Name = "lemonade-server.exe" }
+    )
+    Assert-Equal (Test-WindowsODSLemonadeOwnsPort `
+        -PortResult @{ InUse = $true; ProcessId = 4101 } `
+        -LemonadeProcesses $managedProcesses) $true "Managed Lemonade listener"
+    Assert-Equal (Test-WindowsODSLemonadeOwnsPort `
+        -PortResult @{ InUse = $true; ProcessId = 4102 } `
+        -LemonadeProcesses $managedProcesses) $false "Foreign listener"
+    Assert-Equal (Test-WindowsODSLemonadeOwnsPort `
+        -PortResult @{ InUse = $false; ProcessId = 0 } `
+        -LemonadeProcesses $managedProcesses) $false "Free port"
 } finally {
     if ($null -eq $savedAmdPort) { Remove-Item Env:AMD_INFERENCE_PORT -ErrorAction SilentlyContinue } else { $env:AMD_INFERENCE_PORT = $savedAmdPort }
     if ($null -eq $savedOllamaPort) { Remove-Item Env:OLLAMA_PORT -ErrorAction SilentlyContinue } else { $env:OLLAMA_PORT = $savedOllamaPort }

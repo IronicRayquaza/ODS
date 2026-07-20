@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.11-slim
 
 RUN addgroup --gid 10777 odsrouter && \
     adduser --uid 10777 --gid 10777 --disabled-password --gecos "" odsrouter

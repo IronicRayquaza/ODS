@@ -293,7 +293,6 @@ services:
     build:
       context: ./extensions/services/model-router
       dockerfile: Dockerfile
-    image: ods-model-router:latest
     container_name: ods-model-router
     restart: unless-stopped
     expose:

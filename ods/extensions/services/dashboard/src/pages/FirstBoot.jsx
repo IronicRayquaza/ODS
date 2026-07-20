@@ -149,18 +149,19 @@ export default function FirstBoot({ onComplete }) {
         }
 
         const applyResult = await applyResp.json()
-        if (
-          (applyResult.failed_services !== undefined && !Array.isArray(applyResult.failed_services)) ||
-          (applyResult.skipped_services !== undefined && !Array.isArray(applyResult.skipped_services))
-        ) {
+        const failed = applyResult.failed_services
+        const skipped = applyResult.skipped_services
+        const enabledCount = applyResult.enabled_count
+        const startedCount = applyResult.started_count
+        const invalidReceipt = !Array.isArray(failed) ||
+          !Array.isArray(skipped) ||
+          !Number.isInteger(enabledCount) || enabledCount < 0 ||
+          !Number.isInteger(startedCount) || startedCount < 0 ||
+          startedCount > enabledCount
+        if (invalidReceipt) {
           throw new Error(`${selectedStack.title} returned an invalid apply result. Retry Finish after updating ODS.`)
         }
-        const failed = applyResult.failed_services || []
-        const skipped = applyResult.skipped_services || []
-        const enabledCount = Number(applyResult.enabled_count)
-        const startedCount = Number(applyResult.started_count)
-        const incompleteStart = Number.isInteger(enabledCount) && enabledCount >= 0 &&
-          Number.isInteger(startedCount) && startedCount >= 0 && startedCount < enabledCount
+        const incompleteStart = startedCount < enabledCount
         if (failed.length > 0 || skipped.length > 0 || incompleteStart) {
           const details = [
             failed.length > 0 ? `failed to start: ${failed.join(', ')}` : null,

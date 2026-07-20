@@ -89,9 +89,11 @@ clean_inactive() {
   local active_ids
   active_ids=$(extract_active_ids "$sessions_json")
 
-  # No ids out of a non-empty sessions.json means the parse failed, not that
-  # every session is idle. Deleting on that reading wipes live sessions.
-  if [ -z "$active_ids" ] && [ -s "$sessions_json" ]; then
+  # No ids out of sessions.json means the parse failed or the file is a
+  # partial write (a crash mid-rewrite leaves 0 bytes), not that every
+  # session is idle. Deleting on that reading wipes live sessions, so any
+  # empty extraction fails closed — matching the remote-path guard.
+  if [ -z "$active_ids" ]; then
     log "  [WARN] No session ids parsed from $sessions_json — skipping cleanup"
     return 0
   fi

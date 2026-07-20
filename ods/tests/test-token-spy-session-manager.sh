@@ -74,5 +74,16 @@ clean_inactive "$WORK"
 pass "pretty-printed layout keeps live sessions and cleans orphans"
 rm -rf "$WORK"
 
+echo "Test 5: a zero-byte sessions.json (partial write) cancels cleanup"
+WORK="$(mktemp -d)"
+: > "$WORK/sessions.json"
+for id in aaa bbb; do echo '{}' > "$WORK/$id.jsonl"; done
+clean_inactive "$WORK"
+for id in aaa bbb; do
+  [ -f "$WORK/$id.jsonl" ] || fail "wiped $id on a zero-byte sessions.json"
+done
+pass "no session deleted when sessions.json is a partial write"
+rm -rf "$WORK"
+
 echo ""
 echo "✓ All token-spy session-manager tests passed"

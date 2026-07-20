@@ -59,14 +59,14 @@ function Resolve-WindowsODSModelCatalogId {
         throw "Model catalog is not valid JSON: $($_.Exception.Message)"
     }
 
-    $matches = @($catalog.models | Where-Object {
+    $catalogMatches = @($catalog.models | Where-Object {
         [string]$_.gguf_file -eq $GgufFile -and
         -not [string]::IsNullOrWhiteSpace([string]$_.id)
     })
-    if ($matches.Count -ne 1) {
+    if ($catalogMatches.Count -ne 1) {
         throw "Tier model must match exactly one model catalog entry: $GgufFile"
     }
-    $modelId = ([string]$matches[0].id).Trim()
+    $modelId = ([string]$catalogMatches[0].id).Trim()
     if ($modelId.Contains("`r") -or $modelId.Contains("`n")) {
         throw "Model catalog entry contains an invalid model ID"
     }

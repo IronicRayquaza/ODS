@@ -296,6 +296,8 @@ def _parse_report_dates(start: str, end: str) -> tuple[date, date, date]:
     end_day = date.fromisoformat(end)
     if end_day < start_day:
         raise ValueError("end must be on or after start")
+    if end_day == date.max:
+        raise ValueError("end date is out of range")
     # The report materializes one bucket per day in the span, so an unbounded
     # range turns a single request into millions of them. Cap it before the
     # arithmetic below, which also overflows on date.max.

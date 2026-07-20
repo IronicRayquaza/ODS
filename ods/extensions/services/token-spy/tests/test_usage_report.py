@@ -207,3 +207,12 @@ class TestReportRangeCap:
         for text, name in ((pg, "db_postgres.py"), (sqlite, "db.py")):
             assert "MAX_REPORT_RANGE_DAYS = 366" in text, name
             assert "(end_day - start_day).days >= MAX_REPORT_RANGE_DAYS" in text, name
+
+
+class TestShortSpanAtDateMax:
+    def test_short_span_at_date_max_raises_value_error(self, tmp_path, monkeypatch):
+        """An in-cap span ending at date.max must reject cleanly, not
+        overflow in the exclusive-end arithmetic and escape as a 500."""
+        db = load_sqlite_db(tmp_path, monkeypatch)
+        with pytest.raises(ValueError, match="out of range"):
+            db._parse_report_dates("9999-12-01", "9999-12-31")

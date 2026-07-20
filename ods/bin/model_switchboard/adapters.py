@@ -109,6 +109,58 @@ class NativeLlamaAdapter(ContainerLlamaAdapter):
     kind = "llama-server"
 
 
+class LemonadeAdapter:
+    """Deterministic Lemonade concrete-ID runtime (PR 2C).
+
+    The shared container restart and the post-restart model-ID resolution
+    run inline in the host agent (resolution requires a live server), so
+    this adapter's ``stage`` is a proven no-op and verification drives the
+    Lemonade-aware readiness wait. Native virtual ``collection.router``
+    registration is PR 6, not here.
+    """
+
+    kind = "lemonade"
+
+    def __init__(
+        self,
+        *,
+        wait_ready: Callable[..., bool],
+        expected_gguf: str,
+        context_length: int,
+        lemonade_model_id: str,
+    ) -> None:
+        self._wait_ready = wait_ready
+        self._expected_gguf = expected_gguf
+        self._context_length = int(context_length)
+        self._lemonade_model_id = lemonade_model_id
+
+    def stage(self, env: dict[str, str]) -> dict[str, Any]:
+        # Restart + model-ID resolution already completed inline before the
+        # reconciler runs; failure there raised before reaching this adapter.
+        if not self._lemonade_model_id:
+            return result(False, "no resolved Lemonade model id")
+        return result(True, "lemonade runtime staged inline")
+
+    def verify_identity(self, env: dict[str, str]) -> dict[str, Any]:
+        try:
+            healthy = self._wait_ready(
+                env,
+                self._expected_gguf,
+                self._context_length,
+                lemonade_model_id=self._lemonade_model_id,
+            )
+        except Exception as exc:
+            return result(False, f"lemonade readiness wait failed: {exc}")
+        if not healthy:
+            return result(False, "lemonade runtime did not report the staged model")
+        return result(True, "lemonade runtime reports staged model",
+                      identity=self._lemonade_model_id)
+
+    def verify_completion(self, env: dict[str, str]) -> dict[str, Any]:
+        return result(True, "completion proven during lemonade readiness wait",
+                      identity=self._lemonade_model_id)
+
+
 class FakeAdapter:
     """Shared transaction fake for the boundary test matrix (test-only).
 

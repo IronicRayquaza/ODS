@@ -147,6 +147,47 @@ class TestNativeLlamaAdapter:
         assert "launchd bootout failed" in run["detail"]
 
 
+class TestLemonadeAdapter:
+    def test_verify_uses_resolved_lemonade_id(self):
+        seen = {}
+
+        def wait_ready(env, gguf, ctx, lemonade_model_id=""):
+            seen["args"] = (gguf, ctx, lemonade_model_id)
+            return True
+
+        adapter = ad.LemonadeAdapter(
+            wait_ready=wait_ready,
+            expected_gguf="Q.gguf",
+            context_length=65536,
+            lemonade_model_id="extra.Q.gguf",
+        )
+        run = rc.run_runtime_activation(adapter, {})
+        assert run["ok"] is True
+        assert run["identity"] == "extra.Q.gguf"
+        assert adapter.kind == "lemonade"
+        assert seen["args"] == ("Q.gguf", 65536, "extra.Q.gguf")
+
+    def test_missing_id_is_stage_failure(self):
+        adapter = ad.LemonadeAdapter(
+            wait_ready=lambda *a, **k: True,
+            expected_gguf="Q.gguf",
+            context_length=1024,
+            lemonade_model_id="",
+        )
+        run = rc.run_runtime_activation(adapter, {})
+        assert run["ok"] is False and run["phase"] == "stage"
+
+    def test_not_ready_is_identity_failure(self):
+        adapter = ad.LemonadeAdapter(
+            wait_ready=lambda *a, **k: False,
+            expected_gguf="Q.gguf",
+            context_length=1024,
+            lemonade_model_id="extra.Q.gguf",
+        )
+        run = rc.run_runtime_activation(adapter, {})
+        assert run["ok"] is False and run["phase"] == "verify_identity"
+
+
 class TestHostAgentWiring:
     def test_compose_llama_path_flows_through_reconciler(self, tmp_path, monkeypatch):
         import subprocess

@@ -55,6 +55,14 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Dependency check — jq is required for parsing API responses.
+if ! command -v jq >/dev/null 2>&1; then
+    echo "Error: 'jq' is required for first-boot-demo.sh but was not found in PATH."
+    echo "Install it with:  sudo apt install jq   (Debian/Ubuntu)"
+    echo "                  brew install jq        (macOS)"
+    exit 1
+fi
+
 #=============================================================================
 # Helpers
 #=============================================================================

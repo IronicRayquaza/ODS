@@ -478,7 +478,7 @@ if ((${#_lemonade_ps_cmd[@]} > 0)); then
         $taskAction = New-ODSLemonadeScheduledTaskAction `
             -Contract $modern -EnvPath (Join-Path $probeRoot ".env") `
             -DiagnosticLogPath (Join-Path $probeRoot "lemonade-launch.log")
-        $launcherMatch = [regex]::Match($taskAction.Arguments, '-File\s+"([^"]+)"')
+        $launcherMatch = [regex]::Match($taskAction.Arguments, "-File\s+`"([^`"]+)`"")
         if ($taskAction.Execute -ne "powershell.exe" -or -not $launcherMatch.Success) {
             throw "Modern Lemonade task must use the secure PowerShell launcher file"
         }

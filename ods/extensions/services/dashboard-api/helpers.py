@@ -690,7 +690,7 @@ async def get_all_services() -> list[ServiceStatus]:
             try:
                 host_status = await request_agent_json("GET", "/v1/llm/status", timeout=6)
                 health = host_status.get("health")
-                if isinstance(health, dict) and (health.get("status") == "ok" or health.get("model_loaded")):
+                if isinstance(health, dict) and str(health.get("status") or "").casefold() == "ok":
                     reconciled[llama_index] = reconciled[llama_index].model_copy(
                         update={"status": "healthy"},
                     )

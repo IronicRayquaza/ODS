@@ -74,6 +74,18 @@ class TestGetGpuInfoNvidia:
         assert info is not None
         assert info.power_w is None
 
+    def test_marks_unsupported_sensors_unavailable(self, monkeypatch):
+        csv = "NVIDIA A100, 2048, 40536, [N/A], [N/A], 100.0"
+        monkeypatch.setattr("gpu.run_command", lambda cmd, **kw: (True, csv))
+
+        info = get_gpu_info_nvidia()
+
+        assert info is not None
+        assert info.utilization_percent == 0
+        assert info.temperature_c == 0
+        assert info.utilization_available is False
+        assert info.temperature_available is False
+
     def test_returns_none_on_command_failure(self, monkeypatch):
         monkeypatch.setattr("gpu.run_command", lambda cmd, **kw: (False, ""))
 
@@ -206,6 +218,9 @@ class TestGetGpuInfoApple:
         assert info.gpu_backend == "apple"
         assert info.memory_type == "unified"
         assert info.memory_used_mb > 0
+        assert info.memory_usage_available is False
+        assert info.utilization_available is False
+        assert info.temperature_available is False
 
     def test_returns_none_when_sysctl_fails(self, monkeypatch):
         monkeypatch.setattr("gpu.platform.system", lambda: "Darwin")

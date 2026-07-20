@@ -137,6 +137,8 @@ def get_gpu_info_amd() -> Optional[GPUInfo]:
             power_w=power_w,
             memory_type=memory_type,
             gpu_backend="amd",
+            utilization_available=bool(gpu_busy_str),
+            temperature_available=temp > 0,
         )
     except (ValueError, TypeError):
         return None
@@ -196,6 +198,8 @@ def get_gpu_info_nvidia() -> Optional[GPUInfo]:
                 "mem_total": mem_total,
                 "util": util,
                 "temp": temp,
+                "utilization_available": parts[3] not in na_values,
+                "temperature_available": parts[4] not in na_values,
                 "power_w": power_w,
             })
 
@@ -217,6 +221,8 @@ def get_gpu_info_nvidia() -> Optional[GPUInfo]:
                 power_w=g["power_w"],
                 memory_type=memory_type,
                 gpu_backend="nvidia",
+                utilization_available=g["utilization_available"],
+                temperature_available=g["temperature_available"],
             )
 
         # Multi-GPU: aggregate across all GPUs
@@ -248,6 +254,8 @@ def get_gpu_info_nvidia() -> Optional[GPUInfo]:
             power_w=total_power,
             memory_type=memory_type,
             gpu_backend="nvidia",
+            utilization_available=all(g["utilization_available"] for g in gpus),
+            temperature_available=any(g["temperature_available"] for g in gpus),
         )
     except (ValueError, IndexError):
         pass
@@ -302,6 +310,9 @@ def get_gpu_info_apple() -> Optional[GPUInfo]:
                 power_w=None,
                 memory_type="unified",
                 gpu_backend="apple",
+                memory_usage_available=False,
+                utilization_available=False,
+                temperature_available=False,
             )
         except (ValueError, TypeError) as e:
             logger.debug("Apple Silicon GPU detection failed: %s", e)
@@ -346,6 +357,9 @@ def get_gpu_info_apple() -> Optional[GPUInfo]:
             power_w=None,
             memory_type="unified",
             gpu_backend="apple",
+            memory_usage_available=False,
+            utilization_available=False,
+            temperature_available=False,
         )
 
     return None
@@ -581,6 +595,8 @@ def get_gpu_info_nvidia_detailed() -> Optional[list[IndividualGPU]]:
                 temperature_c=int(parts[6]) if parts[6] not in na_values else 0,
                 power_w=power_w,
                 assigned_services=uuid_service_map.get(uuid, []),
+                utilization_available=parts[5] not in na_values,
+                temperature_available=parts[6] not in na_values,
             ))
         except (ValueError, IndexError):
             logger.warning("Skipping unparseable nvidia-smi row: %s", line)
@@ -690,6 +706,8 @@ def get_gpu_info_amd_detailed() -> Optional[list[IndividualGPU]]:
                 temperature_c=temp,
                 power_w=power_w,
                 assigned_services=uuid_service_map.get(gpu_uuid, []),
+                utilization_available=bool(gpu_busy_str),
+                temperature_available=temp > 0,
             ))
         except (ValueError, TypeError):
             continue

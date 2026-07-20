@@ -59,6 +59,9 @@ def _apple_info_to_individual(info: GPUInfo) -> IndividualGPU:
         temperature_c=info.temperature_c,
         power_w=info.power_w,
         assigned_services=[],
+        memory_usage_available=info.memory_usage_available,
+        utilization_available=info.utilization_available,
+        temperature_available=info.temperature_available,
     )
 
 

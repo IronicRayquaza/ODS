@@ -152,6 +152,8 @@ class TestGetGpuInfoNvidiaDetailed:
         assert g.uuid == "GPU-abc123"
         assert g.utilization_percent == 0
         assert g.temperature_c == 0
+        assert g.utilization_available is False
+        assert g.temperature_available is False
 
     def test_parses_multi_gpu(self, monkeypatch):
         csv = (

@@ -1207,6 +1207,49 @@ class TestServiceHealthReconciliation:
         assert statuses[0].status == "healthy"
         request.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "runtime_health,expected",
+        [
+            ({"status": "ok", "model_loaded": "model.gguf"}, "healthy"),
+            ({"status": "error", "model_loaded": "model.gguf"}, "down"),
+        ],
+    )
+    async def test_host_lemonade_requires_explicit_ok_status(
+        self, monkeypatch, runtime_health, expected,
+    ):
+        import helpers
+
+        services = {
+            "llama-server": {
+                "name": "LLM", "port": 8080, "external_port": 8080,
+                "type": "docker", "container_name": "ods-llama-server",
+            },
+        }
+        monkeypatch.setattr(helpers, "SERVICES", services)
+        monkeypatch.setattr(helpers, "LLM_BACKEND", "lemonade")
+        monkeypatch.setattr(
+            helpers, "read_live_env_value",
+            lambda key: "host" if key == "AMD_INFERENCE_LOCATION" else "",
+        )
+
+        async def probe(service_id, config):
+            return ServiceStatus(
+                id=service_id, name=config["name"], port=config["port"],
+                external_port=config["external_port"], status="down",
+            )
+
+        request = AsyncMock(side_effect=[
+            {"schema_version": "ods.host-service-health.v1", "containers": []},
+            {"schema_version": "ods.host-llm-status.v1", "health": runtime_health},
+        ])
+        monkeypatch.setattr(helpers, "check_service_health", probe)
+        monkeypatch.setattr(helpers, "request_agent_json", request)
+
+        statuses = await helpers.get_all_services()
+
+        assert statuses[0].status == expected
+
 
 # --- bootstrap status ETA edge cases ---
 

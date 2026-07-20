@@ -287,6 +287,38 @@ services:
       start_period: 10s
 
   # ============================================
+  # Model Router (Switchboard stable-alias data plane)
+  # ============================================
+  model-router:
+    build:
+      context: ./extensions/services/model-router
+      dockerfile: Dockerfile
+    container_name: ods-model-router
+    restart: unless-stopped
+    expose:
+      - "9099"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    logging: *default-logging
+    environment:
+      - ODS_MODEL_STATE_PATH=/state/model-state.json
+      - ODS_ROUTER_ENDPOINTS_PATH=/config/endpoints.json
+      - ODS_ROUTER_INTERNAL_KEY=${ODS_ROUTER_INTERNAL_KEY:-}
+      - ODS_FLEET_PROBE_KEY=${ODS_FLEET_PROBE_KEY:-}
+    volumes:
+      - ${ODS_DATA_DIR:-./data}/model-state.json:/state/model-state.json:ro
+      - ${ODS_CONFIG_DIR:-./config}/model-router/endpoints.json:/config/endpoints.json:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9099/health',timeout=4).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ============================================
   # Dashboard UI (Control Center)
   # ============================================
   dashboard:

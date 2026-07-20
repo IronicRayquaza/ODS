@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { render } from '../../test/test-utils'
 import { TemplatePreview } from '../TemplatePicker' // eslint-disable-line no-unused-vars
 
@@ -17,7 +17,48 @@ const response = body => ({
 
 describe('TemplatePreview apply result', () => {
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
+  })
+
+  test('keeps a long-running apply request alive beyond two minutes', async () => {
+    let applySignal
+    let finishApply
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({
+        changes: { to_enable: ['svc-a'], already_enabled: [], incompatible: [] },
+        warnings: [],
+      }))
+      .mockImplementationOnce((_url, options) => {
+        applySignal = options.signal
+        return new Promise(resolve => { finishApply = resolve })
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<TemplatePreview template={template} onClose={vi.fn()} />)
+    const applyButton = await screen.findByRole('button', { name: /apply template/i })
+    vi.useFakeTimers()
+    fireEvent.click(applyButton)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120001)
+    })
+    expect(applySignal.aborted).toBe(false)
+    expect(screen.queryByText(/request timed out/i)).not.toBeInTheDocument()
+
+    await act(async () => {
+      finishApply(response({
+        enabled_count: 1,
+        started_count: 1,
+        failed_services: [],
+        skipped_services: [],
+        warnings: [],
+        restart_required: false,
+      }))
+      await Promise.resolve()
+    })
+    vi.useRealTimers()
+    expect(await screen.findByText(/template applied/i)).toBeInTheDocument()
   })
 
   test('does not report all services active when apply skipped a service', async () => {

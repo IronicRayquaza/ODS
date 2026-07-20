@@ -5,6 +5,7 @@ import {
 } from 'lucide-react'
 
 const ICON_MAP = { MessageSquare, Image, Code, Shield, Layers, Package }
+const TEMPLATE_APPLY_TIMEOUT_MS = 30 * 60 * 1000
 
 const fetchJson = async (url, options = {}) => {
   const c = new AbortController()
@@ -147,7 +148,7 @@ export function TemplatePreview({ template, onClose, onApplied }) {
     try {
       const res = await fetchJson(`/api/templates/${template.id}/apply`, {
         method: 'POST',
-        timeout: 120000,
+        timeout: TEMPLATE_APPLY_TIMEOUT_MS,
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()

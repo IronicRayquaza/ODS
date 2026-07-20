@@ -1,0 +1,23 @@
+services:
+  model-router:
+    build: ${ODS_EXTENSIONS_DIR:-./extensions/services}/model-router
+    image: ods-model-router:latest
+    container_name: ods-model-router
+    restart: unless-stopped
+    expose:
+      - "9099"
+    environment:
+      - ODS_MODEL_STATE_PATH=/state/model-state.json
+      - ODS_ROUTER_ENDPOINTS_PATH=/config/endpoints.json
+      - ODS_ROUTER_INTERNAL_KEY=${ODS_ROUTER_INTERNAL_KEY:-}
+      - ODS_FLEET_PROBE_KEY=${ODS_FLEET_PROBE_KEY:-}
+    volumes:
+      - ${ODS_DATA_DIR:-./data}/model-state.json:/state/model-state.json:ro
+      - ${ODS_CONFIG_DIR:-./config}/model-router/endpoints.json:/config/endpoints.json:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    networks:
+      - default

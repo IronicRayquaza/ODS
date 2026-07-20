@@ -43,8 +43,37 @@ def model_provider_by_id(settings: dict[str, object], provider_id: str) -> dict[
 def test_all_surfaces_render() -> None:
     payload = run_renderer("--surface", "all")
     surfaces = {item["surface"] for item in payload["files"]}
-    assert surfaces == {"env", "opencode", "litellm-lemonade", "perplexica", "hermes"}
+    assert surfaces == {
+        "env", "opencode", "litellm-lemonade", "perplexica", "hermes",
+        "model-router-endpoints",
+    }
     assert payload["mode"] == "dry-run"
+
+
+def test_switchboard_surface_gated_on_enabled_mode() -> None:
+    observed = run_renderer("--surface", "all", "--switchboard-mode", "observe")
+    assert "litellm-switchboard" not in {i["surface"] for i in observed["files"]}
+    enabled = run_renderer("--surface", "all", "--switchboard-mode", "enabled")
+    surfaces = {i["surface"] for i in enabled["files"]}
+    assert "litellm-switchboard" in surfaces
+    switchboard = next(i for i in enabled["files"] if i["surface"] == "litellm-switchboard")
+    assert "model_name: ods/current" in switchboard["content"]
+    assert "api_base: http://model-router:9099/v1" in switchboard["content"]
+    assert switchboard["content"].count("http://model-router:9099/v1") == 3
+
+
+def test_router_endpoints_strip_trailing_v1() -> None:
+    payload = run_renderer(
+        "--surface", "model-router-endpoints",
+        "--llm-base-url", "http://llama-server:8080/v1",
+        "--gpu-backend", "amd",
+        "--lemonade-api-base", "http://lemonade:8000/api/v1",
+    )
+    import json as _json
+    content = _json.loads(payload["files"][0]["content"])
+    by_id = {e["id"]: e["baseUrl"] for e in content["endpoints"]}
+    assert by_id["llama-server-default"] == "http://llama-server:8080"
+    assert by_id["lemonade-default"] == "http://lemonade:8000/api"
 
 
 def test_lemonade_disables_thinking_and_uses_extra_alias() -> None:

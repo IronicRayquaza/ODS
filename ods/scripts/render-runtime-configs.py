@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -36,6 +37,8 @@ class RenderInputs:
     litellm_key: str
     opencode_port: int
     context_length: int
+    # Switchboard rollout mode: legacy | observe | enabled (plan section 8)
+    switchboard_mode: str = "observe"
 
 
 @dataclass(frozen=True)
@@ -185,18 +188,83 @@ def render_env(inputs: RenderInputs) -> RenderedFile:
     return RenderedFile("env", ".env.generated", "\n".join(lines) + "\n")
 
 
+def render_litellm_switchboard(inputs: RenderInputs) -> RenderedFile:
+    """Stable-alias LiteLLM map: every public alias forwards to model-router.
+
+    Rendered only in enabled mode; legacy/observe keep the pre-switchboard
+    configuration byte-identical. The renderer owns this YAML — no installer,
+    CLI, or host-agent heredoc may maintain a second enabled-mode copy.
+    """
+    content = """model_list:
+  - model_name: ods/current
+    litellm_params:
+      model: openai/ods/current
+      api_base: http://model-router:9099/v1
+      api_key: no-key
+  - model_name: default
+    litellm_params:
+      model: openai/ods/current
+      api_base: http://model-router:9099/v1
+      api_key: no-key
+  - model_name: "*"
+    litellm_params:
+      model: openai/ods/current
+      api_base: http://model-router:9099/v1
+      api_key: no-key
+"""
+    return RenderedFile(
+        "litellm-switchboard", "config/litellm/switchboard.yaml", content
+    )
+
+
+def render_model_router_endpoints(inputs: RenderInputs) -> RenderedFile:
+    """Static endpoint allowlist for model-router (plan section 3.6).
+
+    Generated from known runtime topology at install; state may only select
+    an id from this file, never an arbitrary URL.
+    """
+    def _origin_base(url: str, fallback: str) -> str:
+        # endpoints.json stores the server base WITHOUT a trailing /v1: the
+        # router appends the full OpenAI path (/v1/chat/completions, ...).
+        base = (url or fallback).rstrip("/")
+        if base.endswith("/v1"):
+            base = base[: -len("/v1")]
+        return base
+
+    endpoints = [
+        {"id": "llama-server-default",
+         "baseUrl": _origin_base(inputs.llm_base_url, "http://llama-server:8080")},
+    ]
+    if inputs.gpu_backend.lower() == "amd" or inputs.ods_mode == "lemonade":
+        endpoints.append({
+            "id": "lemonade-default",
+            "baseUrl": _origin_base(inputs.lemonade_api_base, "http://lemonade:8000/api"),
+        })
+    content = json.dumps({"endpoints": endpoints}, indent=2) + "\n"
+    return RenderedFile(
+        "model-router-endpoints", "config/model-router/endpoints.json", content
+    )
+
+
 RENDERERS: dict[str, Callable[[RenderInputs], RenderedFile]] = {
     "env": render_env,
     "opencode": render_opencode,
     "litellm-lemonade": render_litellm_lemonade,
     "perplexica": render_perplexica,
     "hermes": render_hermes,
+    "litellm-switchboard": render_litellm_switchboard,
+    "model-router-endpoints": render_model_router_endpoints,
 }
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--surface", choices=["all", *sorted(RENDERERS)], default="all")
+    parser.add_argument(
+        "--switchboard-mode",
+        choices=["legacy", "observe", "enabled"],
+        default=os.environ.get("ODS_MODEL_SWITCHBOARD", "observe"),
+    )
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--gguf-file", default=DEFAULT_GGUF)
     parser.add_argument("--lemonade-model-id", default="")
@@ -213,14 +281,19 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def select_surfaces(surface: str) -> list[str]:
+def select_surfaces(surface: str, switchboard_mode: str = "observe") -> list[str]:
     if surface == "all":
-        return ["env", "opencode", "litellm-lemonade", "perplexica", "hermes"]
+        surfaces = ["env", "opencode", "litellm-lemonade", "perplexica", "hermes",
+                    "model-router-endpoints"]
+        if switchboard_mode == "enabled":
+            surfaces.append("litellm-switchboard")
+        return surfaces
     return [surface]
 
 
 def render(args: argparse.Namespace) -> dict[str, object]:
     inputs = RenderInputs(
+        switchboard_mode=getattr(args, 'switchboard_mode', 'observe'),
         model=args.model,
         gguf_file=args.gguf_file,
         lemonade_model_id=args.lemonade_model_id,
@@ -232,7 +305,7 @@ def render(args: argparse.Namespace) -> dict[str, object]:
         opencode_port=args.opencode_port,
         context_length=args.context_length,
     )
-    files = [RENDERERS[name](inputs) for name in select_surfaces(args.surface)]
+    files = [RENDERERS[name](inputs) for name in select_surfaces(args.surface, inputs.switchboard_mode)]
     written: list[str] = []
     if args.write:
         output_root = Path(args.output_root)

@@ -5214,6 +5214,9 @@ class AgentHandler(BaseHTTPRequestHandler):
                     pass
                 llama_server_image = runtime_profile.get("llama_server_image") or llama_server_image
                 runtime_env = runtime_profile.get("env") if isinstance(runtime_profile.get("env"), dict) else {}
+            recommended_context = _recommended_activation_context(model_id, model, env_pre)
+            if recommended_context is not None:
+                context_length = recommended_context
             if requested_context_length is not None:
                 context_length = min(int(context_length), requested_context_length)
             if tier_context_limit is not None:
@@ -5230,6 +5233,10 @@ class AgentHandler(BaseHTTPRequestHandler):
 
             # Capture every mutable file and service state before the first write.
             env_snapshot = _snapshot_text_file(env_path)
+            # A malformed install can leave models.ini as a directory; repair it
+            # before snapshotting so activation heals rather than refusing.
+            if models_ini.is_dir():
+                shutil.rmtree(models_ini)
             ini_snapshot = _snapshot_text_file(models_ini)
             lemonade_snapshot = _snapshot_text_file(lemonade_yaml)
             litellm_local_snapshot = _snapshot_text_file(litellm_local_yaml)
@@ -5504,17 +5511,6 @@ class AgentHandler(BaseHTTPRequestHandler):
                     base_url=hermes_base_url,
                     context_length=context_length,
                 )
-                hermes_template_verified = False
-                if not hermes_live_exists and not hermes_template_patched:
-                    try:
-                        hermes_template_verified = _hermes_config_matches(
-                            hermes_template_config.read_text(encoding="utf-8"),
-                            hermes_model_name,
-                            hermes_base_url,
-                            int(context_length),
-                        )
-                    except FileNotFoundError:
-                        hermes_template_verified = False
                 # A missing live file can be seeded from the patched template
                 # on the next Hermes start. An existing file was verified above.
                 hermes_patched = hermes_live_patched or (

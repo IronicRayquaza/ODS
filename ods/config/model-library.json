@@ -63,7 +63,7 @@
         "openai_chat": {
           "status": "unsupported_until_revalidated",
           "reason": "Fleet model-UI run 2026-07-16T11-44Z on windows-laptop downloaded this model with a valid SHA, but llama.cpp never reported the requested Phi-3.5 runtime identity during activation; keep it out of direct-chat and release switch coverage until revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-16T11-44-05Z-release-affected-product-d11ef611-harness-a7745b8-windows-pair/model-ui/cycle-002/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-16T11-44-05Z-release-affected-product-d11ef611-harness-a7745b8-windows-pair/model-ui/cycle-002/windows-laptop"
         }
       },
       "install_recommendation": false
@@ -89,12 +89,12 @@
         "agent_viability": {
           "status": "not_agent_viable",
           "reason": "Fleet model-UI run 2026-07-17T00-45Z on windows-laptop loaded this model successfully and the runtime reported phi4-mini-reasoning-q4, but ODS Talk timed out after the model returned no usable agent response; keep it out of agent-required release coverage until revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-17T00-45-33Z/model-ui/cycle-002/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-17T00-45-33Z/model-ui/cycle-002/windows-laptop"
         },
         "hermes_talk": {
           "status": "unsupported_until_revalidated",
           "reason": "Fleet model-UI run 2026-07-17T00-45Z on windows-laptop loaded this model successfully and direct route readiness passed, but ODS Talk did not complete the streamed verification prompt before timeout; keep it out of ODS Talk release coverage until revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-17T00-45-33Z/model-ui/cycle-002/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-17T00-45-33Z/model-ui/cycle-002/windows-laptop"
         }
       },
       "install_recommendation": false
@@ -119,12 +119,12 @@
         "agent_viability": {
           "status": "not_agent_viable",
           "reason": "Fleet model-UI run 2026-07-16T22-53Z on windows-laptop loaded this model successfully and runtime reported qwen2.5-1.5b-instruct-q4, but ODS Talk returned a generic tool-style response instead of the requested verification phrase; keep it out of agent-required release coverage until revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-16T22-53-30Z-release-affected-product-223c18ff-harness-1faf0d8-windows-laptop/model-ui/cycle-002/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-16T22-53-30Z-release-affected-product-223c18ff-harness-1faf0d8-windows-laptop/model-ui/cycle-002/windows-laptop"
         },
         "hermes_talk": {
           "status": "unsupported_until_revalidated",
           "reason": "Fleet model-UI run 2026-07-16T22-53Z on windows-laptop loaded this model successfully and runtime reported qwen2.5-1.5b-instruct-q4, but ODS Talk returned a generic tool-style response instead of the requested verification phrase; keep it out of ODS Talk release coverage until revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-16T22-53-30Z-release-affected-product-223c18ff-harness-1faf0d8-windows-laptop/model-ui/cycle-002/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-16T22-53-30Z-release-affected-product-223c18ff-harness-1faf0d8-windows-laptop/model-ui/cycle-002/windows-laptop"
         }
       },
       "install_recommendation": false
@@ -149,12 +149,12 @@
         "agent_viability": {
           "status": "not_agent_viable",
           "reason": "Fleet model-UI run 2026-07-16T16-05Z on windows-laptop loaded this model successfully, but ODS Talk did not return the requested verification phrase and asked for clarification instead; keep it out of agent-required release coverage until revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-16T16-05-53Z-release-affected-product-f22eb7f-harness-c991431-windows-laptop/model-ui/cycle-003/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-16T16-05-53Z-release-affected-product-f22eb7f-harness-c991431-windows-laptop/model-ui/cycle-003/windows-laptop"
         },
         "hermes_talk": {
           "status": "unsupported_until_revalidated",
           "reason": "Fleet model-UI run 2026-07-16T16-05Z on windows-laptop loaded this model successfully, but ODS Talk did not return the requested verification phrase and asked for clarification instead; keep it out of ODS Talk release coverage until revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-16T16-05-53Z-release-affected-product-f22eb7f-harness-c991431-windows-laptop/model-ui/cycle-003/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-16T16-05-53Z-release-affected-product-f22eb7f-harness-c991431-windows-laptop/model-ui/cycle-003/windows-laptop"
         }
       },
       "install_recommendation": false
@@ -180,12 +180,12 @@
         "agent_viability": {
           "status": "not_agent_viable",
           "reason": "Fleet model-UI run 2026-07-16T18-10Z on windows-laptop loaded this model successfully and the runtime reported granite3.3-2b-instruct-q4, but ODS Talk returned a Hermes websocket closed error and then fetch failed during the streamed verification prompt; keep it out of agent-required release coverage until revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-16T18-10-30Z-release-affected-product-bc4f77d-harness-7630b69-windows-laptop/model-ui/cycle-003/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-16T18-10-30Z-release-affected-product-bc4f77d-harness-7630b69-windows-laptop/model-ui/cycle-003/windows-laptop"
         },
         "hermes_talk": {
           "status": "unsupported_until_revalidated",
           "reason": "Fleet model-UI run 2026-07-16T18-10Z on windows-laptop loaded this model successfully and the runtime reported granite3.3-2b-instruct-q4, but ODS Talk returned a Hermes websocket closed error and then fetch failed during the streamed verification prompt; keep it out of ODS Talk release coverage until revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-16T18-10-30Z-release-affected-product-bc4f77d-harness-7630b69-windows-laptop/model-ui/cycle-003/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-16T18-10-30Z-release-affected-product-bc4f77d-harness-7630b69-windows-laptop/model-ui/cycle-003/windows-laptop"
         }
       },
       "install_recommendation": false
@@ -249,12 +249,12 @@
         "openai_chat": {
           "status": "verified",
           "reason": "Fleet model-UI run 2026-07-18T16-52Z on windows-laptop loaded this model and direct OpenAI-compatible consumers returned requested verification phrases, but all-app release coverage remains blocked pending Perplexica and Privacy Shield revalidation.",
-          "evidence": "dream-fleet-test/runs/2026-07-18T16-52-17Z-model-ui-product-e0a48a80627d-harness-c56304ac9040-hosts-windows-laptop/cycle-003/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-18T16-52-17Z-model-ui-product-e0a48a80627d-harness-c56304ac9040-hosts-windows-laptop/cycle-003/windows-laptop"
         },
         "agent_viability": {
           "status": "not_agent_viable",
           "reason": "Fleet model-UI run 2026-07-18T16-52Z on windows-laptop loaded this model and ODS Talk completed, but the required all-app probes did not complete: Perplexica timed out and Privacy Shield returned HTTP 504 while the runtime was producing very slow responses; keep it out of release-grade agent/app coverage until revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-18T16-52-17Z-model-ui-product-e0a48a80627d-harness-c56304ac9040-hosts-windows-laptop/cycle-003/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-18T16-52-17Z-model-ui-product-e0a48a80627d-harness-c56304ac9040-hosts-windows-laptop/cycle-003/windows-laptop"
         }
       },
       "install_recommendation": false
@@ -281,7 +281,7 @@
           "status": "unsupported_until_revalidated",
           "label": "Perplexica revalidation required",
           "reason": "Fleet model-UI run 2026-07-19T03:40Z on windows-laptop loaded this model and ODS Talk passed, but the Perplexica app probe answered with a search-style failure instead of the requested verification phrase; keep it out of all-app release coverage until Perplexica compatibility is revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-19T03-40-01Z-release-product-54b2f703190f-harness-2a6a4e6a55b8-hosts-windows-laptop/model-ui/cycle-003/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-19T03-40-01Z-release-product-54b2f703190f-harness-2a6a4e6a55b8-hosts-windows-laptop/model-ui/cycle-003/windows-laptop"
         }
       },
       "install_recommendation": false
@@ -324,17 +324,17 @@
         "openai_chat": {
           "status": "verified",
           "reason": "Targeted windows-laptop diagnostic on 2026-07-19 loaded granite4.0-1b-q4 and llama-server returned the requested verification phrase through the OpenAI-compatible chat API, but measured only 0.93 tok/s.",
-          "evidence": "dream-fleet-test/runs/2026-07-18T23-55-56Z-release-product-741c5a5360ae-harness-46275424f31d-hosts-windows-laptop/model-ui/cycle-005/windows-laptop plus targeted repro at 2026-07-19T01:15Z"
+          "evidence": "fleet-test/runs/2026-07-18T23-55-56Z-release-product-741c5a5360ae-harness-46275424f31d-hosts-windows-laptop/model-ui/cycle-005/windows-laptop plus targeted repro at 2026-07-19T01:15Z"
         },
         "hermes_talk": {
           "status": "unsupported_until_revalidated",
           "reason": "Fleet model-UI run 2026-07-18T23-55Z on windows-laptop loaded this model successfully, but ODS Talk timed out after 180s. A targeted direct-chat repro returned the verification phrase at 0.93 tok/s, below the 2.0 tok/s floor for ODS Talk.",
-          "evidence": "dream-fleet-test/runs/2026-07-18T23-55-56Z-release-product-741c5a5360ae-harness-46275424f31d-hosts-windows-laptop/model-ui/cycle-005/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-18T23-55-56Z-release-product-741c5a5360ae-harness-46275424f31d-hosts-windows-laptop/model-ui/cycle-005/windows-laptop"
         },
         "agent_viability": {
           "status": "not_agent_viable",
           "reason": "The model can answer direct chat, but its measured 0.93 tok/s response rate is below the 2.0 tok/s floor for agent-required workflows and ODS Talk timed out in release coverage.",
-          "evidence": "dream-fleet-test/runs/2026-07-18T23-55-56Z-release-product-741c5a5360ae-harness-46275424f31d-hosts-windows-laptop/model-ui/cycle-005/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-18T23-55-56Z-release-product-741c5a5360ae-harness-46275424f31d-hosts-windows-laptop/model-ui/cycle-005/windows-laptop"
         }
       },
       "install_recommendation": false
@@ -360,12 +360,12 @@
         "agent_viability": {
           "status": "not_agent_viable",
           "reason": "Fleet model-UI run 2026-07-19T03:40Z on windows-laptop loaded this model successfully, but ODS Talk returned only \"ODS\" instead of the requested ODSVAL verification phrase; classify it as not agent-viable until revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-19T03-40-01Z-release-product-54b2f703190f-harness-2a6a4e6a55b8-hosts-windows-laptop/model-ui/cycle-005/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-19T03-40-01Z-release-product-54b2f703190f-harness-2a6a4e6a55b8-hosts-windows-laptop/model-ui/cycle-005/windows-laptop"
         },
         "hermes_talk": {
           "status": "unsupported_until_revalidated",
           "reason": "Fleet model-UI run 2026-07-19T03:40Z on windows-laptop loaded this model successfully, but ODS Talk could not echo the requested ODSVAL verification phrase.",
-          "evidence": "dream-fleet-test/runs/2026-07-19T03-40-01Z-release-product-54b2f703190f-harness-2a6a4e6a55b8-hosts-windows-laptop/model-ui/cycle-005/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-19T03-40-01Z-release-product-54b2f703190f-harness-2a6a4e6a55b8-hosts-windows-laptop/model-ui/cycle-005/windows-laptop"
         }
       },
       "install_recommendation": false
@@ -448,12 +448,12 @@
         "agent_viability": {
           "status": "not_agent_viable",
           "reason": "Fleet model-UI run 2026-07-17T00-45Z on windows-laptop loaded this model successfully, but ODS Talk returned malformed repetitive output instead of the requested verification phrase; keep it out of agent-required release coverage until revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-17T00-45-33Z/model-ui/cycle-005/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-17T00-45-33Z/model-ui/cycle-005/windows-laptop"
         },
         "hermes_talk": {
           "status": "unsupported_until_revalidated",
           "reason": "Fleet model-UI run 2026-07-17T00-45Z on windows-laptop loaded this model successfully, but ODS Talk returned malformed repetitive output instead of the requested verification phrase; keep it out of ODS Talk release coverage until revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-17T00-45-33Z/model-ui/cycle-005/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-17T00-45-33Z/model-ui/cycle-005/windows-laptop"
         }
       },
       "install_recommendation": false
@@ -479,12 +479,12 @@
         "agent_viability": {
           "status": "not_agent_viable",
           "reason": "Fleet model-UI run 2026-07-16T20-22Z on windows-laptop loaded this model successfully, but ODS Talk returned an invalid tool/function-style payload instead of the requested verification phrase; keep it out of agent-required release coverage until revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-16T20-22-58Z-release-affected-product-712d2c0e-harness-1faf0d8-windows-laptop/model-ui/cycle-004/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-16T20-22-58Z-release-affected-product-712d2c0e-harness-1faf0d8-windows-laptop/model-ui/cycle-004/windows-laptop"
         },
         "hermes_talk": {
           "status": "unsupported_until_revalidated",
           "reason": "Fleet model-UI run 2026-07-16T20-22Z on windows-laptop loaded this model successfully, but ODS Talk returned an invalid tool/function-style payload instead of the requested verification phrase; keep it out of ODS Talk release coverage until revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-16T20-22-58Z-release-affected-product-712d2c0e-harness-1faf0d8-windows-laptop/model-ui/cycle-004/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-16T20-22-58Z-release-affected-product-712d2c0e-harness-1faf0d8-windows-laptop/model-ui/cycle-004/windows-laptop"
         }
       },
       "install_recommendation": false
@@ -510,12 +510,12 @@
         "agent_viability": {
           "status": "not_agent_viable",
           "reason": "Fleet model-UI run 2026-07-14T01-31Z on strix-halo loaded this model successfully but ODS Talk refused the verification-code prompt instead of answering; keep it out of agent-required release coverage until revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-14T01-31-17Z-release-affected-product-4ca225b8-harness-09f8f6f-tower2-strixhalo"
+          "evidence": "fleet-test/runs/2026-07-14T01-31-17Z-release-affected-product-4ca225b8-harness-09f8f6f-tower2-strixhalo"
         },
         "hermes_talk": {
           "status": "unsupported_until_revalidated",
           "reason": "Fleet model-UI run 2026-07-14T01-31Z on strix-halo loaded this model successfully but ODS Talk refused the verification-code prompt instead of answering; keep it out of agent-required release coverage until revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-14T01-31-17Z-release-affected-product-4ca225b8-harness-09f8f6f-tower2-strixhalo"
+          "evidence": "fleet-test/runs/2026-07-14T01-31-17Z-release-affected-product-4ca225b8-harness-09f8f6f-tower2-strixhalo"
         }
       },
       "install_recommendation": false
@@ -541,17 +541,17 @@
         "openai_chat": {
           "status": "verified",
           "reason": "Fleet model-UI run 2026-07-18T21-03Z on windows-laptop loaded this model and completed the required OpenAI-compatible app probes, but runtime metadata reported 32,768 context instead of the previous cataloged 128K value.",
-          "evidence": "dream-fleet-test/runs/2026-07-18T21-03-13Z-model-ui-product-137d335d3231-harness-46275424f31d-hosts-windows-laptop/cycle-004/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-18T21-03-13Z-model-ui-product-137d335d3231-harness-46275424f31d-hosts-windows-laptop/cycle-004/windows-laptop"
         },
         "agent_viability": {
           "status": "not_agent_viable",
           "reason": "The same fleet run reported only 32,768 runtime context for this GGUF on the Windows llama.cpp path, below the 64K ODS agent-release floor; keep it out of agent-required release coverage until the context source of truth is resolved.",
-          "evidence": "dream-fleet-test/runs/2026-07-18T21-03-13Z-model-ui-product-137d335d3231-harness-46275424f31d-hosts-windows-laptop/cycle-004/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-18T21-03-13Z-model-ui-product-137d335d3231-harness-46275424f31d-hosts-windows-laptop/cycle-004/windows-laptop"
         },
         "hermes_talk": {
           "status": "unsupported_until_revalidated",
           "reason": "Runtime context is below the 64K ODS Talk release floor on the Windows llama.cpp path, even though short app probes completed.",
-          "evidence": "dream-fleet-test/runs/2026-07-18T21-03-13Z-model-ui-product-137d335d3231-harness-46275424f31d-hosts-windows-laptop/cycle-004/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-18T21-03-13Z-model-ui-product-137d335d3231-harness-46275424f31d-hosts-windows-laptop/cycle-004/windows-laptop"
         }
       },
       "install_recommendation": false
@@ -576,12 +576,12 @@
         "agent_viability": {
           "status": "not_agent_viable",
           "reason": "Fleet model-UI run 2026-07-18T21-03Z on windows-laptop loaded and routed this model correctly, but llama.cpp capped context at 40,960 and ODS Talk timed out after 180s while runtime decode was about 0.5 tok/s; keep it out of agent-required release coverage until revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-18T21-03-13Z-model-ui-product-137d335d3231-harness-46275424f31d-hosts-windows-laptop/cycle-005/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-18T21-03-13Z-model-ui-product-137d335d3231-harness-46275424f31d-hosts-windows-laptop/cycle-005/windows-laptop"
         },
         "hermes_talk": {
           "status": "unsupported_until_revalidated",
           "reason": "ODS Talk timed out after the model loaded and routed correctly on windows-laptop, with runtime context capped at 40,960 and decode around 0.5 tok/s.",
-          "evidence": "dream-fleet-test/runs/2026-07-18T21-03-13Z-model-ui-product-137d335d3231-harness-46275424f31d-hosts-windows-laptop/cycle-005/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-18T21-03-13Z-model-ui-product-137d335d3231-harness-46275424f31d-hosts-windows-laptop/cycle-005/windows-laptop"
         }
       },
       "install_recommendation": false
@@ -637,12 +637,12 @@
         "agent_viability": {
           "status": "not_agent_viable",
           "reason": "Fleet model-UI run 2026-07-16T11-44Z on windows-laptop loaded this model successfully, but ODS Talk never returned the requested verification phrase; keep it out of agent-required release coverage until revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-16T11-44-05Z-release-affected-product-d11ef611-harness-a7745b8-windows-pair/model-ui/cycle-004/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-16T11-44-05Z-release-affected-product-d11ef611-harness-a7745b8-windows-pair/model-ui/cycle-004/windows-laptop"
         },
         "hermes_talk": {
           "status": "unsupported_until_revalidated",
           "reason": "Fleet model-UI run 2026-07-16T11-44Z on windows-laptop loaded this model successfully, but ODS Talk never returned the requested verification phrase; keep it out of ODS Talk release coverage until revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-16T11-44-05Z-release-affected-product-d11ef611-harness-a7745b8-windows-pair/model-ui/cycle-004/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-16T11-44-05Z-release-affected-product-d11ef611-harness-a7745b8-windows-pair/model-ui/cycle-004/windows-laptop"
         }
       },
       "install_recommendation": false
@@ -682,12 +682,12 @@
         "agent_viability": {
           "status": "not_agent_viable",
           "reason": "Fleet model-UI run 2026-07-16T11-44Z on windows-laptop loaded this model successfully, but ODS Talk timed out and the 8GB Windows host stopped responding on dashboard-api, llama-server, and SSH before cleanup; keep it out of agent-required release coverage until revalidated on 8GB-class Windows hardware.",
-          "evidence": "dream-fleet-test/runs/2026-07-16T11-44-05Z-release-affected-product-d11ef611-harness-a7745b8-windows-pair/model-ui/cycle-005/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-16T11-44-05Z-release-affected-product-d11ef611-harness-a7745b8-windows-pair/model-ui/cycle-005/windows-laptop"
         },
         "hermes_talk": {
           "status": "unsupported_until_revalidated",
           "reason": "Fleet model-UI run 2026-07-16T11-44Z on windows-laptop loaded this model successfully, but ODS Talk timed out and the 8GB Windows host stopped responding before cleanup; keep it out of ODS Talk release coverage until revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-16T11-44-05Z-release-affected-product-d11ef611-harness-a7745b8-windows-pair/model-ui/cycle-005/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-16T11-44-05Z-release-affected-product-d11ef611-harness-a7745b8-windows-pair/model-ui/cycle-005/windows-laptop"
         }
       },
       "install_recommendation": false
@@ -713,12 +713,12 @@
         "agent_viability": {
           "status": "not_agent_viable",
           "reason": "Fleet model-UI run 2026-07-14T08-31Z on strix-halo loaded this model successfully on the correct Lemonade route, but ODS Talk answered the neutral repeat prompt with a session/tool meta-response instead of the requested phrase; keep it out of agent-required release coverage until revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-14T08-31-52Z-release-affected-product-2b74ffc7-harness-dbf0068-strixhalo/model-ui/cycle-005/strix-halo"
+          "evidence": "fleet-test/runs/2026-07-14T08-31-52Z-release-affected-product-2b74ffc7-harness-dbf0068-strixhalo/model-ui/cycle-005/strix-halo"
         },
         "hermes_talk": {
           "status": "unsupported_until_revalidated",
           "reason": "Fleet model-UI run 2026-07-14T08-31Z on strix-halo loaded this model successfully on the correct Lemonade route, but ODS Talk answered the neutral repeat prompt with a session/tool meta-response instead of the requested phrase; keep it out of ODS Talk release coverage until revalidated.",
-          "evidence": "dream-fleet-test/runs/2026-07-14T08-31-52Z-release-affected-product-2b74ffc7-harness-dbf0068-strixhalo/model-ui/cycle-005/strix-halo"
+          "evidence": "fleet-test/runs/2026-07-14T08-31-52Z-release-affected-product-2b74ffc7-harness-dbf0068-strixhalo/model-ui/cycle-005/strix-halo"
         }
       },
       "install_recommendation": false
@@ -744,12 +744,12 @@
         "agent_viability": {
           "status": "not_agent_viable",
           "reason": "Fleet model-UI run 2026-07-19T03:40Z on windows-laptop loaded this model through the NVIDIA 8GB 64K profile, but ODS Talk timed out after 180s; keep it out of release-grade agent/app coverage until revalidated or profiled differently.",
-          "evidence": "dream-fleet-test/runs/2026-07-19T03-40-01Z-release-product-54b2f703190f-harness-2a6a4e6a55b8-hosts-windows-laptop/model-ui/cycle-006/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-19T03-40-01Z-release-product-54b2f703190f-harness-2a6a4e6a55b8-hosts-windows-laptop/model-ui/cycle-006/windows-laptop"
         },
         "hermes_talk": {
           "status": "unsupported_until_revalidated",
           "reason": "Fleet model-UI run 2026-07-19T03:40Z on windows-laptop loaded this model through the NVIDIA 8GB 64K profile, but ODS Talk timed out after 180s.",
-          "evidence": "dream-fleet-test/runs/2026-07-19T03-40-01Z-release-product-54b2f703190f-harness-2a6a4e6a55b8-hosts-windows-laptop/model-ui/cycle-006/windows-laptop"
+          "evidence": "fleet-test/runs/2026-07-19T03-40-01Z-release-product-54b2f703190f-harness-2a6a4e6a55b8-hosts-windows-laptop/model-ui/cycle-006/windows-laptop"
         }
       },
       "runtime_profiles": [

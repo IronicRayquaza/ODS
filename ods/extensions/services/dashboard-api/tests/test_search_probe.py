@@ -265,7 +265,7 @@ class TestProbeSearxng:
         original = sys.modules.get("httpx")
         sys.modules["httpx"] = fake_httpx
         try:
-            count = asyncio.get_event_loop().run_until_complete(
+            count = asyncio.run(
                 search_probe.probe_searxng("http://127.0.0.1:8888", "anthropic.com")
             )
         finally:
@@ -307,7 +307,7 @@ class TestProbeSearxng:
         original = sys.modules.get("httpx")
         sys.modules["httpx"] = fake_httpx
         try:
-            count = asyncio.get_event_loop().run_until_complete(
+            count = asyncio.run(
                 search_probe.probe_searxng("http://127.0.0.1:8888", "anthropic.com")
             )
         finally:
@@ -341,7 +341,7 @@ class TestProbeSearxng:
         original = sys.modules.get("httpx")
         sys.modules["httpx"] = fake_httpx
         try:
-            count = asyncio.get_event_loop().run_until_complete(
+            count = asyncio.run(
                 search_probe.probe_searxng("http://127.0.0.1:8888", "test")
             )
         finally:
@@ -370,7 +370,7 @@ class TestProbeSearxng:
         original = sys.modules.get("httpx")
         sys.modules["httpx"] = fake_httpx
         try:
-            count = asyncio.get_event_loop().run_until_complete(
+            count = asyncio.run(
                 search_probe.probe_searxng("http://127.0.0.1:8888", "test")
             )
         finally:
@@ -390,7 +390,7 @@ class TestProbeSearxng:
         try:
             # The module re-imports httpx inside the function; None won't
             # have AsyncClient, so the local-import guard triggers.
-            count = asyncio.get_event_loop().run_until_complete(
+            count = asyncio.run(
                 search_probe.probe_searxng("http://127.0.0.1:8888", "test")
             )
         except Exception:

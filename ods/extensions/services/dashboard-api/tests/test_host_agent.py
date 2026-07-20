@@ -2660,6 +2660,15 @@ class TestModelActivationModeAndMacosBridge:
         def fake_run(cmd, **_kwargs):
             if cmd and cmd[0] == "curl":
                 events.append(("validate-runtime", cmd[-1]))
+                if str(cmd[-1]).endswith("/props"):
+                    return subprocess.CompletedProcess(
+                        cmd,
+                        0,
+                        stdout=json.dumps({
+                            "default_generation_settings": {"n_ctx": 4096},
+                        }),
+                        stderr="",
+                    )
                 return subprocess.CompletedProcess(
                     cmd,
                     0,

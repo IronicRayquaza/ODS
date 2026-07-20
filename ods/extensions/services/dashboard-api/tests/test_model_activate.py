@@ -213,6 +213,23 @@ class TestCheckLemonadeHealth:
             131072,
         ) is True
 
+    def test_legacy_health_with_loaded_list_requires_matching_row(self):
+        body = json.dumps({
+            "status": "ok",
+            "version": "10.6.9",
+            "model_loaded": "extra.Model.gguf",
+            "all_models_loaded": [{
+                "model_name": "different-model",
+                "recipe_options": {"ctx_size": 131072},
+            }],
+        })
+        assert _check_lemonade_health(
+            body,
+            "Model.gguf",
+            "extra.Model.gguf",
+            131072,
+        ) is False
+
 
 class TestResolveLemonadeModelId:
 
@@ -447,8 +464,8 @@ class TestLemonadeCompletionReady:
                 stderr="",
             )
 
-        def fake_completion(host, port, model, prefix):
-            completion_calls.append((host, port, model, prefix))
+        def fake_completion(host, port, model, prefix, **expected):
+            completion_calls.append((host, port, model, prefix, expected))
             return True
 
         monkeypatch.setattr(_mod.subprocess, "run", fake_run)
@@ -469,8 +486,176 @@ class TestLemonadeCompletionReady:
             interval=0,
         ) is True
         assert completion_calls == [
-            ("127.0.0.1", "8080", "Modern-Model", "/api/v1"),
+            (
+                "127.0.0.1",
+                "8080",
+                "Modern-Model",
+                "/api/v1",
+                {
+                    "expected_model_id": "Modern-Model",
+                    "expected_gguf_file": "Model.gguf",
+                    "expected_llm_model_name": "model",
+                },
+            ),
         ]
+
+    def test_legacy_lemonade_proof_marks_context_unverified(self, monkeypatch):
+        def fake_run(cmd, **_kwargs):
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout=json.dumps({
+                    "status": "ok",
+                    "version": "10.2.0",
+                    "model_loaded": "extra.Model.gguf",
+                }),
+                stderr="",
+            )
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+        monkeypatch.setattr(_mod, "_chat_completion_ready", lambda *_a, **_k: True)
+        proof = _mod._wait_for_model_readiness(
+            {
+                "GPU_BACKEND": "amd",
+                "OLLAMA_PORT": "8080",
+                "CTX_SIZE": "4096",
+            },
+            model_id="model",
+            gguf_file="Model.gguf",
+            llm_model_name="model",
+            lemonade_model_id="extra.Model.gguf",
+            attempts=1,
+            initial_delay=0,
+            interval=0,
+            return_proof=True,
+        )
+        assert proof == {
+            "identity": "extra.Model.gguf",
+            "contextLength": 4096,
+            "contextVerified": False,
+            "verifiedAt": proof["verifiedAt"],
+        }
+
+    def test_catalog_non_agent_viability_overrides_context_floor(self):
+        model = {
+            "app_compatibility": {
+                "agent_viability": {"status": "not_agent_viable"}
+            }
+        }
+        assert _mod._model_agent_viable(model, 131072) is False
+        assert _mod._model_agent_viable({}, 131072) is True
+        assert _mod._model_agent_viable({}, 32768) is False
+
+    @pytest.mark.parametrize(
+        ("completion_model", "expected_identity"),
+        [
+            ("runtime/new-model.gguf", "runtime/new-model.gguf"),
+            ("old-model.gguf", ""),
+        ],
+    )
+    def test_readiness_returns_only_completion_verified_runtime_identity(
+        self, monkeypatch, completion_model, expected_identity
+    ):
+        def fake_run(cmd, **_kwargs):
+            url = next((str(part) for part in cmd if str(part).startswith("http")), "")
+            if url.endswith("/v1/models"):
+                body = _llama_identity_response("runtime/new-model.gguf")
+            elif url.endswith("/props"):
+                body = json.dumps({
+                    "default_generation_settings": {"n_ctx": 65536}
+                })
+            else:
+                body = json.dumps({
+                    "model": completion_model,
+                    "choices": [{"message": {"content": "READY"}}],
+                })
+            return subprocess.CompletedProcess(cmd, 0, stdout=body, stderr="")
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+        identity = _mod._wait_for_model_readiness(
+            {"GPU_BACKEND": "nvidia", "OLLAMA_PORT": "8080"},
+            model_id="new-model",
+            gguf_file="new-model.gguf",
+            llm_model_name="new-model",
+            attempts=1,
+            initial_delay=0,
+            interval=0,
+            return_identity=True,
+        )
+        assert identity == expected_identity
+
+    def test_readiness_proof_carries_actual_runtime_context(self, monkeypatch):
+        def fake_run(cmd, **_kwargs):
+            url = next((str(part) for part in cmd if str(part).startswith("http")), "")
+            if url.endswith("/v1/models"):
+                body = _llama_identity_response("runtime/new-model.gguf")
+            elif url.endswith("/props"):
+                body = json.dumps({
+                    "default_generation_settings": {"n_ctx": 65536}
+                })
+            else:
+                body = ""
+            return subprocess.CompletedProcess(cmd, 0, stdout=body, stderr="")
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+        monkeypatch.setattr(_mod, "_chat_completion_ready", lambda *_a, **_k: True)
+        proof = _mod._wait_for_model_readiness(
+            {
+                "GPU_BACKEND": "nvidia",
+                "OLLAMA_PORT": "8080",
+                "CTX_SIZE": "65536",
+            },
+            model_id="new-model",
+            gguf_file="new-model.gguf",
+            llm_model_name="new-model",
+            attempts=1,
+            initial_delay=0,
+            interval=0,
+            return_proof=True,
+        )
+        assert proof["identity"] == "runtime/new-model.gguf"
+        assert proof["contextLength"] == 65536
+        assert proof["contextVerified"] is True
+        assert proof["verifiedAt"].endswith("+00:00")
+
+    def test_readiness_rejects_runtime_context_below_requested(self, monkeypatch):
+        completion_calls = []
+
+        def fake_run(cmd, **_kwargs):
+            url = next((str(part) for part in cmd if str(part).startswith("http")), "")
+            if url.endswith("/v1/models"):
+                body = _llama_identity_response("runtime/new-model.gguf")
+            elif url.endswith("/props"):
+                body = json.dumps({
+                    "default_generation_settings": {"n_ctx": 32768}
+                })
+            else:
+                body = ""
+            return subprocess.CompletedProcess(cmd, 0, stdout=body, stderr="")
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+        monkeypatch.setattr(
+            _mod,
+            "_chat_completion_ready",
+            lambda *_a, **_k: completion_calls.append(True) or True,
+        )
+        proof = _mod._wait_for_model_readiness(
+            {
+                "GPU_BACKEND": "nvidia",
+                "OLLAMA_PORT": "8080",
+                "CTX_SIZE": "65536",
+            },
+            model_id="new-model",
+            gguf_file="new-model.gguf",
+            llm_model_name="new-model",
+            attempts=1,
+            initial_delay=0,
+            interval=0,
+            return_proof=True,
+        )
+        assert proof == {}
+        assert completion_calls == []
 
 
 # --- _write_lemonade_config ---
@@ -775,6 +960,50 @@ class TestDownstreamRouteVerification:
             "secret",
         )
         assert "Authorization: Bearer secret" in commands[0]
+
+    def test_completion_probe_requires_response_model_when_identity_expected(
+        self, monkeypatch
+    ):
+        def fake_run(_cmd, **_kwargs):
+            return subprocess.CompletedProcess(
+                _cmd,
+                0,
+                stdout=json.dumps({
+                    "model": "old-model.gguf",
+                    "choices": [{"message": {"content": "READY"}}],
+                }),
+                stderr="",
+            )
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+        assert not _mod._chat_completion_ready(
+            "127.0.0.1",
+            "8080",
+            "new-model.gguf",
+            expected_gguf_file="new-model.gguf",
+        )
+
+    def test_completion_probe_accepts_matching_runtime_identity(self, monkeypatch):
+        def fake_run(_cmd, **_kwargs):
+            return subprocess.CompletedProcess(
+                _cmd,
+                0,
+                stdout=json.dumps({
+                    "model": "runtime/new-model.gguf",
+                    "choices": [{"message": {"content": "READY"}}],
+                }),
+                stderr="",
+            )
+
+        monkeypatch.setattr(_mod.subprocess, "run", fake_run)
+
+        assert _mod._chat_completion_ready(
+            "127.0.0.1",
+            "8080",
+            "new-model.gguf",
+            expected_gguf_file="new-model.gguf",
+        )
 
     def test_litellm_probe_uses_default_route_and_master_key(self, monkeypatch):
         calls = []
@@ -1612,6 +1841,33 @@ def _llama_identity_response(model_id):
     })
 
 
+def _lemonade_health_response(model_id, context_length=4096):
+    return json.dumps({
+        "status": "ok",
+        "version": "10.7.0",
+        "model_loaded": model_id,
+        "all_models_loaded": [{
+            "model_name": model_id,
+            "recipe_options": {"ctx_size": context_length},
+        }],
+    })
+
+
+def _mock_verified_readiness(*_args, **kwargs):
+    """Mirror the production bool/identity/proof readiness return contract."""
+    identity = str(kwargs.get("gguf_file") or "mock-runtime-model.gguf")
+    if kwargs.get("return_proof"):
+        return {
+            "identity": identity,
+            "contextLength": 65536,
+            "contextVerified": True,
+            "verifiedAt": "2026-07-20T00:00:00+00:00",
+        }
+    if kwargs.get("return_identity"):
+        return identity
+    return True
+
+
 def _write_model_activation_fixture(
     tmp_path,
     gpu_backend="nvidia",
@@ -1687,6 +1943,9 @@ class TestModelActivateRollback:
     @pytest.fixture(autouse=True)
     def _successful_meaningful_completion(self, monkeypatch):
         monkeypatch.setattr(_mod, "_chat_completion_ready", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(
+            _mod, "_llama_runtime_context_length", lambda *_args: 131072
+        )
         monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
         monkeypatch.setattr(_mod, "_container_exists", lambda _container: False)
         monkeypatch.setattr(_mod, "_container_running", lambda _container: False)
@@ -1959,7 +2218,7 @@ class TestModelActivateRollback:
         def fake_run(cmd, **_kwargs):
             if cmd and cmd[0] == "curl":
                 stdout = (
-                    '{"status": "ok", "model_loaded": "extra.new-model.gguf"}'
+                    _lemonade_health_response("extra.new-model.gguf")
                     if runtime_kind == "windows-lemonade"
                     else _llama_identity_response("new-model.gguf")
                 )
@@ -2211,11 +2470,14 @@ class TestModelActivateRollback:
         monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
 
         def fake_run(cmd, **_kwargs):
-            stdout = (
-                '{"status": "ok", "model_loaded": "extra.new-model.gguf"}'
-                if cmd and cmd[0] == "curl"
-                else ""
-            )
+            if cmd and cmd[0] == "curl" and cmd[-1].endswith("/models"):
+                stdout = json.dumps({
+                    "data": [{"id": "extra.new-model.gguf"}]
+                })
+            elif cmd and cmd[0] == "curl":
+                stdout = _lemonade_health_response("extra.new-model.gguf")
+            else:
+                stdout = ""
             return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
 
         monkeypatch.setattr(_mod.subprocess, "run", fake_run)
@@ -2332,6 +2594,11 @@ class TestModelActivateRollback:
         _mod.AgentHandler._do_model_activate(handler, "target-model")
 
         assert handler.response_code == 200
+        state = json.loads(
+            (install_dir / "data" / "model-state.json").read_text(encoding="utf-8")
+        )
+        assert state["active"]["runtimeModelId"] == "Modern-Model"
+        assert state["active"]["contextLength"] == 4096
         assert "LEMONADE_MODEL=Modern-Model" in env_path.read_text(encoding="utf-8")
         assert "model: openai/Modern-Model" in lemonade_yaml.read_text(encoding="utf-8")
         assert 'default: "Modern-Model"' in hermes_live.read_text(encoding="utf-8")
@@ -2392,7 +2659,7 @@ class TestModelActivateRollback:
             "_restart_windows_lemonade",
             lambda env: restarts.append(env["GGUF_FILE"]),
         )
-        monkeypatch.setattr(_mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", _mock_verified_readiness)
         monkeypatch.setattr(
             _mod, "_capture_perplexica_config", lambda _env, _state=None: snapshot
         )
@@ -2447,11 +2714,14 @@ class TestModelActivateRollback:
 
         def fake_run(cmd, **_kwargs):
             calls.append(cmd)
-            stdout = (
-                '{"status": "ok", "model_loaded": "extra.new-model.gguf"}'
-                if cmd and cmd[0] == "curl"
-                else ""
-            )
+            if cmd and cmd[0] == "curl" and cmd[-1].endswith("/models"):
+                stdout = json.dumps({
+                    "data": [{"id": "extra.new-model.gguf"}]
+                })
+            elif cmd and cmd[0] == "curl":
+                stdout = _lemonade_health_response("extra.new-model.gguf")
+            else:
+                stdout = ""
             return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
 
         def fail_restart(_env):
@@ -2713,7 +2983,7 @@ class TestModelActivateRollback:
         monkeypatch.delenv("ODS_HOST_INSTALL_DIR", raising=False)
         monkeypatch.setattr(_mod.time, "sleep", lambda _seconds: None)
         monkeypatch.setattr(_mod, "_restart_windows_native_llama_server", restart_then_recover)
-        monkeypatch.setattr(_mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", _mock_verified_readiness)
         handler = _ResponseHandler()
 
         _mod.AgentHandler._do_model_activate(handler, "target-model")
@@ -3141,7 +3411,7 @@ class TestModelActivateRollback:
                 )
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
-        def completion_ready(_host, _port, model_name, _prefix):
+        def completion_ready(_host, _port, model_name, _prefix, **_expected):
             completion_models.append(model_name)
             return model_name == "old-model"
 
@@ -3175,6 +3445,15 @@ class TestModelActivateRollback:
 
         def readiness(env, **kwargs):
             events.append(f"ready:{kwargs['gguf_file']}")
+            if kwargs.get("return_proof"):
+                return {
+                    "identity": kwargs["gguf_file"],
+                    "contextLength": 65536,
+                    "contextVerified": True,
+                    "verifiedAt": "2026-07-20T00:00:00+00:00",
+                }
+            if kwargs.get("return_identity"):
+                return kwargs["gguf_file"]
             return True
 
         def restart_dependent(container, _state=None):
@@ -3213,7 +3492,7 @@ class TestModelActivateRollback:
         )
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
         monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
-        monkeypatch.setattr(_mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", _mock_verified_readiness)
         monkeypatch.setattr(_mod, "_container_exists", lambda _container: False)
         handler = _ResponseHandler()
 
@@ -3232,7 +3511,7 @@ class TestModelActivateRollback:
 
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
         monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
-        monkeypatch.setattr(_mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", _mock_verified_readiness)
         monkeypatch.setattr(
             _mod, "_restart_existing_container", lambda _container, _state=None: False
         )
@@ -3309,7 +3588,7 @@ class TestModelActivateRollback:
         monkeypatch.setattr(_mod.platform, "system", lambda: system_name)
         monkeypatch.setattr(_mod, "_restart_managed_opencode", lambda _state=None: False)
         monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
-        monkeypatch.setattr(_mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", _mock_verified_readiness)
         handler = _ResponseHandler()
 
         _mod.AgentHandler._do_model_activate(handler, "target-model")
@@ -3350,7 +3629,7 @@ class TestModelActivateRollback:
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
         monkeypatch.setattr(_mod, "_opencode_config_paths", lambda: (primary, compat))
         monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
-        monkeypatch.setattr(_mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", _mock_verified_readiness)
         monkeypatch.setattr(
             _mod,
             "_capture_perplexica_config",
@@ -3388,7 +3667,7 @@ class TestModelActivateRollback:
 
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
         monkeypatch.setattr(_mod, "_opencode_config_paths", lambda: (primary, compat))
-        monkeypatch.setattr(_mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", _mock_verified_readiness)
         handler = _ResponseHandler()
 
         _mod.AgentHandler._do_model_activate(handler, "target-model")
@@ -3405,7 +3684,7 @@ class TestModelActivateRollback:
         )
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
         monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
-        monkeypatch.setattr(_mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", _mock_verified_readiness)
         monkeypatch.setattr(
             _mod,
             "_resolve_requested_tier_contract",
@@ -3477,7 +3756,7 @@ class TestModelActivateRollback:
 
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
         monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
-        monkeypatch.setattr(_mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", _mock_verified_readiness)
         monkeypatch.setattr(
             _mod, "_capture_perplexica_config", lambda _env, _state=None: snapshot
         )
@@ -3512,7 +3791,7 @@ class TestModelActivateRollback:
 
         monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
         monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
-        monkeypatch.setattr(_mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", _mock_verified_readiness)
         monkeypatch.setattr(
             _mod, "_capture_perplexica_config", lambda _env, _state=None: snapshot
         )
@@ -3579,7 +3858,7 @@ class TestModelActivateRollback:
             "_compose_restart_llama_server",
             lambda env: restarted_contexts.append(int(env["MAX_CONTEXT"])),
         )
-        monkeypatch.setattr(_mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", _mock_verified_readiness)
 
         handler_b = _ResponseHandler()
         _mod.AgentHandler._do_model_activate(handler_b, "model-b")
@@ -3610,7 +3889,7 @@ class TestModelActivateRollback:
             "_recreate_llama_server",
             lambda env, override_image="": recreates.append((dict(env), override_image)),
         )
-        monkeypatch.setattr(_mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", _mock_verified_readiness)
         handler = _ResponseHandler()
 
         _mod.AgentHandler._do_model_activate(handler, "target-model")
@@ -3656,7 +3935,7 @@ class TestModelActivateRollback:
         monkeypatch.setattr(_mod, "_capture_container_state", lambda name: states[name])
         monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
         monkeypatch.setattr(
-            _mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True
+            _mod, "_wait_for_model_readiness", _mock_verified_readiness
         )
         monkeypatch.setattr(
             _mod.subprocess,
@@ -3756,7 +4035,7 @@ class TestModelActivateRollback:
             lambda env: runtime_models.append(env["GGUF_FILE"]),
         )
         monkeypatch.setattr(
-            _mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True
+            _mod, "_wait_for_model_readiness", _mock_verified_readiness
         )
         monkeypatch.setattr(
             _mod,
@@ -3809,7 +4088,7 @@ class TestModelActivateRollback:
         )
         monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: None)
         monkeypatch.setattr(
-            _mod, "_wait_for_model_readiness", lambda *_args, **_kwargs: True
+            _mod, "_wait_for_model_readiness", _mock_verified_readiness
         )
         handler = _ResponseHandler()
 
@@ -4024,11 +4303,20 @@ class TestModelActivateRollback:
             lambda: {"system": "Linux", "active": True},
         )
         monkeypatch.setattr(_mod, "_compose_restart_llama_server", lambda _env: events.append("runtime"))
-        monkeypatch.setattr(
-            _mod,
-            "_wait_for_model_readiness",
-            lambda *_args, **_kwargs: events.append("runtime-ready") or True,
-        )
+        def readiness(*_args, **kwargs):
+            events.append("runtime-ready")
+            if kwargs.get("return_proof"):
+                return {
+                    "identity": kwargs.get("gguf_file"),
+                    "contextLength": 65536,
+                    "contextVerified": True,
+                    "verifiedAt": "2026-07-20T00:00:00+00:00",
+                }
+            if kwargs.get("return_identity"):
+                return kwargs.get("gguf_file")
+            return True
+
+        monkeypatch.setattr(_mod, "_wait_for_model_readiness", readiness)
         monkeypatch.setattr(
             _mod,
             "_restart_existing_container",

@@ -469,6 +469,9 @@ def _infer_tier(gpu_info) -> str:
 
 def _infer_gpu_count(gpu_info) -> int:
     """Infer GPU count from the GPU_COUNT env var or the display name."""
+    observed_count = int(getattr(gpu_info, "gpu_count", 1) or 1)
+    if observed_count > 1:
+        return observed_count
     gpu_count_env = os.environ.get("GPU_COUNT", "")
     if gpu_count_env.isdigit():
         return int(gpu_count_env)
@@ -1283,6 +1286,7 @@ async def api_status(api_key: str = Depends(verify_api_key)):
             "disk": {"used_gb": 0, "total_gb": 0, "percent": 0},
             "system": {"uptime": 0, "hostname": os.environ.get("HOSTNAME", "ods")},
             "inference": {"tokensPerSecond": 0, "lifetimeTokens": 0,
+                          "tokenCountMode": "unavailable",
                           "loadedModel": None, "contextSize": None},
             "manifest_errors": MANIFEST_ERRORS,
         }
@@ -1391,6 +1395,7 @@ async def _build_api_status() -> dict:
         "inference": {
             "tokensPerSecond": llama_metrics_data.get("tokens_per_second", 0),
             "lifetimeTokens": llama_metrics_data.get("lifetime_tokens", 0),
+            "tokenCountMode": llama_metrics_data.get("token_count_mode", "unavailable"),
             "loadedModel": loaded_model_name,
             "contextSize": context_size or (model_data["contextLength"] if model_data else None),
         },

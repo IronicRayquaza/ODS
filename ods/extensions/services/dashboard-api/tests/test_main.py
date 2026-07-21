@@ -216,7 +216,11 @@ class TestBuildApiStatus:
         monkeypatch.setattr("main.get_model_info", lambda: ModelInfo(name="Test-32B", size_gb=16.0, context_length=32768))
         monkeypatch.setattr("main.get_bootstrap_status", lambda: BootstrapStatus(active=False))
         monkeypatch.setattr("main.get_loaded_model", AsyncMock(return_value="Test-32B"))
-        monkeypatch.setattr("main.get_llama_metrics", AsyncMock(return_value={"tokens_per_second": 25.5, "lifetime_tokens": 10000}))
+        monkeypatch.setattr("main.get_llama_metrics", AsyncMock(return_value={
+            "tokens_per_second": 25.5,
+            "lifetime_tokens": 10000,
+            "token_count_mode": "cumulative",
+        }))
         monkeypatch.setattr("main.get_llama_context_size", AsyncMock(return_value=32768))
         monkeypatch.setattr("main.get_uptime", lambda: 3600)
         monkeypatch.setattr("main.get_cpu_metrics", lambda: {"percent": 15.0, "temp_c": 55})
@@ -234,7 +238,27 @@ class TestBuildApiStatus:
         assert result["model"]["loadedModel"] == "Test-32B"
         assert result["model"]["configuredModel"] == "Test-32B"
         assert result["inference"]["tokensPerSecond"] == 25.5
+        assert result["inference"]["tokenCountMode"] == "cumulative"
         assert result["inference"]["loadedModel"] == "Test-32B"
+
+    def test_detected_gpu_count_overrides_stale_compose_default(self, monkeypatch):
+        from main import _serialize_gpu
+        from models import GPUInfo
+
+        monkeypatch.setenv("GPU_COUNT", "1")
+        gpu = GPUInfo(
+            name="AMD Radeon RX 7900 XTX + AMD Radeon RX 7800 XT",
+            memory_used_mb=8192,
+            memory_total_mb=40960,
+            memory_percent=20.0,
+            utilization_percent=40,
+            temperature_c=0,
+            gpu_backend="amd",
+            gpu_count=2,
+            temperature_available=False,
+        )
+
+        assert _serialize_gpu(gpu)["gpu_count"] == 2
 
     @pytest.mark.asyncio
     async def test_tier_professional(self, monkeypatch):

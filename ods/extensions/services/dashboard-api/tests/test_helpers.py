@@ -285,6 +285,37 @@ class TestUpdateLifetimeTokens:
         result = _update_lifetime_tokens(100.0)
         assert result == 100
 
+    @pytest.mark.parametrize("payload", [
+        [],
+        {"lifetime": "not-a-number", "last_server_counter": "bad"},
+        {"lifetime": -50, "last_server_counter": float("inf")},
+    ])
+    def test_normalizes_valid_json_with_invalid_counter_types(self, data_dir, payload):
+        token_file = data_dir / "token_counter.json"
+        token_file.write_text(json.dumps(payload))
+
+        assert _update_lifetime_tokens(25.0) == 25
+        assert _get_lifetime_tokens() == 25
+
+    def test_retries_transient_windows_replace_failure(self, data_dir, monkeypatch):
+        import helpers
+
+        real_replace = helpers.os.replace
+        calls = {"count": 0}
+
+        def transient_replace(source, destination):
+            calls["count"] += 1
+            if calls["count"] < 3:
+                raise PermissionError("temporarily locked")
+            return real_replace(source, destination)
+
+        monkeypatch.setattr(helpers.os, "replace", transient_replace)
+        monkeypatch.setattr(helpers.time, "sleep", lambda _seconds: None)
+
+        assert _update_lifetime_tokens(12.0) == 12
+        assert calls["count"] == 3
+        assert _get_lifetime_tokens() == 12
+
     def test_handles_unwritable_token_file(self, data_dir, monkeypatch):
         """When the token file cannot be written, should not raise."""
         import helpers
@@ -1051,23 +1082,8 @@ class TestGetLlamaMetricsTPS:
 
 
 class TestLemonadeMetrics:
-
-    def test_distinct_last_use_values_count_identical_completions(self, monkeypatch, tmp_path):
-        import helpers
-
-        monkeypatch.setattr(helpers, "_TOKEN_FILE", tmp_path / "token_counter.json")
-        first = {
-            "output_tokens": 7, "tokens_per_second": 42.0,
-            "input_tokens": 3, "last_use": "2026-07-20T22:00:00Z",
-        }
-        second = {**first, "last_use": "2026-07-20T22:01:00Z"}
-
-        assert helpers._update_lemonade_lifetime_tokens(first) == 7
-        assert helpers._update_lemonade_lifetime_tokens(first) == 7
-        assert helpers._update_lemonade_lifetime_tokens(second) == 14
-
     @pytest.mark.asyncio
-    async def test_host_stats_report_real_tps_and_count_each_completion_once(
+    async def test_host_stats_report_real_tps_and_latest_completion_tokens(
         self, monkeypatch, tmp_path,
     ):
         import helpers
@@ -1091,16 +1107,19 @@ class TestLemonadeMetrics:
         })
         monkeypatch.setattr(helpers, "request_agent_json", request)
 
-        first = await helpers.get_llama_metrics()
-        second = await helpers.get_llama_metrics()
+        result = await helpers.get_llama_metrics()
 
-        assert first == {"tokens_per_second": 188.5, "lifetime_tokens": 7}
-        assert second["lifetime_tokens"] == 7
-        assert json.loads(token_file.read_text())["lemonade_last_sample"]
-        assert not list(tmp_path.glob("*.tmp"))
+        assert result == {
+            "tokens_per_second": 188.5,
+            "lifetime_tokens": 7,
+            "token_count_mode": "latest_completion",
+        }
+        assert not token_file.exists()
 
     @pytest.mark.asyncio
-    async def test_unavailable_host_stats_preserve_lifetime(self, monkeypatch, tmp_path):
+    async def test_unavailable_host_stats_do_not_relabel_stale_llama_total(
+        self, monkeypatch, tmp_path,
+    ):
         import helpers
 
         token_file = tmp_path / "token_counter.json"
@@ -1115,7 +1134,11 @@ class TestLemonadeMetrics:
 
         result = await helpers.get_llama_metrics()
 
-        assert result == {"tokens_per_second": 0, "lifetime_tokens": 42}
+        assert result == {
+            "tokens_per_second": 0,
+            "lifetime_tokens": 0,
+            "token_count_mode": "unavailable",
+        }
 
     @pytest.mark.asyncio
     async def test_container_runtime_accepts_new_v1_stats_route(self, monkeypatch, tmp_path):
@@ -1147,7 +1170,11 @@ class TestLemonadeMetrics:
 
         result = await helpers.get_llama_metrics()
 
-        assert result == {"tokens_per_second": 33.3, "lifetime_tokens": 5}
+        assert result == {
+            "tokens_per_second": 33.3,
+            "lifetime_tokens": 5,
+            "token_count_mode": "latest_completion",
+        }
         assert [call.args[0] for call in client.get.await_args_list] == [
             "http://llama-server:8080/api/v1/stats",
             "http://llama-server:8080/v1/stats",

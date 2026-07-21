@@ -473,6 +473,7 @@ class TestGetRawGpusAmdHostRuntime:
         import routers.gpu as gpu_mod
 
         monkeypatch.setattr(gpu_mod, "get_gpu_info_amd_detailed", lambda: None)
+        monkeypatch.setattr(gpu_mod, "get_gpu_info_windows_host_detailed", lambda: None)
         monkeypatch.setattr(gpu_mod, "get_gpu_info_windows_host", lambda: None)
         monkeypatch.setenv("AMD_INFERENCE_RUNTIME", "lemonade")
         monkeypatch.setenv("AMD_INFERENCE_LOCATION", "host")
@@ -498,6 +499,7 @@ class TestGetRawGpusAmdHostRuntime:
         from models import GPUInfo
 
         monkeypatch.setattr(gpu_mod, "get_gpu_info_amd_detailed", lambda: None)
+        monkeypatch.setattr(gpu_mod, "get_gpu_info_windows_host_detailed", lambda: None)
         monkeypatch.setattr(gpu_mod, "get_gpu_info_windows_host", lambda: GPUInfo(
             name="AMD Radeon RX 9070 XT",
             memory_used_mb=4096,
@@ -519,6 +521,38 @@ class TestGetRawGpusAmdHostRuntime:
         assert result[0].memory_used_mb == 4096
         assert result[0].utilization_percent == 42
         assert result[0].temperature_available is False
+
+    def test_windows_host_preserves_multiple_real_adapters(self, monkeypatch):
+        import routers.gpu as gpu_mod
+        from models import IndividualGPU
+
+        expected = [
+            IndividualGPU(
+                index=index,
+                uuid=f"luid-{index}",
+                name="AMD Radeon RX 7900 XTX",
+                memory_used_mb=4096,
+                memory_total_mb=24560,
+                memory_percent=16.7,
+                utilization_percent=40 + index,
+                temperature_c=0,
+                assigned_services=["llama-server"],
+                temperature_available=False,
+            )
+            for index in range(2)
+        ]
+        monkeypatch.setattr(gpu_mod, "get_gpu_info_amd_detailed", lambda: None)
+        monkeypatch.setattr(gpu_mod, "get_gpu_info_windows_host_detailed", lambda: expected)
+        monkeypatch.setattr(
+            gpu_mod,
+            "get_gpu_info_windows_host",
+            lambda: (_ for _ in ()).throw(AssertionError("aggregate fallback should not run")),
+        )
+        monkeypatch.setenv("AMD_INFERENCE_RUNTIME", "lemonade")
+        monkeypatch.setenv("AMD_INFERENCE_LOCATION", "host")
+        monkeypatch.setenv("AMD_INFERENCE_RUNTIME_MODE", "windows-lemonade")
+
+        assert gpu_mod._get_raw_gpus("amd") == expected
 
     def test_non_windows_amd_without_sysfs_still_returns_none(self, monkeypatch):
         """Linux/container AMD installs still fail loud when no GPU is visible."""

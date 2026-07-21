@@ -74,6 +74,7 @@ represented by `null` and an explicit `*_available: false` flag.
   "schema_version": "ods.host-gpu-metrics.v1",
   "name": "AMD Radeon RX 9070 XT",
   "gpu_count": 1,
+  "memory_type": "discrete",
   "memory_total_mb": 16188,
   "memory_used_mb": 4449,
   "memory_usage_available": true,
@@ -82,9 +83,30 @@ represented by `null` and an explicit `*_available: false` flag.
   "temperature_c": null,
   "temperature_available": false,
   "source": "windows-dxgi-performance-counters",
-  "sampled_at": "2026-07-20T22:00:00+00:00"
+  "sampled_at": "2026-07-20T22:00:00+00:00",
+  "gpus": [
+    {
+      "index": 0,
+      "uuid": "luid-00000000-0000abcd",
+      "name": "AMD Radeon RX 9070 XT",
+      "memory_type": "discrete",
+      "memory_total_mb": 16188,
+      "memory_used_mb": 4449,
+      "memory_usage_available": true,
+      "utilization_percent": 12,
+      "utilization_available": true,
+      "temperature_c": null,
+      "temperature_available": false
+    }
+  ]
 }
 ```
+
+The top-level fields are a backward-compatible aggregate. `gpus` preserves
+per-adapter identity on multi-GPU hosts. Hybrid AMD systems exclude an
+integrated display adapter when discrete Radeon adapters are present. Unified
+memory APUs report `memory_type: "unified"` and include observed shared-memory
+use; unavailable counters remain explicit rather than being presented as zero.
 
 Returns 503 when the platform collector or required counters are unavailable.
 
@@ -111,16 +133,17 @@ local checkpoint paths are not returned.
     "tokens_per_second": 42.5,
     "input_tokens": 32,
     "output_tokens": 64,
-    "prompt_tokens": 32,
-    "sample_fingerprint": "<sha256>"
+    "prompt_tokens": 32
   },
   "source": "windows-loopback",
   "sampled_at": "2026-07-20T22:00:00+00:00"
 }
 ```
 
-The statistics object is `null` when health is available but optional request
-statistics are not. Returns 503 when host inference health is unavailable.
+The statistics object describes Lemonade's most recently completed request; it
+is not a cumulative counter. It is `null` when health is available but optional
+request statistics are not. Runtime responses are bounded to 1 MiB. Returns 503
+when host inference health is unavailable.
 
 ### `GET /v1/service/health`
 

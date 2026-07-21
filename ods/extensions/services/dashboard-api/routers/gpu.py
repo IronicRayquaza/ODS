@@ -16,11 +16,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from security import verify_api_key
 
 from gpu import (
+    aggregate_gpu_details,
     decode_gpu_assignment,
     get_gpu_info_amd_detailed,
     get_gpu_info_apple,
     get_gpu_info_nvidia_detailed,
     get_gpu_info_windows_host,
+    get_gpu_info_windows_host_detailed,
     read_gpu_topology,
 )
 from models import GPUInfo, IndividualGPU, MultiGPUStatus
@@ -58,6 +60,7 @@ def _apple_info_to_individual(info: GPUInfo) -> IndividualGPU:
         utilization_percent=info.utilization_percent,
         temperature_c=info.temperature_c,
         power_w=info.power_w,
+        memory_type="unified",
         assigned_services=[],
         memory_usage_available=info.memory_usage_available,
         utilization_available=info.utilization_available,
@@ -109,6 +112,10 @@ def _amd_host_runtime_fallback_gpus() -> Optional[list[IndividualGPU]]:
     if not runtime_mode.startswith("windows"):
         return None
 
+    detailed = get_gpu_info_windows_host_detailed()
+    if detailed:
+        return detailed
+
     host_info = get_gpu_info_windows_host()
     if host_info is not None:
         return [IndividualGPU(
@@ -121,6 +128,7 @@ def _amd_host_runtime_fallback_gpus() -> Optional[list[IndividualGPU]]:
             utilization_percent=host_info.utilization_percent,
             temperature_c=host_info.temperature_c,
             power_w=host_info.power_w,
+            memory_type=host_info.memory_type,
             assigned_services=["llama-server"],
             memory_usage_available=host_info.memory_usage_available,
             utilization_available=host_info.utilization_available,
@@ -145,6 +153,7 @@ def _amd_host_runtime_fallback_gpus() -> Optional[list[IndividualGPU]]:
             utilization_percent=0,
             temperature_c=0,
             power_w=None,
+            memory_type="discrete",
             assigned_services=["llama-server"],
             memory_usage_available=False,
             utilization_available=False,
@@ -152,55 +161,6 @@ def _amd_host_runtime_fallback_gpus() -> Optional[list[IndividualGPU]]:
         )
         for idx in range(count)
     ]
-
-
-def _build_aggregate(gpus: list[IndividualGPU], backend: str) -> GPUInfo:
-    """Compute an aggregate GPUInfo from a list of IndividualGPU objects."""
-    if len(gpus) == 1:
-        g = gpus[0]
-        return GPUInfo(
-            name=g.name,
-            memory_used_mb=g.memory_used_mb,
-            memory_total_mb=g.memory_total_mb,
-            memory_percent=g.memory_percent,
-            utilization_percent=g.utilization_percent,
-            temperature_c=g.temperature_c,
-            power_w=g.power_w,
-            gpu_backend=backend,
-            memory_usage_available=g.memory_usage_available,
-            utilization_available=g.utilization_available,
-            temperature_available=g.temperature_available,
-        )
-
-    mem_used = sum(g.memory_used_mb for g in gpus)
-    mem_total = sum(g.memory_total_mb for g in gpus)
-    avg_util = round(sum(g.utilization_percent for g in gpus) / len(gpus))
-    available_temps = [g.temperature_c for g in gpus if g.temperature_available]
-    max_temp = max(available_temps) if available_temps else 0
-    pw_values = [g.power_w for g in gpus if g.power_w is not None]
-    total_power: Optional[float] = round(sum(pw_values), 1) if pw_values else None
-
-    names = [g.name for g in gpus]
-    if len(set(names)) == 1:
-        display_name = f"{names[0]} \u00d7 {len(gpus)}"
-    else:
-        display_name = " + ".join(names[:2])
-        if len(names) > 2:
-            display_name += f" + {len(names) - 2} more"
-
-    return GPUInfo(
-        name=display_name,
-        memory_used_mb=mem_used,
-        memory_total_mb=mem_total,
-        memory_percent=round(mem_used / mem_total * 100, 1) if mem_total > 0 else 0.0,
-        utilization_percent=avg_util,
-        temperature_c=max_temp,
-        power_w=total_power,
-        gpu_backend=backend,
-        memory_usage_available=all(g.memory_usage_available for g in gpus),
-        utilization_available=all(g.utilization_available for g in gpus),
-        temperature_available=bool(available_temps),
-    )
 
 
 def _clean_env(name: str) -> str:
@@ -377,7 +337,7 @@ async def gpu_detailed():
     if not gpus:
         raise HTTPException(status_code=503, detail="No GPU data available")
 
-    aggregate = _build_aggregate(gpus, gpu_backend)
+    aggregate = aggregate_gpu_details(gpus, gpu_backend)
 
     assignment_full = decode_gpu_assignment()
     assignment_data = assignment_full.get("gpu_assignment") if assignment_full else None

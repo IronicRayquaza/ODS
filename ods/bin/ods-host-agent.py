@@ -64,6 +64,7 @@ SERVICE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 # never contain a path separator or ".." and escape BACKUP_DIR.
 BACKUP_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 MAX_BODY = 16384
+MAX_TELEMETRY_RESPONSE_BYTES = 1024 * 1024
 SUBPROCESS_TIMEOUT_START = 600  # 10 min — image pulls can be slow
 SUBPROCESS_TIMEOUT_STOP = 120   # 2 min — stop should be fast
 HOOK_TIMEOUT = 120              # 2 min — hook execution timeout
@@ -1766,6 +1767,24 @@ def _normalize_gpu_name(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.casefold())
 
 
+def _is_windows_amd_integrated_gpu_name(value: str) -> bool:
+    """Mirror the installer classifier used to exclude display-only iGPUs."""
+    name = str(value or "").strip()
+    return any(re.search(pattern, name, re.IGNORECASE) for pattern in (
+        r"\bRadeon(?:\(TM\))?\s+Graphics$",
+        r"\bRadeon(?:\(TM\))?\s+\d{3,4}[MS](?:\s+Graphics)?$",
+        r"\bRadeon(?:\(TM\))?\s+(?:RX\s+)?Vega\s+\d{1,2}\s+Graphics$",
+        r"\bStrix\s+Halo\b",
+    ))
+
+
+def _is_windows_amd_discrete_gpu_name(value: str) -> bool:
+    name = str(value or "").strip()
+    if _is_windows_amd_integrated_gpu_name(name):
+        return False
+    return bool(re.search(r"\b(?:AMD\s+)?Radeon\b|\bFirePro\b", name, re.IGNORECASE))
+
+
 def _select_windows_gpu_adapters(adapters: list[dict], configured_name: str = "") -> list[dict]:
     """Select the configured hardware GPU without accidentally choosing an iGPU."""
     hardware = [item for item in adapters if not item.get("software")]
@@ -1777,6 +1796,25 @@ def _select_windows_gpu_adapters(adapters: list[dict], configured_name: str = ""
         return []
 
     wanted = _normalize_gpu_name(configured_name)
+    # The Windows env historically persisted only the primary AMD name, not
+    # GPU_COUNT. Treat all discrete Radeon adapters as the compute set even if
+    # they are different models; the name still helps on integrated-only hosts.
+    if backend == "amd":
+        discrete = [
+            item for item in candidates
+            if _is_windows_amd_discrete_gpu_name(item.get("name", ""))
+        ]
+        if discrete:
+            return discrete
+        if wanted:
+            named = [
+                item for item in candidates
+                if _normalize_gpu_name(item.get("name", "")) == wanted
+            ]
+            if named:
+                return named
+        return candidates
+
     if wanted:
         named = [item for item in candidates if _normalize_gpu_name(item.get("name", "")) == wanted]
         if named:
@@ -1786,7 +1824,17 @@ def _select_windows_gpu_adapters(adapters: list[dict], configured_name: str = ""
                 expected_count = 1
             return sorted(named, key=lambda item: item.get("memory_total_mb", 0), reverse=True)[:expected_count]
 
-    return [max(candidates, key=lambda item: item.get("memory_total_mb", 0))]
+    # The Windows env historically omitted GPU_COUNT/HOST_GPU_NAME. Infer the
+    # compute set from hardware rather than silently collapsing dual Radeon
+    # systems to one adapter. On hybrid laptops, integrated Radeon Graphics is
+    # display hardware and must not become a peer when a discrete Radeon exists.
+    try:
+        expected_count = max(1, int(GPU_COUNT or "1"))
+    except ValueError:
+        expected_count = 1
+    return sorted(
+        candidates, key=lambda item: item.get("memory_total_mb", 0), reverse=True,
+    )[:expected_count]
 
 
 def _windows_dxgi_adapters() -> list[dict]:
@@ -1851,6 +1899,7 @@ def _windows_dxgi_adapters() -> list[dict]:
                             "name": desc.Description.strip(),
                             "vendor_id": int(desc.VendorId),
                             "memory_total_mb": int(desc.DedicatedVideoMemory // (1024 * 1024)),
+                            "shared_memory_total_mb": int(desc.SharedSystemMemory // (1024 * 1024)),
                             "luid_high": int(desc.AdapterLuid.HighPart),
                             "luid_low": int(desc.AdapterLuid.LowPart),
                             "software": bool(desc.Flags & 2),
@@ -1866,7 +1915,7 @@ def _windows_dxgi_adapters() -> list[dict]:
 
 
 def _windows_gpu_metrics() -> dict | None:
-    """Collect real Windows GPU utilization and dedicated-memory use."""
+    """Collect real per-adapter Windows GPU utilization and memory use."""
     global _windows_gpu_metrics_cache, _windows_dxgi_adapters_cache
     if platform.system() != "Windows":
         return None
@@ -1895,8 +1944,7 @@ def _windows_gpu_metrics() -> dict | None:
         script = rf"""
 $ErrorActionPreference = 'Stop'
 $prefixes = @({powershell_prefixes})
-$utilizations = @()
-$memoryBytes = [int64]0
+$metrics = @()
 foreach ($prefix in $prefixes) {{
   $engineTotals = @{{}}
   Get-CimInstance Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine |
@@ -1911,14 +1959,20 @@ foreach ($prefix in $prefixes) {{
   if ($engineTotals.Count -gt 0) {{
     $adapterUtil = [Math]::Min(100, ($engineTotals.Values | Measure-Object -Maximum).Maximum)
   }}
-  $utilizations += $adapterUtil
-  $dedicated = (Get-CimInstance Win32_PerfFormattedData_GPUPerformanceCounters_GPUAdapterMemory |
-    Where-Object {{ $_.Name -like "$prefix*" }} |
-    Measure-Object -Property DedicatedUsage -Sum).Sum
-  if ($null -ne $dedicated) {{ $memoryBytes += [int64]$dedicated }}
+  $memoryRows = @(Get-CimInstance Win32_PerfFormattedData_GPUPerformanceCounters_GPUAdapterMemory |
+    Where-Object {{ $_.Name -like "$prefix*" }})
+  $dedicated = ($memoryRows | Measure-Object -Property DedicatedUsage -Sum).Sum
+  $shared = ($memoryRows | Measure-Object -Property SharedUsage -Sum).Sum
+  $metrics += [pscustomobject]@{{
+    prefix = $prefix
+    utilization_percent = [int][Math]::Round($adapterUtil)
+    utilization_available = ($engineTotals.Count -gt 0)
+    dedicated_used_bytes = [int64]$(if ($null -ne $dedicated) {{ $dedicated }} else {{ 0 }})
+    shared_used_bytes = [int64]$(if ($null -ne $shared) {{ $shared }} else {{ 0 }})
+    memory_usage_available = ($memoryRows.Count -gt 0)
+  }}
 }}
-$util = if ($utilizations.Count -gt 0) {{ ($utilizations | Measure-Object -Average).Average }} else {{ 0 }}
-[pscustomobject]@{{ utilization_percent = [int][Math]::Round($util); memory_used_bytes = $memoryBytes }} |
+[pscustomobject]@{{ adapters = @($metrics) }} |
   ConvertTo-Json -Compress
 """
         try:
@@ -1929,24 +1983,75 @@ $util = if ($utilizations.Count -gt 0) {{ ($utilizations | Measure-Object -Avera
             if result.returncode != 0:
                 raise RuntimeError((result.stderr or result.stdout).strip())
             counters = json.loads(result.stdout)
-            total_mb = sum(max(0, int(item["memory_total_mb"])) for item in adapters)
-            used_mb = max(0, int(counters.get("memory_used_bytes", 0)) // (1024 * 1024))
-            used_mb = min(used_mb, total_mb)
-            names = [str(item["name"]) for item in adapters]
+            counter_rows = counters.get("adapters")
+            if not isinstance(counter_rows, list):
+                raise ValueError("GPU counter response did not contain an adapter list")
+            rows_by_prefix = {
+                str(row.get("prefix") or "").casefold(): row
+                for row in counter_rows if isinstance(row, dict)
+            }
+            try:
+                system_ram_gb = max(0, int(float(
+                    env.get("SYSTEM_RAM_GB") or env.get("HOST_RAM_GB") or 0
+                )))
+            except (TypeError, ValueError):
+                system_ram_gb = 0
+
+            gpu_rows = []
+            for index, (adapter, prefix) in enumerate(zip(adapters, prefixes)):
+                row = rows_by_prefix.get(prefix.casefold(), {})
+                dedicated_total_mb = max(0, int(adapter.get("memory_total_mb") or 0))
+                unified = (
+                    _is_windows_amd_integrated_gpu_name(adapter.get("name", ""))
+                    and dedicated_total_mb <= 4096
+                    and system_ram_gb >= 32
+                )
+                memory_type = "unified" if unified else "discrete"
+                total_mb = (
+                    int(system_ram_gb * 0.75 * 1024)
+                    if unified else dedicated_total_mb
+                )
+                dedicated_used = max(0, int(row.get("dedicated_used_bytes") or 0))
+                shared_used = max(0, int(row.get("shared_used_bytes") or 0))
+                used_bytes = dedicated_used + shared_used if unified else dedicated_used
+                used_mb = min(total_mb, used_bytes // (1024 * 1024))
+                gpu_rows.append({
+                    "index": index,
+                    "uuid": f"luid-{adapter['luid_high'] & 0xffffffff:08x}-{adapter['luid_low'] & 0xffffffff:08x}",
+                    "name": str(adapter["name"]),
+                    "memory_type": memory_type,
+                    "memory_total_mb": total_mb,
+                    "memory_used_mb": used_mb,
+                    "memory_usage_available": bool(row.get("memory_usage_available", False)),
+                    "utilization_percent": max(0, min(100, int(row.get("utilization_percent") or 0))),
+                    "utilization_available": bool(row.get("utilization_available", False)),
+                    "temperature_c": None,
+                    "temperature_available": False,
+                })
+
+            total_mb = sum(item["memory_total_mb"] for item in gpu_rows)
+            used_mb = sum(item["memory_used_mb"] for item in gpu_rows)
+            available_util = [
+                item["utilization_percent"] for item in gpu_rows
+                if item["utilization_available"]
+            ]
+            names = [item["name"] for item in gpu_rows]
             display_name = f"{names[0]} \u00d7 {len(names)}" if len(set(names)) == 1 and len(names) > 1 else " + ".join(names)
             payload = {
                 "schema_version": "ods.host-gpu-metrics.v1",
                 "name": display_name,
-                "gpu_count": len(adapters),
+                "gpu_count": len(gpu_rows),
+                "memory_type": "unified" if all(item["memory_type"] == "unified" for item in gpu_rows) else "discrete",
                 "memory_total_mb": total_mb,
                 "memory_used_mb": used_mb,
-                "memory_usage_available": True,
-                "utilization_percent": max(0, min(100, int(counters.get("utilization_percent", 0)))),
-                "utilization_available": True,
+                "memory_usage_available": all(item["memory_usage_available"] for item in gpu_rows),
+                "utilization_percent": round(sum(available_util) / len(available_util)) if available_util else 0,
+                "utilization_available": bool(available_util),
                 "temperature_c": None,
                 "temperature_available": False,
                 "source": "windows-dxgi-performance-counters",
                 "sampled_at": _iso_now(),
+                "gpus": gpu_rows,
             }
         except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired,
                 ValueError, TypeError, RuntimeError):
@@ -1986,7 +2091,10 @@ def _windows_llm_status() -> dict | None:
                     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
                     request = urllib_request.Request(f"{base}{path}", headers=headers)
                     with urllib_request.urlopen(request, timeout=4) as response:
-                        payload = json.loads(response.read().decode("utf-8"))
+                        raw = response.read(MAX_TELEMETRY_RESPONSE_BYTES + 1)
+                    if len(raw) > MAX_TELEMETRY_RESPONSE_BYTES:
+                        raise ValueError(f"{path} exceeded the telemetry response limit")
+                    payload = json.loads(raw.decode("utf-8"))
                     if not isinstance(payload, dict):
                         raise ValueError(f"{path} returned non-object JSON")
                     return payload
@@ -2011,13 +2119,6 @@ def _windows_llm_status() -> dict | None:
                     "output_tokens", "prompt_tokens",
                 )
             }
-            stats["sample_fingerprint"] = hashlib.sha256(
-                json.dumps(
-                    raw_stats,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).hexdigest()
         except (OSError, ValueError, json.JSONDecodeError, urllib_error.URLError):
             logger.debug("Windows host inference stats unavailable", exc_info=True)
         model_loaded = raw_health.get("model_loaded")

@@ -5207,6 +5207,47 @@ class TestWindowsObservability:
 
         assert len(selected) == 2
 
+    def test_adapter_selection_infers_all_discrete_amd_without_persisted_count(
+        self, monkeypatch,
+    ):
+        monkeypatch.setattr(_mod, "GPU_BACKEND", "amd")
+        monkeypatch.setattr(_mod, "GPU_COUNT", "1")
+        adapters = [
+            {"name": "AMD Radeon RX 7900 XTX", "vendor_id": 0x1002, "memory_total_mb": 24560, "software": False},
+            {"name": "AMD Radeon RX 7900 XTX", "vendor_id": 0x1002, "memory_total_mb": 24560, "software": False},
+        ]
+
+        assert len(_mod._select_windows_gpu_adapters(adapters)) == 2
+
+    def test_adapter_selection_does_not_collapse_configured_dual_amd_without_count(
+        self, monkeypatch,
+    ):
+        monkeypatch.setattr(_mod, "GPU_BACKEND", "amd")
+        monkeypatch.setattr(_mod, "GPU_COUNT", "1")
+        adapters = [
+            {"name": "AMD Radeon RX 7900 XTX", "vendor_id": 0x1002, "memory_total_mb": 24560, "software": False},
+            {"name": "AMD Radeon RX 7800 XT", "vendor_id": 0x1002, "memory_total_mb": 16368, "software": False},
+        ]
+
+        selected = _mod._select_windows_gpu_adapters(adapters, "AMD Radeon RX 7900 XTX")
+
+        assert [item["name"] for item in selected] == [
+            "AMD Radeon RX 7900 XTX", "AMD Radeon RX 7800 XT",
+        ]
+
+    def test_adapter_selection_excludes_integrated_amd_when_discrete_exists(
+        self, monkeypatch,
+    ):
+        monkeypatch.setattr(_mod, "GPU_BACKEND", "amd")
+        adapters = [
+            {"name": "AMD Radeon Graphics", "vendor_id": 0x1002, "memory_total_mb": 512, "software": False},
+            {"name": "AMD Radeon RX 9070 XT", "vendor_id": 0x1002, "memory_total_mb": 16368, "software": False},
+        ]
+
+        selected = _mod._select_windows_gpu_adapters(adapters)
+
+        assert [item["name"] for item in selected] == ["AMD Radeon RX 9070 XT"]
+
     def test_windows_gpu_metrics_are_bounded_and_cached(self, tmp_path, monkeypatch):
         monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
         monkeypatch.setattr(_mod, "GPU_BACKEND", "amd")
@@ -5218,6 +5259,7 @@ class TestWindowsObservability:
         monkeypatch.setattr(_mod, "_windows_dxgi_adapters", lambda: [{
             "name": "AMD Radeon RX 9070 XT", "vendor_id": 0x1002,
             "memory_total_mb": 16368, "luid_high": 1, "luid_low": 2,
+            "shared_memory_total_mb": 16384,
             "software": False,
         }])
         calls = []
@@ -5226,7 +5268,14 @@ class TestWindowsObservability:
             calls.append(args[0])
             return types.SimpleNamespace(
                 returncode=0,
-                stdout=json.dumps({"utilization_percent": 140, "memory_used_bytes": 99 * 1024**3}),
+                stdout=json.dumps({"adapters": [{
+                    "prefix": "luid_0x00000001_0x00000002",
+                    "utilization_percent": 140,
+                    "utilization_available": True,
+                    "dedicated_used_bytes": 99 * 1024**3,
+                    "shared_used_bytes": 0,
+                    "memory_usage_available": True,
+                }]}),
                 stderr="",
             )
 
@@ -5239,7 +5288,42 @@ class TestWindowsObservability:
         assert first["utilization_percent"] == 100
         assert first["memory_used_mb"] == first["memory_total_mb"]
         assert first["temperature_available"] is False
+        assert first["gpus"][0]["uuid"] == "luid-00000001-00000002"
         assert len(calls) == 1
+
+    def test_windows_unified_gpu_uses_shared_memory_and_system_ram(
+        self, tmp_path, monkeypatch,
+    ):
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(_mod, "GPU_BACKEND", "amd")
+        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
+        (tmp_path / ".env").write_text("SYSTEM_RAM_GB=128\n")
+        monkeypatch.setattr(_mod, "_windows_gpu_metrics_cache", (0.0, None))
+        monkeypatch.setattr(_mod, "_windows_dxgi_adapters_cache", (0.0, []))
+        monkeypatch.setattr(_mod, "_windows_dxgi_adapters", lambda: [{
+            "name": "AMD Radeon 8060S Graphics", "vendor_id": 0x1002,
+            "memory_total_mb": 2048, "shared_memory_total_mb": 65536,
+            "luid_high": 3, "luid_low": 4, "software": False,
+        }])
+        monkeypatch.setattr(_mod.subprocess, "run", lambda *args, **kwargs: types.SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"adapters": [{
+                "prefix": "luid_0x00000003_0x00000004",
+                "utilization_percent": 61,
+                "utilization_available": True,
+                "dedicated_used_bytes": 1024 * 1024**2,
+                "shared_used_bytes": 8 * 1024**3,
+                "memory_usage_available": True,
+            }]}),
+            stderr="",
+        ))
+
+        payload = _mod._windows_gpu_metrics()
+
+        assert payload["memory_type"] == "unified"
+        assert payload["memory_total_mb"] == 96 * 1024
+        assert payload["memory_used_mb"] == 9 * 1024
+        assert payload["gpus"][0]["memory_type"] == "unified"
 
     def test_windows_llm_health_survives_optional_stats_failure(self, tmp_path, monkeypatch):
         monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
@@ -5255,7 +5339,7 @@ class TestWindowsObservability:
             def __exit__(self, *_args):
                 return False
 
-            def read(self):
+            def read(self, _size=-1):
                 return b'{"status":"ok","model_loaded":"test"}'
 
         def urlopen(url, timeout):
@@ -5292,7 +5376,7 @@ class TestWindowsObservability:
             def __exit__(self, *_args):
                 return False
 
-            def read(self):
+            def read(self, _size=-1):
                 return json.dumps(self.payload).encode("utf-8")
 
         def urlopen(url, timeout):
@@ -5315,13 +5399,12 @@ class TestWindowsObservability:
         }
         assert set(payload["stats"]) == {
             "time_to_first_token", "tokens_per_second", "input_tokens",
-            "output_tokens", "prompt_tokens", "sample_fingerprint",
+            "output_tokens", "prompt_tokens",
         }
-        assert len(payload["stats"]["sample_fingerprint"]) == 64
         assert "private" not in json.dumps(payload)
         assert auth_headers == ["Bearer secret-key", "Bearer secret-key"]
 
-    def test_windows_llm_sample_identity_ignores_unrelated_health_changes(
+    def test_windows_llm_stats_exclude_unrelated_health_fields(
         self, tmp_path, monkeypatch,
     ):
         monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
@@ -5339,7 +5422,7 @@ class TestWindowsObservability:
             def __exit__(self, *_args):
                 return False
 
-            def read(self):
+            def read(self, _size=-1):
                 return json.dumps(self.payload).encode("utf-8")
 
         def urlopen(url, timeout):
@@ -5359,7 +5442,27 @@ class TestWindowsObservability:
         monkeypatch.setattr(_mod, "_windows_llm_status_cache", (0.0, None))
         second = _mod._windows_llm_status()
 
-        assert first["stats"]["sample_fingerprint"] == second["stats"]["sample_fingerprint"]
+        assert first["stats"] == second["stats"]
+
+    def test_windows_llm_rejects_oversized_runtime_response(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
+        (tmp_path / ".env").write_text("AMD_INFERENCE_PORT=8080\n")
+        monkeypatch.setattr(_mod, "_windows_llm_status_cache", (0.0, None))
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, size=-1):
+                return b"x" * size
+
+        monkeypatch.setattr(_mod.urllib_request, "urlopen", lambda *args, **kwargs: Response())
+
+        assert _mod._windows_llm_status() is None
 
 
 class TestDockerServiceHealthSnapshot:

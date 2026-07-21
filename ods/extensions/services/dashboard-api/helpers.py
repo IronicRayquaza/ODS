@@ -1,7 +1,6 @@
 """Shared helper functions for service health checking, metrics, and system info."""
 
 import asyncio
-import hashlib
 import json
 import logging
 import math
@@ -194,55 +193,37 @@ _token_counter_lock = threading.Lock()
 def _update_lifetime_tokens(server_counter: float) -> int:
     """Accumulate tokens across server restarts using a persistent file."""
     with _token_counter_lock:
-        data = {"lifetime": 0, "last_server_counter": 0}
-        try:
-            if _TOKEN_FILE.exists():
-                data = json.loads(_TOKEN_FILE.read_text())
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning("Failed to read token counter file %s: %s", _TOKEN_FILE, e)
+        data = _read_json_file(_TOKEN_FILE, {})
+        if not isinstance(data, dict):
+            data = {}
 
-        prev = data.get("last_server_counter", 0)
-        delta = server_counter if server_counter < prev else server_counter - prev
+        current = _non_negative_number(server_counter)
+        prev = _non_negative_number(data.get("last_server_counter"))
+        lifetime = _non_negative_number(data.get("lifetime"))
+        delta = current if current < prev else current - prev
 
-        data["lifetime"] = int(data.get("lifetime", 0) + delta)
-        data["last_server_counter"] = server_counter
+        data["lifetime"] = int(lifetime + delta)
+        data["last_server_counter"] = current
         _write_json_file(_TOKEN_FILE, data)
         return data["lifetime"]
 
 
 def _get_lifetime_tokens() -> int:
-    try:
-        return json.loads(_TOKEN_FILE.read_text()).get("lifetime", 0)
-    except (json.JSONDecodeError, OSError):
+    data = _read_json_file(_TOKEN_FILE, {})
+    if not isinstance(data, dict):
         return 0
+    return int(_non_negative_number(data.get("lifetime")))
 
 
-def _update_lemonade_lifetime_tokens(stats: dict) -> int:
-    """Count Lemonade's per-completion stats once across polls and restarts."""
-    sample = {
-        key: stats.get(key)
-        for key in (
-            "sample_fingerprint", "decode_token_times", "input_tokens",
-            "output_tokens", "prompt_tokens", "time_to_first_token",
-            "tokens_per_second", "last_use", "request_id", "completed_at",
-        )
-    }
-    signature = hashlib.sha256(
-        json.dumps(sample, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-    with _token_counter_lock:
-        data = _read_json_file(_TOKEN_FILE, {"lifetime": 0, "last_server_counter": 0})
-        if not isinstance(data, dict):
-            data = {"lifetime": 0, "last_server_counter": 0}
-        if signature != data.get("lemonade_last_sample"):
-            try:
-                output_tokens = max(0, int(stats.get("output_tokens") or 0))
-            except (TypeError, ValueError):
-                output_tokens = 0
-            data["lifetime"] = int(data.get("lifetime", 0)) + output_tokens
-            data["lemonade_last_sample"] = signature
-            _write_json_file(_TOKEN_FILE, data)
-        return int(data.get("lifetime", 0))
+def _non_negative_number(value) -> float:
+    """Return a finite non-negative number for persisted/runtime counters."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(number) or number < 0:
+        return 0.0
+    return number
 
 
 def _normalize_perf_key(value: str | None) -> str:
@@ -263,7 +244,17 @@ def _write_json_file(path: Path, data) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
-        os.replace(temporary, path)
+        # Windows virus scanners and indexers can briefly retain a handle to
+        # the destination. Retry only that transient access-denied case; other
+        # filesystem failures remain fail-soft as before.
+        for attempt in range(4):
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError:
+                if attempt == 3:
+                    raise
+                time.sleep(0.025 * (2 ** attempt))
     except OSError as e:
         logger.debug("Failed to write JSON file %s: %s", path, e)
     finally:
@@ -418,9 +409,14 @@ async def get_llama_metrics(model_hint: Optional[str] = None) -> dict:
                 tokens_per_second = 0.0
             if not math.isfinite(tokens_per_second):
                 tokens_per_second = 0.0
+            output_tokens = int(_non_negative_number(stats.get("output_tokens")))
             return {
                 "tokens_per_second": round(max(0.0, tokens_per_second), 1),
-                "lifetime_tokens": _update_lemonade_lifetime_tokens(stats),
+                # Lemonade /v1/stats documents only the most recent request.
+                # It has no cumulative counter or stable event sequence, so
+                # polling cannot truthfully construct a lifetime total.
+                "lifetime_tokens": output_tokens,
+                "token_count_mode": "latest_completion",
             }
 
         host = SERVICES["llama-server"]["host"]
@@ -459,10 +455,24 @@ async def get_llama_metrics(model_hint: Optional[str] = None) -> dict:
         _prev_tokens["gen_secs"] = gen_secs
 
         lifetime = _update_lifetime_tokens(curr)
-        return {"tokens_per_second": _prev_tokens["tps"], "lifetime_tokens": lifetime}
+        return {
+            "tokens_per_second": _prev_tokens["tps"],
+            "lifetime_tokens": lifetime,
+            "token_count_mode": "cumulative",
+        }
     except (AgentClientError, httpx.HTTPError, httpx.TimeoutException, OSError, ValueError) as e:
         logger.warning("get_llama_metrics failed: %s: %s", type(e).__name__, e)
-        return {"tokens_per_second": 0, "lifetime_tokens": _get_lifetime_tokens()}
+        if LLM_BACKEND == "lemonade":
+            return {
+                "tokens_per_second": 0,
+                "lifetime_tokens": 0,
+                "token_count_mode": "unavailable",
+            }
+        return {
+            "tokens_per_second": 0,
+            "lifetime_tokens": _get_lifetime_tokens(),
+            "token_count_mode": "cumulative",
+        }
 
 
 async def get_loaded_model() -> Optional[str]:

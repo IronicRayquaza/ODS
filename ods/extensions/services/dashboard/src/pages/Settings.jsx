@@ -393,7 +393,7 @@ export default function Settings() {
   if (loading) return <SettingsSkeleton />
 
   return (
-    <div className="min-h-full px-5 py-7 sm:px-8 xl:px-12">
+    <div className="min-h-full px-3 py-6 sm:px-4 lg:px-5 xl:px-6">
       <SettingsPageHeader
         onRefresh={fetchSettings}
         onCheckUpdates={() => {
@@ -406,11 +406,13 @@ export default function Settings() {
       {error ? <Banner tone="danger">{error} - <button className="underline" onClick={fetchSettings}>Retry</button></Banner> : null}
       {notice ? <Banner tone={notice.type} onClose={() => setNotice(null)}>{notice.text}</Banner> : null}
 
-      <div className="mx-auto max-w-[1760px] space-y-5">
-        <SystemIdentityCard version={version} />
-        <AppearanceCard theme={theme} themes={themes} labels={labels} onThemeChange={setTheme} />
-        <AccountUsageCard usageReport={usageReport} />
-        <RemoteSetupCard setupStatus={setupStatus} />
+      <div className="w-full space-y-5">
+        <div className="grid items-stretch gap-4 xl:grid-cols-12">
+          <SystemIdentityCard version={version} className="xl:col-span-7" />
+          <AppearanceCard theme={theme} themes={themes} labels={labels} onThemeChange={setTheme} className="xl:col-span-5" />
+          <AccountUsageCard usageReport={usageReport} className="xl:col-span-7" />
+          <RemoteSetupCard setupStatus={setupStatus} className="xl:col-span-5" />
+        </div>
         <RoutingTableCard
           services={services}
           counts={routeCounts}
@@ -467,7 +469,7 @@ export default function Settings() {
 
 function SettingsPageHeader({ onRefresh, onCheckUpdates, onOpenEnvironment }) {
   return (
-    <header className="mx-auto mb-8 flex max-w-[1760px] flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+    <header className="mb-7 flex w-full flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
       <div>
         <h1 className="text-3xl font-semibold tracking-[-0.01em] text-theme-text sm:text-4xl">Settings</h1>
         <p className="mt-2 text-base text-theme-text-muted">Configure your ODS installation.</p>
@@ -477,10 +479,10 @@ function SettingsPageHeader({ onRefresh, onCheckUpdates, onOpenEnvironment }) {
           <RefreshCw size={16} />
           Refresh
         </button>
-        <button onClick={onCheckUpdates} className="rounded-xl border border-white/15 bg-black/20 px-5 py-3 text-sm font-medium text-theme-text transition-colors hover:border-theme-accent/50 hover:text-white">
+        <button onClick={onCheckUpdates} className="rounded-lg border border-white/15 bg-black/20 px-5 py-3 text-sm font-medium text-theme-text transition-colors hover:border-theme-accent/50 hover:text-white">
           <span className="flex items-center gap-2"><RefreshCw size={15} />Check for Updates</span>
         </button>
-        <button onClick={onOpenEnvironment} className="liquid-metal-button rounded-xl px-5 py-3 text-sm font-semibold text-white">
+        <button onClick={onOpenEnvironment} className="liquid-metal-button rounded-lg px-5 py-3 text-sm font-semibold text-white">
           <span className="flex items-center gap-2">Open Environment Editor<ChevronRight size={16} /></span>
         </button>
       </div>
@@ -488,15 +490,15 @@ function SettingsPageHeader({ onRefresh, onCheckUpdates, onOpenEnvironment }) {
   )
 }
 
-function SystemIdentityCard({ version }) {
+function SystemIdentityCard({ version, className = '' }) {
   const currentVersion = version?.version && version.version !== 'Unknown' ? `v${String(version.version).replace(/^v/i, '')}` : 'Unknown'
   const versionBadge = version?.update_check_ok
     ? (version?.update_available ? 'Update' : 'Latest')
     : null
   return (
-    <PremiumCard className="grid gap-6 p-5 lg:grid-cols-[minmax(300px,1.1fr)_2.5fr] lg:p-6">
+    <PremiumCard className={`p-5 lg:p-6 ${className}`}>
       <CardIntro icon={Server} title="System Identity" description="Core information about this ODS instance." />
-      <div className="grid gap-0 overflow-hidden rounded-2xl border border-white/[0.06] bg-black/[0.08] sm:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-6 grid gap-y-5 border-t border-white/[0.07] pt-5 sm:grid-cols-2 sm:gap-x-0 2xl:grid-cols-4">
         <MetaTile icon={Server} label="Version" value={currentVersion} badge={versionBadge} />
         <MetaTile icon={Calendar} label="Install Date" value={version?.install_date || 'Unknown'} />
         <MetaTile icon={Crown} label="Tier" value={version?.tier || 'Community'} />
@@ -506,28 +508,31 @@ function SystemIdentityCard({ version }) {
   )
 }
 
-function AppearanceCard({ theme, themes, labels, onThemeChange }) {
+function AppearanceCard({ theme, themes, labels, onThemeChange, className = '' }) {
   return (
-    <PremiumCard className="grid gap-6 p-5 lg:grid-cols-[minmax(300px,1.1fr)_2.5fr] lg:items-center lg:p-6">
+    <PremiumCard className={`p-5 lg:p-6 ${className}`}>
       <CardIntro icon={Palette} title="Appearance" description="Choose how the dashboard appears on this browser." />
-      <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/[0.06] bg-black/[0.08] p-2 sm:grid-cols-4">
+      <div className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-white/[0.07] bg-white/[0.07]">
         {themes.map(themeId => (
           <button
             key={themeId}
             type="button"
             aria-pressed={theme === themeId}
             onClick={() => onThemeChange(themeId)}
-            className={`flex min-h-12 items-center justify-center gap-2 rounded-xl px-3 text-sm font-semibold transition-colors ${
+            className={`flex min-h-14 items-center justify-between gap-3 bg-black/[0.2] px-4 text-sm font-semibold transition-colors ${
               theme === themeId
-                ? 'border border-theme-accent/40 bg-theme-accent/20 text-theme-accent-light'
-                : 'border border-transparent text-theme-text-muted hover:border-white/10 hover:bg-white/[0.03] hover:text-theme-text'
+                ? 'text-theme-accent-light shadow-[inset_3px_0_0_rgb(var(--theme-accent))]'
+                : 'text-theme-text-muted hover:bg-white/[0.03] hover:text-theme-text'
             }`}
           >
-            <span
-              className="h-3 w-3 shrink-0 rounded-full border border-white/20"
-              style={{ background: THEME_SWATCHES[themeId] || 'rgb(var(--theme-accent))' }}
-            />
-            <span>{labels[themeId] || themeId}</span>
+            <span className="flex items-center gap-2.5">
+              <span
+                className="h-3 w-3 shrink-0 rounded-full border border-white/20"
+                style={{ background: THEME_SWATCHES[themeId] || 'rgb(var(--theme-accent))' }}
+              />
+              <span>{labels[themeId] || themeId}</span>
+            </span>
+            <span className={`h-1.5 w-1.5 rounded-full ${theme === themeId ? 'bg-theme-accent-light' : 'bg-transparent'}`} />
           </button>
         ))}
       </div>
@@ -535,51 +540,57 @@ function AppearanceCard({ theme, themes, labels, onThemeChange }) {
   )
 }
 
-function AccountUsageCard({ usageReport }) {
+function AccountUsageCard({ usageReport, className = '' }) {
   const summary = usageReport?.summary || {}
   const modelsUsed = Array.isArray(usageReport?.models) ? usageReport.models.length : 0
   const hasActivity = Number(summary.requests || 0) > 0 || Number(summary.total_tokens || 0) > 0
   const usageSource = formatUsageSource(usageReport?.source)
   const lastActivity = hasActivity ? 'Today' : 'No activity today'
   return (
-    <PremiumCard as={Link} to="/usage" className="group grid gap-6 p-5 lg:grid-cols-[minmax(300px,1fr)_minmax(260px,1.2fr)_2.2fr_auto] lg:items-center lg:p-6">
+    <PremiumCard as={Link} to="/usage" className={`group p-5 lg:p-6 ${className}`}>
       <CardIntro icon={CreditCard} title="Account" description="Usage, tokens, requests, and activity at a glance." />
-      <div className="rounded-2xl border border-white/10 bg-black/15 p-4">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-theme-text-muted">Usage Overview</p>
-        <p className="mt-2 text-sm leading-6 text-theme-text-muted">{usageSource}. Open the usage dashboard for the full period breakdown.</p>
-        <span className="mt-4 inline-flex items-center gap-2 rounded-lg border border-theme-accent/45 bg-theme-accent/10 px-3 py-2 text-sm font-medium text-theme-accent-light">
-          <Activity size={15} />
-          View Usage Dashboard
-        </span>
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-6 grid gap-5 border-y border-white/[0.07] py-5 sm:grid-cols-2 2xl:grid-cols-4">
         <MetricTile icon={Gauge} label="Tokens (24h)" value={formatCompact(summary.total_tokens)} delta={hasActivity ? 'Live' : null} />
         <MetricTile icon={Database} label="Requests (24h)" value={formatCompact(summary.requests)} delta={hasActivity ? 'Tracked' : null} />
         <MetricTile icon={WalletCards} label="Models Used" value={formatCompact(modelsUsed)} delta={modelsUsed ? 'Tracked' : null} />
         <MetricTile icon={Clock3} label="Last Activity" value={lastActivity} delta={hasActivity ? 'Tracked' : null} />
       </div>
-      <ChevronRight size={22} className="hidden text-theme-text-muted transition-transform group-hover:translate-x-1 group-hover:text-white lg:block" />
+      <div className="mt-4 flex items-center justify-between gap-4 text-sm">
+        <span className="flex min-w-0 items-center gap-2 text-theme-text-muted">
+          <span className={`h-2 w-2 shrink-0 rounded-full ${usageReport?.source?.status === 'ok' ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+          <span className="truncate">{usageSource}</span>
+        </span>
+        <span className="flex shrink-0 items-center gap-2 font-medium text-theme-accent-light">
+          <Activity size={15} />
+          Open usage
+          <ChevronRight size={16} className="transition-transform group-hover:translate-x-1" />
+        </span>
+      </div>
     </PremiumCard>
   )
 }
 
-function RemoteSetupCard({ setupStatus }) {
+function RemoteSetupCard({ setupStatus, className = '' }) {
   const setupComplete = setupStatus ? !setupStatus.first_run : null
   const setupLabel = setupComplete === null ? 'Setup status unavailable' : setupComplete ? 'Setup complete' : `Setup step ${setupStatus.step || 0}`
   const personaLabel = setupStatus?.persona ? `Active persona: ${titleCase(setupStatus.persona)}` : 'No persona selected'
 
   return (
-    <PremiumCard as={Link} to="/invites" className="group grid gap-6 p-5 lg:grid-cols-[minmax(300px,1fr)_1.7fr_auto] lg:items-center lg:p-6">
+    <PremiumCard as={Link} to="/invites" className={`group flex h-full flex-col p-5 lg:p-6 ${className}`}>
       <CardIntro icon={UserPlus} title="Remote Setup" description="Manage owner and collaborator access for this installation." />
-      <div>
-        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-theme-text-muted">Setup / Access</p>
-        <p className="mt-2 max-w-xl text-sm leading-6 text-theme-text-muted">{setupLabel}. {personaLabel}. Owner and collaborator access is managed with invite links.</p>
-        <span className="mt-4 inline-flex items-center gap-2 rounded-lg border border-theme-accent/45 bg-theme-accent/10 px-3 py-2 text-sm font-medium text-theme-accent-light">
-          <UserPlus size={15} />
-          Manage Invites
+      <div className="mt-6 flex flex-1 flex-col justify-between border-t border-white/[0.07] pt-5">
+        <div>
+          <p className="flex items-center gap-2 text-sm font-semibold text-theme-text">
+            <span className={`h-2 w-2 rounded-full ${setupComplete ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+            {setupLabel}
+          </p>
+          <p className="mt-3 text-sm leading-6 text-theme-text-muted">{personaLabel}. Owner and collaborator access is managed with invite links.</p>
+        </div>
+        <span className="mt-5 flex items-center justify-between border-t border-white/[0.07] pt-4 text-sm font-medium text-theme-accent-light">
+          <span className="flex items-center gap-2"><UserPlus size={15} />Manage owner access</span>
+          <ChevronRight size={17} className="transition-transform group-hover:translate-x-1" />
         </span>
       </div>
-      <ChevronRight size={22} className="hidden text-theme-text-muted transition-transform group-hover:translate-x-1 group-hover:text-white lg:block" />
     </PremiumCard>
   )
 }
@@ -647,7 +658,7 @@ function RoutingTableCard({ services, counts, routeFilter, onRouteFilterChange, 
             <span className={`h-2 w-2 rounded-full ${routeFilter === 'all' ? 'bg-theme-accent' : routeFilterDotClass[routeFilter]}`} />
             {routeFilter === 'all' ? 'All Routes' : `${titleCase(routeFilter)} Routes`}
           </p>
-          <div className="overflow-hidden rounded-2xl border border-white/[0.07] bg-black/[0.12]">
+          <div className="overflow-hidden rounded-lg border border-white/[0.07] bg-black/[0.12]">
             {visibleRoutes.length > 0 ? visibleRoutes.map(service => (
               <RouteRow key={`${service.id || service.name}-${service.port || 'internal'}`} service={service} />
             )) : (
@@ -722,13 +733,11 @@ function CommandsCard({ onExportConfig }) {
 
 function CardIntro({ icon: Icon, title, description }) {
   return (
-    <div className="flex min-w-0 items-start gap-5">
-      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-black/20 text-theme-accent-light shadow-[0_0_30px_rgba(157,0,255,0.16)]">
-        <Icon size={28} strokeWidth={1.8} />
-      </div>
-      <div className="pt-1">
-        <h2 className="text-xl font-semibold text-theme-text">{title}</h2>
-        <p className="mt-2 max-w-sm text-sm leading-6 text-theme-text-muted">{description}</p>
+    <div className="flex min-w-0 items-start gap-3.5">
+      <Icon size={21} strokeWidth={1.8} className="mt-0.5 shrink-0 text-theme-accent-light" />
+      <div>
+        <h2 className="text-lg font-semibold text-theme-text">{title}</h2>
+        <p className="mt-1 max-w-md text-sm leading-5 text-theme-text-muted">{description}</p>
       </div>
     </div>
   )
@@ -736,15 +745,15 @@ function CardIntro({ icon: Icon, title, description }) {
 
 function MetaTile({ icon: Icon, label, value, badge, live = false }) {
   return (
-    <div className="min-w-0 border-b border-white/[0.06] p-4 last:border-b-0 sm:border-b-0 sm:border-r sm:last:border-r-0">
-      <div className="mb-3 flex items-center gap-3 text-theme-text-muted">
-        <Icon size={20} strokeWidth={1.8} />
+    <div className="min-w-0 px-4 first:pl-0 sm:border-r sm:border-white/[0.07] sm:last:border-r-0 2xl:first:pl-0">
+      <div className="mb-2 flex items-center gap-2 text-theme-text-muted">
+        <Icon size={16} strokeWidth={1.8} />
         <span className="text-[11px] font-semibold uppercase tracking-[0.2em]">{label}</span>
       </div>
       <div className="flex min-w-0 items-center gap-3">
-        <span className="truncate text-lg font-semibold text-theme-text">{value}</span>
-        {badge ? <span className="rounded-full bg-theme-accent/25 px-2.5 py-1 text-xs font-medium text-theme-accent-light">{badge}</span> : null}
-        {live ? <span className="inline-flex items-center gap-1.5 rounded-full bg-theme-accent/15 px-2 py-1 text-xs font-medium text-theme-accent-light"><span className="h-1.5 w-1.5 rounded-full bg-theme-accent-light" />Live</span> : null}
+        <span className="truncate text-base font-semibold text-theme-text">{value}</span>
+        {badge ? <span className="text-xs font-medium text-theme-accent-light">{badge}</span> : null}
+        {live ? <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-300"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />Live</span> : null}
       </div>
     </div>
   )
@@ -752,14 +761,11 @@ function MetaTile({ icon: Icon, label, value, badge, live = false }) {
 
 function MetricTile({ icon: Icon, label, value, delta }) {
   return (
-    <div className="min-w-0 border-white/[0.06] xl:border-l xl:pl-5">
-      <div className="mb-3 flex h-9 w-9 items-center justify-center rounded-full bg-white/[0.06] text-theme-text-muted">
-        <Icon size={17} />
-      </div>
-      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-theme-text-muted">{label}</p>
+    <div className="min-w-0 border-white/[0.07] 2xl:border-l 2xl:pl-5 2xl:first:border-l-0 2xl:first:pl-0">
+      <p className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-theme-text-muted"><Icon size={14} />{label}</p>
       <div className="mt-2 flex items-baseline gap-2">
-        <p className="text-2xl font-semibold text-theme-text">{value}</p>
-        {delta ? <span className="text-xs font-medium text-emerald-400">{delta}</span> : null}
+        <p className="text-xl font-semibold text-theme-text">{value}</p>
+        {delta ? <span className="text-xs font-medium text-theme-text-muted">{delta}</span> : null}
       </div>
     </div>
   )
@@ -772,7 +778,7 @@ function RouteStatusCard({ tone, label, count, description }) {
     inactive: 'border-red-400/25 text-red-300 shadow-[inset_3px_0_0_rgba(248,113,113,0.65)]',
   }
   return (
-    <div className={`rounded-2xl border bg-black/[0.12] p-5 ${palette[tone]}`}>
+    <div className={`rounded-lg border bg-black/[0.12] p-5 ${palette[tone]}`}>
       <div className="mb-3 flex items-center gap-2">
         <span className={`h-2 w-2 rounded-full ${tone === 'online' ? 'bg-emerald-400' : tone === 'degraded' ? 'bg-amber-400' : 'bg-red-400'}`} />
         <p className="text-sm font-semibold">{label}</p>
@@ -832,7 +838,7 @@ function UtilityCard({ icon: Icon, title, description, children }) {
 function PremiumCard({ as: Component = 'div', className = '', children, style, ...props }) {
   return (
     <Component
-      className={`liquid-metal-frame rounded-2xl border ${className}`}
+      className={`liquid-metal-frame rounded-lg border ${className}`}
       style={{ ...SETTINGS_CARD_STYLE, ...style }}
       {...props}
     >
@@ -844,7 +850,7 @@ function PremiumCard({ as: Component = 'div', className = '', children, style, .
 function Banner({ tone = 'info', children, onClose }) {
   const cls = tone === 'danger' ? 'border-red-500/20 bg-red-500/10 text-red-200' : tone === 'warn' ? 'border-yellow-500/20 bg-yellow-500/10 text-yellow-100' : 'border-theme-accent/20 bg-theme-accent/10 text-theme-text'
   return (
-    <div className={`mx-auto mb-6 flex max-w-[1760px] items-center justify-between rounded-2xl border p-4 text-sm ${cls}`}>
+    <div className={`mb-6 flex w-full items-center justify-between rounded-lg border p-4 text-sm ${cls}`}>
       <span>{children}</span>
       {onClose ? <button onClick={onClose} className="ml-4 opacity-60 hover:opacity-100">x</button> : null}
     </div>
@@ -863,7 +869,7 @@ function SettingsSkeleton() {
           <div className="h-11 w-72 rounded-xl bg-theme-card" />
         </div>
         <div className="space-y-5">
-          {[...Array(4)].map((_, index) => <div key={index} className="h-32 rounded-2xl bg-theme-card" />)}
+          {[...Array(4)].map((_, index) => <div key={index} className="h-32 rounded-lg bg-theme-card" />)}
         </div>
       </div>
     </div>

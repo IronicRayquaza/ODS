@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  BookOpen,
   CheckCircle2,
   Command,
   Database,
@@ -88,7 +89,7 @@ export default function EnvEditor({
   const issueSectionCount = countIssueSections(sections, issues)
 
   return (
-    <section className="rounded-[28px] border border-white/[0.08] bg-[linear-gradient(145deg,rgba(255,255,255,0.035),rgba(255,255,255,0.012)),linear-gradient(180deg,rgba(17,17,25,0.96),rgba(7,7,14,0.98))] p-5 shadow-[0_22px_54px_rgba(0,0,0,0.28)] lg:p-8">
+    <section className="rounded-lg border border-white/[0.08] bg-[linear-gradient(145deg,rgba(255,255,255,0.025),rgba(255,255,255,0.008)),linear-gradient(180deg,rgba(17,17,25,0.96),rgba(7,7,14,0.98))] p-5 shadow-[0_18px_42px_rgba(0,0,0,0.22)] lg:p-7">
       <EnvironmentEditorHeader
         onRefresh={onRefresh || onReload}
         onReload={onReload}
@@ -115,7 +116,7 @@ export default function EnvEditor({
         />
 
         {applyPlan?.status && applyPlan.status !== 'none' ? (
-          <div className="rounded-2xl border border-theme-accent/25 bg-theme-accent/10 px-5 py-4">
+          <div className="rounded-lg border border-theme-accent/25 bg-theme-accent/10 px-5 py-4">
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-theme-accent-light">
               {applyPlan.status === 'post-apply' ? 'Required follow-up' : 'Pending runtime changes'}
             </p>
@@ -130,7 +131,7 @@ export default function EnvEditor({
         ) : null}
 
         {followUpPlan ? (
-          <div className="rounded-2xl border border-theme-accent/25 bg-theme-accent/10 px-5 py-4">
+          <div className="rounded-lg border border-theme-accent/25 bg-theme-accent/10 px-5 py-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-theme-accent-light">Required follow-up</p>
@@ -148,7 +149,7 @@ export default function EnvEditor({
         ) : null}
 
         {issues.length > 0 ? (
-          <div className="rounded-2xl border border-yellow-500/25 bg-yellow-500/10 px-5 py-4">
+          <div className="rounded-lg border border-yellow-500/25 bg-yellow-500/10 px-5 py-4">
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-yellow-100">Validation notes</p>
             <div className="mt-2 space-y-1">
               {issues.slice(0, 8).map((issue, index) => (
@@ -169,22 +170,23 @@ export default function EnvEditor({
             onSectionChange={onSectionChange}
           />
 
-          <div className="rounded-2xl border border-white/[0.08] bg-[linear-gradient(180deg,rgba(22,22,31,0.92),rgba(10,10,18,0.96))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.045)]">
+          <div className="rounded-lg border border-white/[0.08] bg-[linear-gradient(180deg,rgba(22,22,31,0.92),rgba(10,10,18,0.96))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.045)]">
             {activeSection ? (
               <>
                 <div className="mb-5 flex flex-col gap-4 border-b border-white/[0.07] pb-5 lg:flex-row lg:items-center lg:justify-between">
-                  <div className="flex items-start gap-4">
-                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-theme-accent/18 text-theme-accent-light">
-                      <SlidersHorizontal size={25} />
-                    </div>
+                  <div className="flex items-start gap-3">
+                    <SlidersHorizontal size={20} className="mt-1 shrink-0 text-theme-accent-light" />
                     <div>
-                      <h3 className="text-2xl font-semibold text-theme-text">{activeSection.title}</h3>
+                      <h3 className="text-xl font-semibold text-theme-text">{activeSection.title}</h3>
                       <p className="mt-1 text-sm leading-6 text-theme-text-muted">{sectionDescription(activeSection)}</p>
                     </div>
                   </div>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <Pill accent>{activeKeys.length} Fields in this category</Pill>
-                    <Pill good>{(activeKeys.some(key => issueMap[key]?.length) ? 'Needs review' : 'All good')}<CheckCircle2 size={13} /></Pill>
+                  <div className="flex flex-wrap items-center gap-4 text-xs">
+                    <span className="text-theme-text-muted">{activeKeys.length} fields</span>
+                    <span className={`inline-flex items-center gap-1.5 ${activeKeys.some(key => issueMap[key]?.length) ? 'text-amber-300' : 'text-emerald-300'}`}>
+                      {activeKeys.some(key => issueMap[key]?.length) ? <AlertTriangle size={13} /> : <CheckCircle2 size={13} />}
+                      {activeKeys.some(key => issueMap[key]?.length) ? 'Needs review' : 'Validated'}
+                    </span>
                   </div>
                 </div>
 
@@ -206,7 +208,7 @@ export default function EnvEditor({
                 </div>
               </>
             ) : (
-              <div className="rounded-2xl border border-white/[0.08] bg-black/[0.14] px-5 py-8 text-sm text-theme-text-muted">
+              <div className="rounded-lg border border-white/[0.08] bg-black/[0.14] px-5 py-8 text-sm text-theme-text-muted">
                 No fields match the current filter.
               </div>
             )}
@@ -220,13 +222,11 @@ export default function EnvEditor({
 function EnvironmentEditorHeader({ onRefresh, onReload, onSave, onApply, saving, applying, dirty, canApply }) {
   return (
     <header className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-      <div className="flex items-start gap-5">
-        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-theme-accent/20 text-theme-accent-light shadow-[0_0_34px_rgba(157,0,255,0.22)]">
-          <Database size={30} strokeWidth={1.7} />
-        </div>
+      <div className="flex items-start gap-3.5">
+        <Database size={22} strokeWidth={1.7} className="mt-1 shrink-0 text-theme-accent-light" />
         <div>
-          <h2 className="text-3xl font-semibold tracking-[-0.01em] text-theme-text">Environment Editor</h2>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-theme-text-muted">
+          <h2 className="text-2xl font-semibold text-theme-text">Environment Editor</h2>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-theme-text-muted">
             Edit the ODS .env file directly from the dashboard. Changes are validated and applied securely.
           </p>
         </div>
@@ -246,16 +246,15 @@ function EnvironmentEditorHeader({ onRefresh, onReload, onSave, onApply, saving,
 
 function EnvironmentStatusStrip({ editor, fieldCount, issueCount, issueSectionCount }) {
   return (
-    <div className="grid gap-4 rounded-2xl border border-white/[0.09] bg-[linear-gradient(145deg,rgba(255,255,255,0.045),rgba(255,255,255,0.015)),rgba(18,18,25,0.88)] px-5 py-5 md:grid-cols-[1.2fr_1fr_1fr_1fr] md:items-center">
-      <div className="flex items-center gap-4">
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-theme-accent/14 text-theme-accent-light">
-          <Folder size={23} />
-        </div>
+    <div className="grid gap-4 rounded-lg border border-white/[0.09] bg-black/[0.14] px-5 py-4 md:grid-cols-[1.2fr_1fr_1fr_1fr] md:items-center">
+      <div className="flex items-center gap-3">
+        <Folder size={19} className="shrink-0 text-theme-accent-light" />
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-theme-accent-light">Local Configuration</p>
-          <div className="mt-1 flex flex-wrap items-center gap-2">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-theme-text-muted">Local Configuration</p>
+          <div className="mt-1 flex flex-wrap items-center gap-3">
             <p className="text-sm font-semibold text-theme-text">Editing ODS .env</p>
-            <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${editor?.agentAvailable === false ? 'bg-yellow-500/15 text-yellow-200' : 'bg-emerald-500/15 text-emerald-300'}`}>
+            <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${editor?.agentAvailable === false ? 'text-yellow-200' : 'text-emerald-300'}`}>
+              <span className={`h-1.5 w-1.5 rounded-full ${editor?.agentAvailable === false ? 'bg-yellow-300' : 'bg-emerald-400'}`} />
               {editor?.agentAvailable === false ? 'Agent offline' : 'Connected'}
             </span>
           </div>
@@ -276,7 +275,7 @@ function EnvironmentBehaviorCards({ editor, canApply, applyPlan }) {
       : 'Apply Changes becomes available after saving keys that affect running services. You will see affected services before applying.'
 
   return (
-    <div className="grid gap-4 lg:grid-cols-3">
+    <div className="grid overflow-hidden rounded-lg border border-white/[0.08] bg-black/[0.1] lg:grid-cols-3 lg:divide-x lg:divide-white/[0.08]">
       <BehaviorCard icon={Download} title="Save Behavior" text={editor.saveHint || 'Saving writes the .env file directly, preserves blank secrets, and stores a backup first.'} />
       <BehaviorCard icon={RefreshCw} title="Restart Behavior" text={editor.restartHint || 'Some ODS services need a container recreate before changes take effect.'} />
       <BehaviorCard icon={Zap} title="Apply Behavior" text={applyText} />
@@ -287,8 +286,8 @@ function EnvironmentBehaviorCards({ editor, canApply, applyPlan }) {
 function EnvironmentCategorySidebar({ search, onSearchChange, sections, activeSection, onSectionChange }) {
   const grouped = groupSections(sections)
   return (
-    <aside className="self-start rounded-2xl border border-white/[0.08] bg-[linear-gradient(180deg,rgba(22,22,31,0.94),rgba(9,9,16,0.98))] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.045)] xl:sticky xl:top-6">
-      <label className="flex items-center gap-2 rounded-xl border border-white/[0.08] bg-black/[0.18] px-3 py-2.5">
+    <aside className="self-start rounded-lg border border-white/[0.08] bg-[linear-gradient(180deg,rgba(22,22,31,0.94),rgba(9,9,16,0.98))] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.045)] xl:sticky xl:top-6">
+      <label className="flex items-center gap-2 rounded-md border border-white/[0.08] bg-black/[0.18] px-3 py-2.5">
         <span className="sr-only">Filter configuration fields</span>
         <Search size={15} className="text-theme-text-muted" />
         <input
@@ -317,7 +316,7 @@ function EnvironmentCategorySidebar({ search, onSearchChange, sections, activeSe
                   type="button"
                   onClick={() => onSectionChange(section.id)}
                   aria-pressed={activeSection?.id === section.id}
-                  className={`group relative flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2.5 text-left transition-colors ${
+                  className={`group relative flex w-full items-center justify-between gap-3 rounded-md px-3 py-2.5 text-left transition-colors ${
                     activeSection?.id === section.id
                       ? 'bg-theme-accent/24 text-theme-text shadow-[inset_3px_0_0_rgba(215,164,255,0.95)]'
                       : 'text-theme-text-muted hover:bg-white/[0.04] hover:text-theme-text'
@@ -352,7 +351,7 @@ function EnvironmentFieldCard({ field, value, issues, revealed, cleared, onToggl
   const versionLike = /version/i.test(field?.key || '')
 
   return (
-    <div className={`rounded-2xl border px-5 py-5 ${hasIssues ? 'border-yellow-500/25 bg-yellow-500/5' : 'border-white/[0.08] bg-black/[0.16]'}`}>
+    <div className={`rounded-lg border px-5 py-5 ${hasIssues ? 'border-yellow-500/25 bg-yellow-500/5' : 'border-white/[0.08] bg-black/[0.16]'}`}>
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -470,18 +469,16 @@ function EnvironmentFieldCard({ field, value, issues, revealed, cleared, onToggl
 
 function EnvironmentHelpCard() {
   return (
-    <div className="flex flex-col gap-4 rounded-2xl border border-theme-accent/20 bg-theme-accent/10 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
-      <div className="flex items-start gap-4">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-theme-accent/18 text-theme-accent-light">
-          <Info size={18} />
-        </div>
+    <div className="flex flex-col gap-4 border-t border-white/[0.08] px-1 pt-5 lg:flex-row lg:items-center lg:justify-between">
+      <div className="flex items-start gap-3">
+        <BookOpen size={18} className="mt-0.5 shrink-0 text-theme-text-muted" />
         <div>
-          <p className="font-semibold text-theme-text">Need help?</p>
+          <p className="text-sm font-semibold text-theme-text">Environment reference</p>
           <p className="mt-1 text-sm text-theme-text-muted">Field labels, helper text, defaults, and validation come from the active ODS environment schema.</p>
         </div>
       </div>
-      <a href="https://github.com/Osmantic/ODS/tree/main/ods/docs" target="_blank" rel="noopener noreferrer" className="inline-flex items-center justify-center gap-2 rounded-xl border border-theme-accent/35 bg-black/20 px-4 py-2 text-sm font-medium text-theme-accent-light hover:border-theme-accent/70">
-        View Documentation
+      <a href="https://github.com/Osmantic/ODS/tree/main/ods/docs" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 text-sm font-medium text-theme-accent-light hover:text-white">
+        Open documentation
         <ExternalLink size={15} />
       </a>
     </div>
@@ -490,11 +487,11 @@ function EnvironmentHelpCard() {
 
 function StatusMetric({ icon: Icon, value, label }) {
   return (
-    <div className="flex items-center gap-4 md:justify-center">
-      <Icon size={26} className="text-theme-text-muted" strokeWidth={1.6} />
+    <div className="flex items-center gap-3 border-white/[0.07] md:justify-center md:border-l">
+      <Icon size={18} className="text-theme-text-muted" strokeWidth={1.6} />
       <div>
-        <p className="text-2xl font-semibold text-theme-text">{value}</p>
-        <p className="text-sm text-theme-text-muted">{label}</p>
+        <p className="text-lg font-semibold text-theme-text">{value}</p>
+        <p className="text-xs text-theme-text-muted">{label}</p>
       </div>
     </div>
   )
@@ -502,14 +499,12 @@ function StatusMetric({ icon: Icon, value, label }) {
 
 function BehaviorCard({ icon: Icon, title, text }) {
   return (
-    <div className="rounded-2xl border border-white/[0.08] bg-[linear-gradient(145deg,rgba(255,255,255,0.04),rgba(255,255,255,0.015)),rgba(18,18,25,0.9)] p-5">
-      <div className="flex items-start gap-4">
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-theme-accent/22 text-theme-accent-light">
-          <Icon size={23} />
-        </div>
+    <div className="p-4">
+      <div className="flex items-start gap-3">
+        <Icon size={17} className="mt-0.5 shrink-0 text-theme-accent-light" />
         <div>
-          <p className="text-lg font-semibold text-theme-text">{title}</p>
-          <p className="mt-2 text-sm leading-6 text-theme-text-muted">{text}</p>
+          <p className="text-sm font-semibold text-theme-text">{title}</p>
+          <p className="mt-1 text-xs leading-5 text-theme-text-muted">{text}</p>
         </div>
       </div>
     </div>
@@ -525,20 +520,11 @@ function ToolbarButton({ icon: Icon, label, onClick, primary = false, disabled =
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className={`rounded-xl border px-4 py-3 text-sm font-semibold ${cls}`}
+      className={`rounded-lg border px-4 py-3 text-sm font-semibold ${cls}`}
     >
       <span className="flex items-center gap-2"><Icon size={16} />{label}</span>
     </button>
   )
-}
-
-function Pill({ children, accent = false, good = false }) {
-  const cls = good
-    ? 'border-emerald-500/20 bg-emerald-500/12 text-emerald-300'
-    : accent
-      ? 'border-theme-accent/20 bg-theme-accent/18 text-theme-accent-light'
-      : 'border-white/10 bg-black/20 text-theme-text-muted'
-  return <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm ${cls}`}>{children}</span>
 }
 
 function Badge({ children, muted = false, accent = false }) {

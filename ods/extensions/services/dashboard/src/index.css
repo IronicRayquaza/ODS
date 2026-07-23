@@ -476,6 +476,16 @@ a, button, input, select, textarea,
   background: var(--liquid-soft-fill, linear-gradient(rgb(var(--theme-card)), rgb(var(--theme-card))));
 }
 
+:root:not([data-theme]) .settings-premium-card,
+:root[data-theme="ods"] .settings-premium-card {
+  background:
+    linear-gradient(180deg, rgba(18, 18, 25, 0.94), rgba(8, 8, 16, 0.96)),
+    repeating-linear-gradient(90deg, transparent 0 47px, rgba(255, 255, 255, 0.025) 47px 48px),
+    repeating-linear-gradient(180deg, transparent 0 47px, rgba(255, 255, 255, 0.025) 47px 48px);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045), 0 18px 40px rgba(0, 0, 0, 0.22);
+}
+
 .liquid-metal-frame--soft::after {
   animation-duration: 12.8s;
   opacity: 0.2;

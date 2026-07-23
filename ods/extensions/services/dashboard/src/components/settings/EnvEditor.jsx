@@ -2,7 +2,6 @@ import {
   AlertTriangle,
   BookOpen,
   CheckCircle2,
-  Command,
   Database,
   Download,
   ExternalLink,
@@ -10,7 +9,6 @@ import {
   EyeOff,
   FileText,
   Folder,
-  Info,
   Lock,
   RefreshCw,
   RotateCcw,
@@ -89,7 +87,7 @@ export default function EnvEditor({
   const issueSectionCount = countIssueSections(sections, issues)
 
   return (
-    <section className="rounded-lg border border-white/[0.08] bg-[linear-gradient(145deg,rgba(255,255,255,0.025),rgba(255,255,255,0.008)),linear-gradient(180deg,rgba(17,17,25,0.96),rgba(7,7,14,0.98))] p-5 shadow-[0_18px_42px_rgba(0,0,0,0.22)] lg:p-7">
+    <section className="settings-premium-card liquid-metal-frame liquid-metal-frame--soft rounded-lg border border-theme-border p-5 lg:p-7">
       <EnvironmentEditorHeader
         onRefresh={onRefresh || onReload}
         onReload={onReload}
@@ -170,10 +168,10 @@ export default function EnvEditor({
             onSectionChange={onSectionChange}
           />
 
-          <div className="rounded-lg border border-white/[0.08] bg-[linear-gradient(180deg,rgba(22,22,31,0.92),rgba(10,10,18,0.96))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.045)]">
+          <div className="rounded-lg border border-theme-border bg-theme-card p-5">
             {activeSection ? (
               <>
-                <div className="mb-5 flex flex-col gap-4 border-b border-white/[0.07] pb-5 lg:flex-row lg:items-center lg:justify-between">
+                <div className="mb-5 flex flex-col gap-4 border-b border-theme-border pb-5 lg:flex-row lg:items-center lg:justify-between">
                   <div className="flex items-start gap-3">
                     <SlidersHorizontal size={20} className="mt-1 shrink-0 text-theme-accent-light" />
                     <div>
@@ -208,7 +206,7 @@ export default function EnvEditor({
                 </div>
               </>
             ) : (
-              <div className="rounded-lg border border-white/[0.08] bg-black/[0.14] px-5 py-8 text-sm text-theme-text-muted">
+              <div className="rounded-lg border border-theme-border bg-theme-bg/30 px-5 py-8 text-sm text-theme-text-muted">
                 No fields match the current filter.
               </div>
             )}
@@ -232,7 +230,7 @@ function EnvironmentEditorHeader({ onRefresh, onReload, onSave, onApply, saving,
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-3 lg:justify-end">
-        <button onClick={onRefresh} className="flex items-center gap-2 text-sm font-medium text-theme-accent-light hover:text-white">
+        <button onClick={onRefresh} className="flex items-center gap-2 text-sm font-medium text-theme-accent-light hover:text-theme-text">
           <RefreshCw size={16} />
           Refresh
         </button>
@@ -246,7 +244,7 @@ function EnvironmentEditorHeader({ onRefresh, onReload, onSave, onApply, saving,
 
 function EnvironmentStatusStrip({ editor, fieldCount, issueCount, issueSectionCount }) {
   return (
-    <div className="grid gap-4 rounded-lg border border-white/[0.09] bg-black/[0.14] px-5 py-4 md:grid-cols-[1.2fr_1fr_1fr_1fr] md:items-center">
+    <div className="grid gap-4 rounded-lg border border-theme-border bg-theme-bg/30 px-5 py-4 md:grid-cols-[1.2fr_1fr_1fr_1fr] md:items-center">
       <div className="flex items-center gap-3">
         <Folder size={19} className="shrink-0 text-theme-accent-light" />
         <div>
@@ -275,7 +273,7 @@ function EnvironmentBehaviorCards({ editor, canApply, applyPlan }) {
       : 'Apply Changes becomes available after saving keys that affect running services. You will see affected services before applying.'
 
   return (
-    <div className="grid overflow-hidden rounded-lg border border-white/[0.08] bg-black/[0.1] lg:grid-cols-3 lg:divide-x lg:divide-white/[0.08]">
+    <div className="grid overflow-hidden rounded-lg border border-theme-border bg-theme-bg/30 lg:grid-cols-3 lg:divide-x lg:divide-theme-border">
       <BehaviorCard icon={Download} title="Save Behavior" text={editor.saveHint || 'Saving writes the .env file directly, preserves blank secrets, and stores a backup first.'} />
       <BehaviorCard icon={RefreshCw} title="Restart Behavior" text={editor.restartHint || 'Some ODS services need a container recreate before changes take effect.'} />
       <BehaviorCard icon={Zap} title="Apply Behavior" text={applyText} />
@@ -286,8 +284,8 @@ function EnvironmentBehaviorCards({ editor, canApply, applyPlan }) {
 function EnvironmentCategorySidebar({ search, onSearchChange, sections, activeSection, onSectionChange }) {
   const grouped = groupSections(sections)
   return (
-    <aside className="self-start rounded-lg border border-white/[0.08] bg-[linear-gradient(180deg,rgba(22,22,31,0.94),rgba(9,9,16,0.98))] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.045)] xl:sticky xl:top-6">
-      <label className="flex items-center gap-2 rounded-md border border-white/[0.08] bg-black/[0.18] px-3 py-2.5">
+    <aside className="self-start rounded-lg border border-theme-border bg-theme-card p-3 xl:sticky xl:top-6">
+      <label className="flex items-center gap-2 rounded-md border border-theme-border bg-theme-bg/35 px-3 py-2.5">
         <span className="sr-only">Filter configuration fields</span>
         <Search size={15} className="text-theme-text-muted" />
         <input
@@ -297,9 +295,6 @@ function EnvironmentCategorySidebar({ search, onSearchChange, sections, activeSe
           aria-label="Filter configuration fields"
           className="min-w-0 flex-1 bg-transparent text-sm text-theme-text outline-none placeholder:text-theme-text-muted/55"
         />
-        <span className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[10px] text-theme-text-muted">
-          <Command size={10} />K
-        </span>
       </label>
 
       <div className="mt-3 max-h-[60rem] overflow-y-auto pr-1">
@@ -307,7 +302,7 @@ function EnvironmentCategorySidebar({ search, onSearchChange, sections, activeSe
           <div key={group.id} className="mb-4 last:mb-0">
             <div className="mb-2 flex items-center gap-2 px-2">
               <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-theme-text-muted">{group.title}</p>
-              <span className="h-px flex-1 bg-white/[0.08]" />
+              <span className="h-px flex-1 bg-theme-border" />
             </div>
             <div className="space-y-1">
               {group.sections.map(section => (
@@ -319,7 +314,7 @@ function EnvironmentCategorySidebar({ search, onSearchChange, sections, activeSe
                   className={`group relative flex w-full items-center justify-between gap-3 rounded-md px-3 py-2.5 text-left transition-colors ${
                     activeSection?.id === section.id
                       ? 'bg-theme-accent/24 text-theme-text shadow-[inset_3px_0_0_rgba(215,164,255,0.95)]'
-                      : 'text-theme-text-muted hover:bg-white/[0.04] hover:text-theme-text'
+                      : 'text-theme-text-muted hover:bg-theme-surface-hover hover:text-theme-text'
                   }`}
                 >
                   <span className="min-w-0">
@@ -351,8 +346,8 @@ function EnvironmentFieldCard({ field, value, issues, revealed, cleared, onToggl
   const versionLike = /version/i.test(field?.key || '')
 
   return (
-    <div className={`rounded-lg border px-5 py-5 ${hasIssues ? 'border-yellow-500/25 bg-yellow-500/5' : 'border-white/[0.08] bg-black/[0.16]'}`}>
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+    <div className={`rounded-lg border px-5 py-5 ${hasIssues ? 'border-yellow-500/25 bg-yellow-500/5' : 'border-theme-border bg-theme-bg/30'}`}>
+      <div>
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <p className="text-base font-semibold text-theme-text">{field?.label}</p>
@@ -363,14 +358,11 @@ function EnvironmentFieldCard({ field, value, issues, revealed, cleared, onToggl
           </div>
           <p className="mt-2 text-sm leading-6 text-theme-text-muted">{field?.description || 'No description available.'}</p>
         </div>
-        <button type="button" className="hidden rounded-full border border-white/10 bg-black/20 p-2 text-theme-text-muted hover:text-white lg:block" aria-label={`More information about ${field?.label}`}>
-          <Info size={15} />
-        </button>
       </div>
 
       <div className="mt-4">
         {isBoolean ? (
-          <div className="inline-flex rounded-xl border border-white/10 bg-black/[0.22] p-1">
+          <div className="inline-flex rounded-lg border border-theme-border bg-theme-bg/40 p-1">
             {[
               { id: '', label: 'Default' },
               { id: 'true', label: 'True' },
@@ -394,7 +386,7 @@ function EnvironmentFieldCard({ field, value, issues, revealed, cleared, onToggl
             value={value}
             disabled={isReadOnly}
             onChange={(event) => onChange(event.target.value)}
-            className="w-full rounded-xl border border-white/12 bg-black/[0.2] px-4 py-3 text-sm text-theme-text outline-none focus:border-theme-accent/60 disabled:cursor-default disabled:opacity-70"
+            className="w-full rounded-lg border border-theme-border bg-theme-bg/40 px-4 py-3 text-sm text-theme-text outline-none focus:border-theme-accent/60 disabled:cursor-default disabled:opacity-70"
           >
             <option value="">Use default</option>
             {field.enum.map((option) => <option key={option} value={option}>{option}</option>)}
@@ -408,13 +400,13 @@ function EnvironmentFieldCard({ field, value, issues, revealed, cleared, onToggl
               onChange={(event) => onChange(event.target.value)}
               placeholder={secretPlaceholder}
               autoComplete="off"
-              className="w-full rounded-xl border border-white/12 bg-black/[0.2] px-4 py-3 text-sm text-theme-text outline-none placeholder:text-theme-text-muted/55 focus:border-theme-accent/60 disabled:cursor-default disabled:opacity-70"
+              className="w-full rounded-lg border border-theme-border bg-theme-bg/40 px-4 py-3 text-sm text-theme-text outline-none placeholder:text-theme-text-muted/55 focus:border-theme-accent/60 disabled:cursor-default disabled:opacity-70"
             />
             {field?.secret ? (
               <button
                 type="button"
                 onClick={onToggleReveal}
-                className="rounded-xl border border-white/12 bg-black/[0.2] p-3 text-theme-text-muted transition-colors hover:text-theme-text"
+                className="rounded-lg border border-theme-border bg-theme-bg/40 p-3 text-theme-text-muted transition-colors hover:text-theme-text"
                 aria-label={revealed ? 'Hide replacement value' : 'Reveal replacement value'}
               >
                 {revealed ? <EyeOff size={17} /> : <Eye size={17} />}
@@ -469,7 +461,7 @@ function EnvironmentFieldCard({ field, value, issues, revealed, cleared, onToggl
 
 function EnvironmentHelpCard() {
   return (
-    <div className="flex flex-col gap-4 border-t border-white/[0.08] px-1 pt-5 lg:flex-row lg:items-center lg:justify-between">
+    <div className="flex flex-col gap-4 border-t border-theme-border px-1 pt-5 lg:flex-row lg:items-center lg:justify-between">
       <div className="flex items-start gap-3">
         <BookOpen size={18} className="mt-0.5 shrink-0 text-theme-text-muted" />
         <div>
@@ -477,7 +469,7 @@ function EnvironmentHelpCard() {
           <p className="mt-1 text-sm text-theme-text-muted">Field labels, helper text, defaults, and validation come from the active ODS environment schema.</p>
         </div>
       </div>
-      <a href="https://github.com/Osmantic/ODS/tree/main/ods/docs" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 text-sm font-medium text-theme-accent-light hover:text-white">
+      <a href="https://github.com/Osmantic/ODS/tree/main/ods/docs" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 text-sm font-medium text-theme-accent-light hover:text-theme-text">
         Open documentation
         <ExternalLink size={15} />
       </a>
@@ -487,7 +479,7 @@ function EnvironmentHelpCard() {
 
 function StatusMetric({ icon: Icon, value, label }) {
   return (
-    <div className="flex items-center gap-3 border-white/[0.07] md:justify-center md:border-l">
+    <div className="flex items-center gap-3 border-theme-border md:justify-center md:border-l">
       <Icon size={18} className="text-theme-text-muted" strokeWidth={1.6} />
       <div>
         <p className="text-lg font-semibold text-theme-text">{value}</p>
@@ -514,7 +506,7 @@ function BehaviorCard({ icon: Icon, title, text }) {
 function ToolbarButton({ icon: Icon, label, onClick, primary = false, disabled = false }) {
   const cls = primary
     ? 'liquid-metal-button border-theme-accent text-white disabled:cursor-default disabled:opacity-50'
-    : 'border-white/12 bg-black/20 text-theme-text hover:border-theme-accent/45 hover:text-white disabled:cursor-default disabled:opacity-45'
+    : 'border-theme-border bg-theme-card text-theme-text hover:border-theme-accent/45 disabled:cursor-default disabled:opacity-45'
   return (
     <button
       type="button"
@@ -531,7 +523,7 @@ function Badge({ children, muted = false, accent = false }) {
   const cls = accent
     ? 'border-theme-accent/20 bg-theme-accent/16 text-theme-accent-light'
     : muted
-      ? 'border-white/10 bg-white/[0.04] text-theme-text-muted'
+      ? 'border-theme-border bg-theme-bg/30 text-theme-text-muted'
       : 'border-theme-accent/25 bg-theme-accent/12 text-theme-accent-light'
   return (
     <span className={`rounded-lg border px-2 py-1 text-xs font-medium ${cls}`}>{children}</span>

@@ -134,13 +134,6 @@ const THEME_SWATCHES = {
   arctic: 'linear-gradient(135deg, #38bdf8 0%, #f0f9ff 100%)',
 }
 
-const SETTINGS_CARD_STYLE = {
-  background:
-    'linear-gradient(180deg, rgba(18,18,25,0.94), rgba(8,8,16,0.96)), repeating-linear-gradient(90deg, transparent 0 47px, rgba(255,255,255,0.025) 47px 48px), repeating-linear-gradient(180deg, transparent 0 47px, rgba(255,255,255,0.025) 47px 48px)',
-  borderColor: 'rgba(255,255,255,0.08)',
-  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.045), 0 18px 40px rgba(0,0,0,0.22)',
-}
-
 const ROUTE_DESCRIPTIONS = {
   ape: 'Policy evaluation and enforcement',
   comfyui: 'Text-to-image and image generation',
@@ -475,11 +468,11 @@ function SettingsPageHeader({ onRefresh, onCheckUpdates, onOpenEnvironment }) {
         <p className="mt-2 text-base text-theme-text-muted">Configure your ODS installation.</p>
       </div>
       <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-        <button onClick={onRefresh} className="flex h-11 items-center gap-2 rounded-lg px-3 text-sm font-medium text-theme-accent-light transition-colors hover:bg-white/[0.04] hover:text-white">
+        <button onClick={onRefresh} className="flex h-11 items-center gap-2 rounded-lg px-3 text-sm font-medium text-theme-accent-light transition-colors hover:bg-theme-surface-hover hover:text-theme-text">
           <RefreshCw size={16} />
           Refresh
         </button>
-        <button onClick={onCheckUpdates} className="flex h-11 items-center rounded-lg border border-white/15 bg-black/20 px-4 text-sm font-medium text-theme-text transition-colors hover:border-theme-accent/50 hover:text-white">
+        <button onClick={onCheckUpdates} className="flex h-11 items-center rounded-lg border border-theme-border bg-theme-card px-4 text-sm font-medium text-theme-text transition-colors hover:border-theme-accent/50">
           <span className="flex items-center gap-2"><RefreshCw size={15} />Check for Updates</span>
         </button>
         <button onClick={onOpenEnvironment} className="liquid-metal-button flex h-11 items-center rounded-lg px-5 text-sm font-semibold text-white">
@@ -498,7 +491,7 @@ function SystemIdentityCard({ version, className = '' }) {
   return (
     <PremiumCard className={`p-5 lg:p-6 ${className}`}>
       <CardIntro icon={Server} title="System Identity" description="Core information about this ODS instance." />
-      <div className="mt-6 grid gap-y-5 border-t border-white/[0.07] pt-5 sm:grid-cols-2 sm:gap-x-0 2xl:grid-cols-4">
+      <div className="mt-6 grid gap-y-5 border-t border-theme-border pt-5 sm:grid-cols-2 sm:gap-x-0 2xl:grid-cols-4">
         <MetaTile icon={Server} label="Version" value={currentVersion} badge={versionBadge} />
         <MetaTile icon={Calendar} label="Install Date" value={version?.install_date || 'Unknown'} />
         <MetaTile icon={Crown} label="Tier" value={version?.tier || 'Community'} />
@@ -512,22 +505,22 @@ function AppearanceCard({ theme, themes, labels, onThemeChange, className = '' }
   return (
     <PremiumCard className={`p-5 lg:p-6 ${className}`}>
       <CardIntro icon={Palette} title="Appearance" description="Choose how the dashboard appears on this browser." />
-      <div className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-white/[0.07] bg-white/[0.07]">
+      <div className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-theme-border bg-theme-border">
         {themes.map(themeId => (
           <button
             key={themeId}
             type="button"
             aria-pressed={theme === themeId}
             onClick={() => onThemeChange(themeId)}
-            className={`flex min-h-14 items-center justify-between gap-3 bg-black/[0.2] px-4 text-sm font-semibold transition-colors ${
+            className={`flex min-h-14 items-center justify-between gap-3 bg-theme-bg/40 px-4 text-sm font-semibold transition-colors ${
               theme === themeId
                 ? 'text-theme-accent-light shadow-[inset_3px_0_0_rgb(var(--theme-accent))]'
-                : 'text-theme-text-muted hover:bg-white/[0.03] hover:text-theme-text'
+                : 'text-theme-text-muted hover:bg-theme-surface-hover hover:text-theme-text'
             }`}
           >
             <span className="flex items-center gap-2.5">
               <span
-                className="h-3 w-3 shrink-0 rounded-full border border-white/20"
+                className="h-3 w-3 shrink-0 rounded-full border border-theme-border"
                 style={{ background: THEME_SWATCHES[themeId] || 'rgb(var(--theme-accent))' }}
               />
               <span>{labels[themeId] || themeId}</span>
@@ -549,7 +542,7 @@ function AccountUsageCard({ usageReport, className = '' }) {
   return (
     <PremiumCard as={Link} to="/usage" className={`group p-5 lg:p-6 ${className}`}>
       <CardIntro icon={CreditCard} title="Account" description="Usage, tokens, requests, and activity at a glance." />
-      <div className="mt-6 grid gap-5 border-y border-white/[0.07] py-5 sm:grid-cols-2 2xl:grid-cols-4">
+      <div className="mt-6 grid gap-5 border-y border-theme-border py-5 sm:grid-cols-2 2xl:grid-cols-4">
         <MetricTile icon={Gauge} label="Tokens (24h)" value={formatCompact(summary.total_tokens)} delta={hasActivity ? 'Live' : null} />
         <MetricTile icon={Database} label="Requests (24h)" value={formatCompact(summary.requests)} delta={hasActivity ? 'Tracked' : null} />
         <MetricTile icon={WalletCards} label="Models Used" value={formatCompact(modelsUsed)} delta={modelsUsed ? 'Tracked' : null} />
@@ -578,7 +571,7 @@ function RemoteSetupCard({ setupStatus, className = '' }) {
   return (
     <PremiumCard as={Link} to="/invites" className={`group flex h-full flex-col p-5 lg:p-6 ${className}`}>
       <CardIntro icon={UserPlus} title="Remote Setup" description="Manage owner and collaborator access for this installation." />
-      <div className="mt-6 flex flex-1 flex-col justify-between border-t border-white/[0.07] pt-5">
+      <div className="mt-6 flex flex-1 flex-col justify-between border-t border-theme-border pt-5">
         <div>
           <p className="flex items-center gap-2 text-sm font-semibold text-theme-text">
             <span className={`h-2 w-2 rounded-full ${setupComplete ? 'bg-emerald-400' : 'bg-amber-400'}`} />
@@ -586,7 +579,7 @@ function RemoteSetupCard({ setupStatus, className = '' }) {
           </p>
           <p className="mt-3 text-sm leading-6 text-theme-text-muted">{personaLabel}. Owner and collaborator access is managed with invite links.</p>
         </div>
-        <span className="mt-5 flex items-center justify-between border-t border-white/[0.07] pt-4 text-sm font-medium text-theme-accent-light">
+        <span className="mt-5 flex items-center justify-between border-t border-theme-border pt-4 text-sm font-medium text-theme-accent-light">
           <span className="flex items-center gap-2"><UserPlus size={15} />Manage owner access</span>
           <ChevronRight size={17} className="transition-transform group-hover:translate-x-1" />
         </span>
@@ -609,15 +602,14 @@ function RoutingTableCard({ services, counts, routeFilter, onRouteFilterChange, 
 
   return (
     <PremiumCard className="grid overflow-hidden lg:grid-cols-[340px_1fr]">
-      <div className="border-b border-white/[0.07] p-5 lg:border-b-0 lg:border-r lg:p-6">
+      <div className="border-b border-theme-border p-5 lg:border-b-0 lg:border-r lg:p-6">
         <CardIntro icon={Route} title="Routing Table" description="Overview of route surfaces and their current status." />
         <div className="mt-9">
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-theme-text-muted">Route Surfaces</p>
-          <button className="mt-3 inline-flex items-center gap-3 rounded-full border border-white/12 bg-theme-accent/10 px-4 py-2 text-sm text-theme-text">
+          <div className="mt-3 inline-flex items-center gap-3 rounded-full border border-theme-border bg-theme-accent/10 px-4 py-2 text-sm text-theme-text">
             <span className="h-2 w-2 rounded-full bg-emerald-400" />
             {getDashboardHost()}
-            <ChevronDown size={15} className="text-theme-text-muted" />
-          </button>
+          </div>
         </div>
       </div>
       <div className="p-5 lg:p-6">
@@ -631,7 +623,7 @@ function RoutingTableCard({ services, counts, routeFilter, onRouteFilterChange, 
                 className={`rounded-full border px-4 py-2 text-sm capitalize transition-colors ${
                   routeFilter === item
                     ? 'border-theme-accent bg-theme-accent text-white shadow-[0_0_26px_rgba(157,0,255,0.28)]'
-                    : 'border-white/10 bg-black/10 text-theme-text-muted hover:text-white'
+                    : 'border-theme-border bg-theme-card text-theme-text-muted hover:bg-theme-surface-hover hover:text-theme-text'
                 }`}
               >
                 {item}
@@ -640,7 +632,7 @@ function RoutingTableCard({ services, counts, routeFilter, onRouteFilterChange, 
           </div>
           <div className="flex items-center gap-4">
             <p className="text-sm text-theme-text-muted">{services.length} routes total</p>
-            <Link to="/extensions/integrations" className="inline-flex items-center gap-2 rounded-lg border border-white/12 bg-black/15 px-4 py-2 text-sm text-theme-text hover:border-theme-accent/50">
+            <Link to="/extensions/integrations" className="inline-flex items-center gap-2 rounded-lg border border-theme-border bg-theme-card px-4 py-2 text-sm text-theme-text hover:border-theme-accent/50">
               View All Routes
               <ChevronRight size={15} />
             </Link>
@@ -658,14 +650,14 @@ function RoutingTableCard({ services, counts, routeFilter, onRouteFilterChange, 
             <span className={`h-2 w-2 rounded-full ${routeFilter === 'all' ? 'bg-theme-accent' : routeFilterDotClass[routeFilter]}`} />
             {routeFilter === 'all' ? 'All Routes' : `${titleCase(routeFilter)} Routes`}
           </p>
-          <div className="overflow-hidden rounded-lg border border-white/[0.07] bg-black/[0.12]">
+          <div className="overflow-hidden rounded-lg border border-theme-border bg-theme-bg/30">
             {visibleRoutes.length > 0 ? visibleRoutes.map(service => (
               <RouteRow key={`${service.id || service.name}-${service.port || 'internal'}`} service={service} />
             )) : (
               <div className="px-5 py-6 text-sm text-theme-text-muted">No routes match this filter.</div>
             )}
             {hiddenCount > 0 ? (
-              <button type="button" onClick={onToggleExpanded} className="flex w-full items-center gap-3 border-t border-white/[0.07] px-5 py-3 text-left text-sm text-theme-text-muted hover:bg-white/[0.03] hover:text-white">
+              <button type="button" onClick={onToggleExpanded} className="flex w-full items-center gap-3 border-t border-theme-border px-5 py-3 text-left text-sm text-theme-text-muted hover:bg-theme-surface-hover hover:text-theme-text">
                 <span className="text-lg leading-none">+</span>
                 {hiddenCount} more routes
                 <ChevronDown size={15} className={expanded ? 'rotate-180' : ''} />
@@ -679,18 +671,48 @@ function RoutingTableCard({ services, counts, routeFilter, onRouteFilterChange, 
 }
 
 function StorageCard({ storage }) {
-  const items = [['Models', storage?.models], ['Vector DB', storage?.vector_db], ['Total Data', storage?.total_data]]
+  const totalDataGb = Math.max(Number(storage?.total_data?.gb) || 0, 0)
+  const modelsGb = Math.max(Number(storage?.models?.gb) || 0, 0)
+  const vectorGb = Math.max(Number(storage?.vector_db?.gb) || 0, 0)
+  const otherGb = Math.max(totalDataGb - modelsGb - vectorGb, 0)
+  const diskUsedGb = Math.max(Number(storage?.disk?.used_gb) || 0, 0)
+  const diskTotalGb = Math.max(Number(storage?.disk?.total_gb) || 0, 0)
+  const diskPercent = clampPercent(storage?.disk?.percent)
+  const items = [
+    ['Models', modelsGb],
+    ['Vector DB', vectorGb],
+    ['Other ODS data', otherGb],
+  ]
+
   return (
-    <UtilityCard icon={HardDrive} title="Storage" description="Data footprint across local model and runtime directories.">
-      <div className="space-y-4">
-        {items.map(([label, data]) => (
+    <UtilityCard icon={HardDrive} title="Storage" description="ODS data footprint and host disk capacity.">
+      <div className="rounded-lg border border-theme-border bg-theme-bg/30 p-4">
+        <div className="flex items-end justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-theme-text-muted">ODS data</p>
+            <p className="mt-1 text-2xl font-semibold text-theme-text">{storage?.total_data?.formatted || '0.0 GB'}</p>
+          </div>
+          <p className="text-right text-xs text-theme-text-muted">
+            {diskTotalGb > 0 ? `${formatStorageGb(diskUsedGb)} of ${formatStorageGb(diskTotalGb)} disk used` : 'Disk capacity unavailable'}
+          </p>
+        </div>
+        <div className="mt-3 h-2 overflow-hidden rounded-full bg-theme-border/70" aria-label={`Host disk ${diskPercent}% used`}>
+          <div className="h-full rounded-full bg-theme-accent" style={{ width: `${diskPercent}%` }} />
+        </div>
+      </div>
+
+      <div className="mt-4 space-y-3">
+        {items.map(([label, value]) => (
           <div key={label}>
-            <div className="mb-2 flex items-center justify-between text-sm">
+            <div className="mb-1.5 flex items-center justify-between text-sm">
               <span className="text-theme-text-muted">{label}</span>
-              <span className="font-medium text-theme-text">{data?.formatted || 'Unknown'}</span>
+              <span className="font-medium text-theme-text">{formatStorageGb(value)}</span>
             </div>
-            <div className="h-2 overflow-hidden rounded-full bg-white/[0.06]">
-              <div className="h-full rounded-full bg-gradient-to-r from-theme-accent to-purple-300" style={{ width: `${data?.percent || 0}%` }} />
+            <div className="h-1.5 overflow-hidden rounded-full bg-theme-border/65">
+              <div
+                className="h-full rounded-full bg-theme-accent/75"
+                style={{ width: `${totalDataGb > 0 ? clampPercent((value / totalDataGb) * 100) : 0}%` }}
+              />
             </div>
           </div>
         ))}
@@ -712,7 +734,7 @@ function UpdatesCard({ version, onCheckUpdates }) {
           <p className="text-lg font-semibold text-theme-text">{version?.update_available && version?.latest ? `v${version.latest}` : `v${version?.version || 'Unknown'}`}</p>
           <p className="mt-1 text-sm text-theme-text-muted">{updateText}</p>
         </div>
-        <button onClick={onCheckUpdates} className="rounded-lg border border-white/12 bg-black/20 px-3 py-2 text-sm text-theme-text hover:border-theme-accent/50">
+        <button onClick={onCheckUpdates} className="rounded-lg border border-theme-border bg-theme-card px-3 py-2 text-sm text-theme-text hover:border-theme-accent/50">
           Check
         </button>
       </div>
@@ -723,7 +745,7 @@ function UpdatesCard({ version, onCheckUpdates }) {
 function CommandsCard({ onExportConfig }) {
   return (
     <UtilityCard icon={SettingsIcon} title="Commands" description="Export and inspect your current install metadata.">
-      <button onClick={onExportConfig} className="flex w-full items-center justify-between rounded-xl border border-white/10 bg-black/15 px-4 py-3 text-left hover:border-theme-accent/40">
+      <button onClick={onExportConfig} className="flex w-full items-center justify-between rounded-lg border border-theme-border bg-theme-card px-4 py-3 text-left hover:border-theme-accent/40">
         <span className="flex items-center gap-3 text-sm font-medium text-theme-text"><Download size={17} />Export Configuration</span>
         <ArrowUpRight size={16} className="text-theme-text-muted" />
       </button>
@@ -745,7 +767,7 @@ function CardIntro({ icon: Icon, title, description }) {
 
 function MetaTile({ icon: Icon, label, value, badge, live = false }) {
   return (
-    <div className="min-w-0 px-4 first:pl-0 sm:border-r sm:border-white/[0.07] sm:last:border-r-0 2xl:first:pl-0">
+    <div className="min-w-0 px-4 first:pl-0 sm:border-r sm:border-theme-border sm:last:border-r-0 2xl:first:pl-0">
       <div className="mb-2 flex items-center gap-2 text-theme-text-muted">
         <Icon size={16} strokeWidth={1.8} />
         <span className="text-[11px] font-semibold uppercase tracking-[0.2em]">{label}</span>
@@ -761,7 +783,7 @@ function MetaTile({ icon: Icon, label, value, badge, live = false }) {
 
 function MetricTile({ icon: Icon, label, value, delta }) {
   return (
-    <div className="min-w-0 border-white/[0.07] 2xl:border-l 2xl:pl-5 2xl:first:border-l-0 2xl:first:pl-0">
+    <div className="min-w-0 border-theme-border 2xl:border-l 2xl:pl-5 2xl:first:border-l-0 2xl:first:pl-0">
       <p className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-theme-text-muted"><Icon size={14} />{label}</p>
       <div className="mt-2 flex items-baseline gap-2">
         <p className="text-xl font-semibold text-theme-text">{value}</p>
@@ -778,7 +800,7 @@ function RouteStatusCard({ tone, label, count, description }) {
     inactive: 'border-red-400/25 text-red-300 shadow-[inset_3px_0_0_rgba(248,113,113,0.65)]',
   }
   return (
-    <div className={`rounded-lg border bg-black/[0.12] p-5 ${palette[tone]}`}>
+    <div className={`rounded-lg border bg-theme-bg/30 p-5 ${palette[tone]}`}>
       <div className="mb-3 flex items-center gap-2">
         <span className={`h-2 w-2 rounded-full ${tone === 'online' ? 'bg-emerald-400' : tone === 'degraded' ? 'bg-amber-400' : 'bg-red-400'}`} />
         <p className="text-sm font-semibold">{label}</p>
@@ -812,7 +834,7 @@ function RouteRow({ service }) {
       </div>
     </>
   )
-  const className = "flex items-center justify-between gap-4 border-b border-white/[0.055] px-5 py-3 last:border-b-0 hover:bg-white/[0.03]"
+  const className = "flex items-center justify-between gap-4 border-b border-theme-border px-5 py-3 last:border-b-0 hover:bg-theme-surface-hover"
   return href
     ? <a href={href} target="_blank" rel="noopener noreferrer" className={className}>{content}</a>
     : <div className={className}>{content}</div>
@@ -821,30 +843,34 @@ function RouteRow({ service }) {
 function UtilityCard({ icon: Icon, title, description, children }) {
   return (
     <PremiumCard className="p-5">
-      <div className="mb-5 flex items-start gap-4">
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-theme-accent/10 text-theme-accent-light">
-          <Icon size={20} />
-        </div>
-        <div>
-          <h3 className="text-base font-semibold text-theme-text">{title}</h3>
-          <p className="mt-1 text-sm leading-6 text-theme-text-muted">{description}</p>
-        </div>
+      <div className="mb-5">
+        <CardIntro icon={Icon} title={title} description={description} />
       </div>
       {children}
     </PremiumCard>
   )
 }
 
-function PremiumCard({ as: Component = 'div', className = '', children, style, ...props }) {
+function PremiumCard({ as: Component = 'div', className = '', children, ...props }) {
   return (
     <Component
-      className={`liquid-metal-frame rounded-lg border ${className}`}
-      style={{ ...SETTINGS_CARD_STYLE, ...style }}
+      className={`settings-premium-card liquid-metal-frame liquid-metal-frame--soft rounded-lg border ${className}`}
       {...props}
     >
       {children}
     </Component>
   )
+}
+
+function clampPercent(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return 0
+  return Math.min(Math.max(number, 0), 100)
+}
+
+function formatStorageGb(value) {
+  const number = Number(value)
+  return `${Number.isFinite(number) ? Math.max(number, 0).toFixed(1) : '0.0'} GB`
 }
 
 function Banner({ tone = 'info', children, onClose }) {

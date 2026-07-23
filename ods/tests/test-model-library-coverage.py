@@ -48,6 +48,8 @@ def _has_runtime_scope(entry):
 
 
 def _agent_viable_for_release(model):
+    if str(model.get("source") or "").strip().lower() not in {"", "curated"}:
+        return False
     compatibility = model.get("app_compatibility") or {}
     for entry in compatibility.values():
         status = str((entry or {}).get("status") or "").strip().lower()
@@ -77,6 +79,10 @@ def test_low_vram_catalog_has_six_agent_viable_downloadable_models():
             assert str(artifact.get("url") or "").startswith("https://huggingface.co/"), model["id"]
             assert len(str(artifact.get("sha256") or "")) == 64, model["id"]
             assert int(artifact.get("size_bytes") or artifact.get("size_mb") or 0) > 0, model["id"]
+
+
+def test_huggingface_import_is_not_agent_viable_for_release():
+    assert not _agent_viable_for_release({"source": "huggingface"})
 
 
 def test_release_model_switchboard_catalog_ids_exist():

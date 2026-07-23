@@ -17,9 +17,11 @@ import {
 import { Link } from 'react-router-dom'
 import { useModels } from '../hooks/useModels'
 import { useDownloadProgress } from '../hooks/useDownloadProgress'
+import HuggingFaceModelBrowser from '../components/model-library/HuggingFaceModelBrowser'
 
 const PAGE_SIZE = 10
 const DOWNLOAD_STATUS_TIMEOUT_MS = 15000
+const MAX_SINGLE_REQUEST_TOKENS_PER_SECOND = 10000
 const TECH_PANEL_STYLE = {
   background: 'linear-gradient(180deg, rgba(10,10,18,0.96), rgba(7,7,13,0.92))',
   borderColor: 'rgba(255,255,255,0.08)',
@@ -90,6 +92,7 @@ export default function Models() {
   const [speedFilter, setSpeedFilter] = useState('any')
   const [contextFloor, setContextFloor] = useState(0)
   const [deleteConfirmModel, setDeleteConfirmModel] = useState(null)
+  const [libraryScope, setLibraryScope] = useState('recommended')
   const libraryRef = useRef(null)
 
   useEffect(() => {
@@ -141,21 +144,32 @@ export default function Models() {
       || null
   }, [currentModel, models])
 
+  const installedModels = useMemo(
+    () => models.filter(model => ['downloaded', 'loaded'].includes(model.status)),
+    [models]
+  )
+  const odsCatalogModels = useMemo(
+    () => models
+      .filter(model => model.metadata?.catalogSource !== 'huggingface')
+      .sort((left, right) => Number(Boolean(right.recommended)) - Number(Boolean(left.recommended)) || Number(Boolean(right.fitsVram)) - Number(Boolean(left.fitsVram))),
+    [models]
+  )
+  const scopedModels = libraryScope === 'installed' ? installedModels : odsCatalogModels
   const categoryOptions = useMemo(
-    () => buildCategoryOptions(models, hermesMinimumContext),
-    [hermesMinimumContext, models]
+    () => buildCategoryOptions(scopedModels, hermesMinimumContext),
+    [hermesMinimumContext, scopedModels]
   )
   const maxContext = useMemo(
-    () => Math.max(0, ...models.map(model => Number(model.contextLength || 0))),
-    [models]
+    () => Math.max(0, ...scopedModels.map(model => Number(model.contextLength || 0))),
+    [scopedModels]
   )
   const modelInsights = useMemo(
-    () => buildModelInsights(models),
-    [models]
+    () => buildModelInsights(scopedModels),
+    [scopedModels]
   )
   const filteredModels = useMemo(() => {
     const search = query.trim().toLowerCase()
-    return models.filter(model => {
+    return scopedModels.filter(model => {
       const memory = getMemoryMeta(model, gpu)
       if (search && !matchesModelSearch(model, search)) return false
       if (categoryFilter !== 'all' && !getModelCategoryIds(model, hermesMinimumContext).includes(categoryFilter)) return false
@@ -164,7 +178,7 @@ export default function Models() {
       if (contextFloor > 0 && Number(model.contextLength || 0) < contextFloor) return false
       return true
     })
-  }, [categoryFilter, compatibilityFilter, contextFloor, gpu, hermesMinimumContext, models, query, speedFilter])
+  }, [categoryFilter, compatibilityFilter, contextFloor, gpu, hermesMinimumContext, query, scopedModels, speedFilter])
 
   const pageCount = Math.max(1, Math.ceil(filteredModels.length / PAGE_SIZE))
   const safePage = Math.min(page, pageCount)
@@ -174,7 +188,7 @@ export default function Models() {
 
   useEffect(() => {
     setPage(1)
-  }, [categoryFilter, compatibilityFilter, contextFloor, models.length, query, speedFilter])
+  }, [categoryFilter, compatibilityFilter, contextFloor, libraryScope, query, scopedModels.length, speedFilter])
 
   const handleDownload = async (modelId) => {
     setDownloadStartFailure(null)
@@ -200,6 +214,16 @@ export default function Models() {
     const modelId = deleteConfirmModel.id
     setDeleteConfirmModel(null)
     await deleteModel(modelId)
+  }
+
+  const handleHuggingFaceImportStarted = async (result) => {
+    setDownloadStartFailure(null)
+    setDownloadStarting(result?.modelId || null)
+    setDownloadAwaitingStatus(true)
+    await Promise.allSettled([
+      Promise.resolve().then(() => downloadProgress.refresh()),
+      Promise.resolve().then(() => refresh()),
+    ])
   }
 
   const pendingModelActions = actionLoadingModels ?? (actionLoading ? [actionLoading] : [])
@@ -319,6 +343,26 @@ export default function Models() {
         </section>
       )}
 
+      <ModelSourceTabs
+        value={libraryScope}
+        onChange={setLibraryScope}
+        installedCount={installedModels.length}
+        recommendedCount={odsCatalogModels.length}
+      />
+
+      {libraryScope === 'huggingface' ? (
+        <section
+          ref={libraryRef}
+          className="rounded-lg border p-4 sm:p-5"
+          style={TECH_PANEL_STYLE}
+        >
+          <HuggingFaceModelBrowser
+            gpu={gpu}
+            downloadBusy={downloadProgress.isDownloading || Boolean(downloadStarting)}
+            onImportStarted={handleHuggingFaceImportStarted}
+          />
+        </section>
+      ) : (
       <div className="grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)]">
         <ModelsFilterPanel
           query={query}
@@ -402,6 +446,7 @@ export default function Models() {
           </div>
         </section>
       </div>
+      )}
 
       {deleteConfirmModel && (
         <DeleteModelDialog
@@ -425,9 +470,7 @@ function CurrentModelPanel({ model, currentModel, gpu }) {
     <section className="mb-4 rounded-xl border p-4" style={TECH_TILE_STYLE}>
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px_150px] lg:items-center">
         <div className="flex min-w-0 items-center gap-4">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-theme-accent/25 bg-theme-accent/10">
-            <Box size={25} className="text-theme-accent" />
-          </div>
+          <ModelPublisherIcon model={model} size="large" />
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="truncate text-sm font-semibold text-theme-text sm:text-base">
@@ -454,6 +497,109 @@ function CurrentModelPanel({ model, currentModel, gpu }) {
         </Link>
       </div>
     </section>
+  )
+}
+
+function ModelSourceTabs({ value, onChange, installedCount, recommendedCount }) {
+  const tabs = [
+    {
+      id: 'installed',
+      label: 'Installed',
+      detail: 'Local files',
+      count: installedCount,
+      icon: HardDrive,
+      tone: 'emerald',
+    },
+    {
+      id: 'recommended',
+      label: 'ODS Recommended',
+      detail: 'Curated catalog',
+      count: recommendedCount,
+      image: '/osmantic-os-icon-192.png',
+      tone: 'purple',
+    },
+    {
+      id: 'huggingface',
+      label: 'Hugging Face',
+      detail: 'Community GGUF',
+      count: null,
+      image: '/huggingface-logo.svg',
+      tone: 'amber',
+    },
+  ]
+  const activeStyles = {
+    emerald: {
+      borderColor: 'rgba(52, 211, 153, 0.48)',
+      background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(76, 29, 149, 0.14))',
+      boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08), 0 0 28px rgba(16,185,129,0.1)',
+    },
+    purple: {
+      borderColor: 'rgba(184, 100, 255, 0.58)',
+      background: 'linear-gradient(135deg, rgba(126, 34, 206, 0.22), rgba(71, 25, 120, 0.16))',
+      boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08), 0 0 30px rgba(157,0,255,0.15)',
+    },
+    amber: {
+      borderColor: 'rgba(251, 191, 106, 0.72)',
+      background: 'linear-gradient(135deg, rgba(120, 53, 15, 0.2), rgba(126, 34, 206, 0.22))',
+      boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1), 0 0 32px rgba(251,191,36,0.14)',
+    },
+  }
+  const iconStyles = {
+    emerald: 'border-emerald-300/20 bg-emerald-400/10 text-emerald-200',
+    purple: 'border-theme-accent/25 bg-theme-accent/10 text-theme-accent-light',
+    amber: 'border-amber-300/20 bg-amber-300/10 text-amber-100',
+  }
+  const indicatorStyles = {
+    emerald: 'bg-emerald-300 shadow-[0_0_10px_rgba(110,231,183,0.75)]',
+    purple: 'bg-theme-accent-light shadow-[0_0_10px_rgba(192,132,252,0.8)]',
+    amber: 'bg-amber-200 shadow-[0_0_12px_rgba(253,230,138,0.9)]',
+  }
+  return (
+    <div
+      className="mb-5 grid gap-2.5 rounded-lg border p-2.5 sm:grid-cols-3 sm:p-3"
+      style={{
+        background: `
+          linear-gradient(135deg, rgba(12,10,22,0.96), rgba(25,12,38,0.9)),
+          repeating-linear-gradient(90deg, transparent 0 35px, rgba(255,255,255,0.022) 35px 36px),
+          repeating-linear-gradient(180deg, transparent 0 35px, rgba(255,255,255,0.02) 35px 36px)
+        `,
+        borderColor: 'rgba(190, 150, 255, 0.22)',
+        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.06), 0 18px 50px rgba(0,0,0,0.22)',
+      }}
+      role="tablist"
+      aria-label="Model sources"
+    >
+      {tabs.map(({ id, label, detail, count, icon: Icon, image, tone }) => {
+        const active = value === id
+        return (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(id)}
+            style={active ? activeStyles[tone] : undefined}
+            className={`group relative flex min-h-[86px] items-center gap-3 overflow-hidden rounded-lg border px-3.5 text-left transition-[border-color,background-color,box-shadow,transform] duration-200 sm:px-4 ${active ? 'text-theme-text' : 'border-white/[0.075] bg-black/20 text-theme-text-muted hover:-translate-y-px hover:border-white/[0.16] hover:bg-white/[0.035] hover:text-theme-text'}`}
+          >
+            <span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] ${iconStyles[tone]}`}>
+              {image
+                ? <img src={image} alt="" className={image === '/osmantic-os-icon-192.png' ? 'h-10 w-10 object-contain' : 'h-8 w-8 object-contain'} />
+                : <Icon size={27} strokeWidth={1.75} />}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[13px] font-semibold leading-4 text-theme-text sm:text-[15px] sm:leading-5">{label}</span>
+              <span className={`mt-1 block truncate text-xs ${active && tone === 'amber' ? 'text-amber-200/80' : 'text-theme-text-muted/70'}`}>{detail}</span>
+            </span>
+            {count !== null && (
+              <span className="flex h-10 min-w-10 shrink-0 items-center justify-end border-l border-white/[0.07] pl-3 font-mono text-lg font-semibold text-theme-accent-light">
+                {count}
+              </span>
+            )}
+            {active && <span className={`absolute bottom-0 left-1/2 h-px w-10 -translate-x-1/2 ${indicatorStyles[tone]}`} />}
+          </button>
+        )
+      })}
+    </div>
   )
 }
 
@@ -662,9 +808,7 @@ function ModelTableRow({
     <div className="grid grid-cols-2 gap-x-3 gap-y-4 px-3 py-4 transition-colors hover:bg-white/[0.025] sm:grid-cols-[minmax(0,1fr)_auto] lg:grid-cols-[minmax(250px,1.7fr)_144px_70px_110px_120px_90px_130px] lg:gap-5 lg:px-5 lg:py-3.5">
       <div className="col-span-2 min-w-0 sm:col-span-1 lg:col-span-1">
         <div className="flex min-w-0 items-start gap-3">
-          <div className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border ${iconTone.border} ${iconTone.bg}`}>
-            <Box size={17} className={iconTone.text} />
-          </div>
+          <ModelPublisherIcon model={model} tone={iconTone} />
           <div className="min-w-0">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <h3 className="truncate text-sm font-semibold text-theme-text">{model.name}</h3>
@@ -1398,10 +1542,11 @@ function isHermesTalkVerified(compatibility) {
 }
 
 function getSpeedDisplay(model) {
-  const value = toNumber(model?.tokensPerSec) || extractTokensPerSecond(model?.performanceLabel)
+  const rawValue = toNumber(model?.tokensPerSec) || extractTokensPerSecond(model?.performanceLabel)
+  const value = rawValue && rawValue <= MAX_SINGLE_REQUEST_TOKENS_PER_SECOND ? rawValue : null
   return {
     value,
-    label: model?.performanceLabel || (value ? `${formatNumber(value)} tok/s` : '--'),
+    label: value ? (model?.performanceLabel || `${formatNumber(value)} tok/s`) : 'Benchmark required',
     tone: model?.fitsVram === false ? 'orange' : 'purple',
   }
 }
@@ -1463,6 +1608,36 @@ function getIconTone(model, compatibility) {
   if (compatibility.tone === 'amber') return { border: 'border-amber-400/35', bg: 'bg-amber-500/10', text: 'text-amber-300' }
   if (compatibility.detail === 'Best') return { border: 'border-theme-accent/35', bg: 'bg-theme-accent/10', text: 'text-theme-accent' }
   return { border: 'border-emerald-400/30', bg: 'bg-emerald-500/10', text: 'text-emerald-400' }
+}
+
+function ModelPublisherIcon({ model, tone, size = 'row' }) {
+  const author = model?.publisher?.huggingFaceAuthor
+  const publisherName = model?.publisher?.name || author
+  const [imageFailed, setImageFailed] = useState(false)
+  useEffect(() => setImageFailed(false), [author])
+  const large = size === 'large'
+  const dimensions = large ? 'h-12 w-12 rounded-xl' : 'mt-0.5 h-7 w-7 rounded-lg'
+  const fallbackTone = tone || {
+    border: 'border-theme-accent/25',
+    bg: 'bg-theme-accent/10',
+    text: 'text-theme-accent',
+  }
+
+  return (
+    <div className={`relative flex shrink-0 items-center justify-center overflow-hidden border ${dimensions} ${fallbackTone.border} ${fallbackTone.bg}`}>
+      <Box size={large ? 25 : 17} className={fallbackTone.text} />
+      {author && !imageFailed && (
+        <img
+          src={`/api/models/huggingface/authors/${encodeURIComponent(author)}/avatar`}
+          alt={`${publisherName} logo`}
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          onError={() => setImageFailed(true)}
+          className="absolute inset-0 h-full w-full bg-[#111118] object-cover"
+        />
+      )}
+    </div>
+  )
 }
 
 function buildPageList(page, pageCount) {

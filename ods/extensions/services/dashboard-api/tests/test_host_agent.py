@@ -58,6 +58,59 @@ def can_create_symlinks(tmp_path: Path) -> bool:
     return link.is_symlink()
 
 
+def test_host_agent_model_library_accepts_only_integrity_pinned_hub_imports(monkeypatch, tmp_path):
+    install_dir = tmp_path / "ods"
+    (install_dir / "config").mkdir(parents=True)
+    (install_dir / "data").mkdir()
+    (install_dir / "config" / "model-library.json").write_text(
+        json.dumps({"models": [{"id": "curated", "gguf_file": "curated.gguf"}]}),
+        encoding="utf-8",
+    )
+    imported = {
+        "id": "hf-community",
+        "source": "huggingface",
+        "gguf_file": "hf-community-Q4_K_M.gguf",
+        "gguf_url": "https://huggingface.co/org/repo/resolve/" + ("a" * 40) + "/model.gguf",
+        "gguf_sha256": "b" * 64,
+        "size_bytes": 4096,
+    }
+    (install_dir / "data" / "model-imports.json").write_text(
+        json.dumps({"version": 1, "models": [imported]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+
+    records = _mod._load_model_library_records()
+
+    assert [item["id"] for item in records] == ["curated", "hf-community"]
+    assert _mod._model_download_manifest(records[1])["artifacts"][0]["size_bytes"] == 4096
+
+
+def test_host_agent_model_library_rejects_import_collision(monkeypatch, tmp_path):
+    install_dir = tmp_path / "ods"
+    (install_dir / "config").mkdir(parents=True)
+    (install_dir / "data").mkdir()
+    (install_dir / "config" / "model-library.json").write_text(
+        json.dumps({"models": [{"id": "curated", "gguf_file": "curated.gguf"}]}),
+        encoding="utf-8",
+    )
+    (install_dir / "data" / "model-imports.json").write_text(
+        json.dumps({"models": [{
+            "id": "curated",
+            "source": "huggingface",
+            "gguf_file": "other.gguf",
+            "gguf_url": "https://huggingface.co/org/repo/resolve/" + ("a" * 40) + "/model.gguf",
+            "gguf_sha256": "b" * 64,
+            "size_bytes": 4096,
+        }]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+
+    with pytest.raises(RuntimeError, match="collides"):
+        _mod._load_model_library_records()
+
+
 @pytest.fixture
 def host_agent_wire_client(monkeypatch):
     """Point the shared sync transport at a test server with isolated state."""
@@ -4905,6 +4958,11 @@ class TestModelDownloadFileIntegrity:
             library_models=[model],
             expected_payload=payload,
         )
+        (install_dir / ".env").write_text(
+            "HF_TOKEN=hf_persisted_read_token\n",
+            encoding="utf-8",
+        )
+        monkeypatch.delenv("HF_TOKEN", raising=False)
         monkeypatch.delenv("HF_HUB_ETAG_TIMEOUT", raising=False)
         monkeypatch.delenv("HF_HUB_DOWNLOAD_TIMEOUT", raising=False)
         child_envs = []
@@ -4949,6 +5007,7 @@ class TestModelDownloadFileIntegrity:
         assert error == ""
         assert child_envs[0]["HF_HUB_ETAG_TIMEOUT"] == "30"
         assert child_envs[0]["HF_HUB_DOWNLOAD_TIMEOUT"] == "30"
+        assert child_envs[0]["HF_TOKEN"] == "hf_persisted_read_token"
         status = json.loads(status_path.read_text(encoding="utf-8"))
         assert status["status"] == "downloading"
         assert status["model"] == "hf-model.gguf"

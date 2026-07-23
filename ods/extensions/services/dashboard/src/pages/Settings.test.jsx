@@ -87,10 +87,13 @@ describe('Settings', () => {
 
     expect(await screen.findByRole('heading', { name: 'Storage' })).toBeInTheDocument()
     expect(screen.getByText('12.0 GB')).toBeInTheDocument()
-    expect(screen.getByText('62.5 GB of 500.0 GB disk used')).toBeInTheDocument()
+    expect(screen.getByText('62.5 GB of 500.0 GB')).toBeInTheDocument()
+    expect(screen.getByText('./data')).toBeInTheDocument()
     expect(screen.getByText('Models')).toBeInTheDocument()
     expect(screen.getByText('Vector DB')).toBeInTheDocument()
-    expect(screen.getByText('Other ODS data')).toBeInTheDocument()
+    expect(screen.getByText('Service data')).toBeInTheDocument()
+    expect(screen.queryByText('Other ODS data')).not.toBeInTheDocument()
+    expect(screen.getByText('Includes bind-mounted ODS service data. Docker image layers are managed separately by Docker.')).toBeInTheDocument()
     expect(screen.getByLabelText('Host disk 12.5% used')).toBeInTheDocument()
     const accountCard = screen.getByRole('link', { name: /Account Usage/ })
     expect(within(accountCard).getByText('16.4k')).toBeInTheDocument()
@@ -126,7 +129,8 @@ describe('Settings', () => {
     expect(await screen.findByRole('heading', { name: 'System Identity' })).toBeInTheDocument()
     expect(screen.getByText('Some settings details are temporarily unavailable. Showing the data that loaded successfully.')).toBeInTheDocument()
     expect(screen.getByText('Disk capacity unavailable')).toBeInTheDocument()
-    expect(screen.getAllByText('0.0 GB')).toHaveLength(4)
+    expect(screen.getByText('No data yet')).toBeInTheDocument()
+    expect(screen.getAllByText('Empty')).toHaveLength(3)
   })
 
   test('does not force dark inline card backgrounds when the light theme is selected', async () => {

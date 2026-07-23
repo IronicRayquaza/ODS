@@ -415,10 +415,12 @@ export default function Settings() {
           onToggleExpanded={() => setRoutesExpanded(current => !current)}
         />
 
-        <div className="grid gap-4 lg:grid-cols-3">
+        <div className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1.65fr)_minmax(22rem,0.85fr)]">
           <StorageCard storage={storage} />
-          <UpdatesCard version={version} onCheckUpdates={() => fetchVersionInfo({ announce: true })} />
-          <CommandsCard onExportConfig={handleExportConfig} />
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
+            <UpdatesCard version={version} onCheckUpdates={() => fetchVersionInfo({ announce: true })} />
+            <CommandsCard onExportConfig={handleExportConfig} />
+          </div>
         </div>
 
         {envOpen && envEditor ? (
@@ -674,41 +676,60 @@ function StorageCard({ storage }) {
   const totalDataGb = Math.max(Number(storage?.total_data?.gb) || 0, 0)
   const modelsGb = Math.max(Number(storage?.models?.gb) || 0, 0)
   const vectorGb = Math.max(Number(storage?.vector_db?.gb) || 0, 0)
-  const otherGb = Math.max(totalDataGb - modelsGb - vectorGb, 0)
+  const serviceDataGb = Math.max(totalDataGb - modelsGb - vectorGb, 0)
   const diskUsedGb = Math.max(Number(storage?.disk?.used_gb) || 0, 0)
   const diskTotalGb = Math.max(Number(storage?.disk?.total_gb) || 0, 0)
   const diskPercent = clampPercent(storage?.disk?.percent)
   const items = [
     ['Models', modelsGb],
     ['Vector DB', vectorGb],
-    ['Other ODS data', otherGb],
+    ['Service data', serviceDataGb],
   ]
 
   return (
-    <UtilityCard icon={HardDrive} title="Storage" description="ODS data footprint and host disk capacity.">
-      <div className="rounded-lg border border-theme-border bg-theme-bg/30 p-4">
-        <div className="flex items-end justify-between gap-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-theme-text-muted">ODS data</p>
-            <p className="mt-1 text-2xl font-semibold text-theme-text">{storage?.total_data?.formatted || '0.0 GB'}</p>
+    <UtilityCard icon={HardDrive} title="Storage" description="Persistent ODS data and host disk capacity.">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="rounded-lg border border-theme-border bg-theme-bg/30 p-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-theme-text-muted">ODS data</p>
+              <p className="mt-1 text-2xl font-semibold text-theme-text">
+                {totalDataGb > 0 ? (storage?.total_data?.formatted || formatStorageGb(totalDataGb)) : 'No data yet'}
+              </p>
+            </div>
+            <Database size={20} className="text-theme-text-muted" />
           </div>
-          <p className="text-right text-xs text-theme-text-muted">
-            {diskTotalGb > 0 ? `${formatStorageGb(diskUsedGb)} of ${formatStorageGb(diskTotalGb)} disk used` : 'Disk capacity unavailable'}
-          </p>
+          <div className="mt-4 flex items-center justify-between gap-3 border-t border-theme-border pt-3 text-xs">
+            <span className="text-theme-text-muted">Data directory</span>
+            <code className="rounded-md bg-theme-bg/55 px-2 py-1 text-theme-text">./data</code>
+          </div>
         </div>
-        <div className="mt-3 h-2 overflow-hidden rounded-full bg-theme-border/70" aria-label={`Host disk ${diskPercent}% used`}>
-          <div className="h-full rounded-full bg-theme-accent" style={{ width: `${diskPercent}%` }} />
+
+        <div className="rounded-lg border border-theme-border bg-theme-bg/30 p-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-theme-text-muted">Host disk</p>
+              <p className="mt-1 text-2xl font-semibold text-theme-text">
+                {diskTotalGb > 0 ? `${diskPercent}% used` : 'Unavailable'}
+              </p>
+            </div>
+            <HardDrive size={20} className="text-theme-text-muted" />
+          </div>
+          <p className="mt-2 text-xs text-theme-text-muted">
+            {diskTotalGb > 0 ? `${formatStorageGb(diskUsedGb)} of ${formatStorageGb(diskTotalGb)}` : 'Disk capacity unavailable'}
+          </p>
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-theme-border/70" aria-label={`Host disk ${diskPercent}% used`}>
+            <div className="h-full rounded-full bg-theme-accent" style={{ width: `${diskPercent}%` }} />
+          </div>
         </div>
       </div>
 
-      <div className="mt-4 space-y-3">
+      <div className="mt-4 grid gap-3 sm:grid-cols-3">
         {items.map(([label, value]) => (
-          <div key={label}>
-            <div className="mb-1.5 flex items-center justify-between text-sm">
-              <span className="text-theme-text-muted">{label}</span>
-              <span className="font-medium text-theme-text">{formatStorageGb(value)}</span>
-            </div>
-            <div className="h-1.5 overflow-hidden rounded-full bg-theme-border/65">
+          <div key={label} className="rounded-lg border border-theme-border bg-theme-bg/20 px-4 py-3">
+            <p className="text-xs text-theme-text-muted">{label}</p>
+            <p className="mt-1 text-base font-semibold text-theme-text">{value > 0 ? formatStorageGb(value) : 'Empty'}</p>
+            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-theme-border/65">
               <div
                 className="h-full rounded-full bg-theme-accent/75"
                 style={{ width: `${totalDataGb > 0 ? clampPercent((value / totalDataGb) * 100) : 0}%` }}
@@ -717,6 +738,10 @@ function StorageCard({ storage }) {
           </div>
         ))}
       </div>
+
+      <p className="mt-3 text-xs text-theme-text-muted">
+        Includes bind-mounted ODS service data. Docker image layers are managed separately by Docker.
+      </p>
     </UtilityCard>
   )
 }
@@ -728,28 +753,47 @@ function UpdatesCard({ version, onCheckUpdates }) {
     : 'Not checked yet'
 
   return (
-    <UtilityCard icon={RefreshCw} title="Updates" description={checkedAt ? `Last checked ${checkedAt}` : 'Checks GitHub without blocking the page.'}>
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <p className="text-lg font-semibold text-theme-text">{version?.update_available && version?.latest ? `v${version.latest}` : `v${version?.version || 'Unknown'}`}</p>
-          <p className="mt-1 text-sm text-theme-text-muted">{updateText}</p>
+    <PremiumCard className="flex min-h-0 flex-col justify-between p-4">
+      <div className="flex items-start gap-3">
+        <RefreshCw size={19} strokeWidth={1.8} className="mt-0.5 shrink-0 text-theme-accent-light" />
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold text-theme-text">Updates</h2>
+          <p className="mt-0.5 truncate text-xs text-theme-text-muted">
+            {checkedAt ? `Checked ${checkedAt}` : 'Release status has not been checked.'}
+          </p>
         </div>
-        <button onClick={onCheckUpdates} className="rounded-lg border border-theme-border bg-theme-card px-3 py-2 text-sm text-theme-text hover:border-theme-accent/50">
+      </div>
+      <div className="mt-4 flex items-center justify-between gap-4 border-t border-theme-border pt-3">
+        <div>
+          <p className="text-base font-semibold text-theme-text">
+            {version?.update_available && version?.latest ? `v${version.latest}` : `v${version?.version || 'Unknown'}`}
+          </p>
+          <p className="text-xs text-theme-text-muted">{updateText}</p>
+        </div>
+        <button type="button" onClick={onCheckUpdates} className="inline-flex items-center gap-2 rounded-lg border border-theme-border bg-theme-card px-3 py-2 text-sm text-theme-text hover:border-theme-accent/50">
+          <RefreshCw size={15} />
           Check
         </button>
       </div>
-    </UtilityCard>
+    </PremiumCard>
   )
 }
 
 function CommandsCard({ onExportConfig }) {
   return (
-    <UtilityCard icon={SettingsIcon} title="Commands" description="Export and inspect your current install metadata.">
-      <button onClick={onExportConfig} className="flex w-full items-center justify-between rounded-lg border border-theme-border bg-theme-card px-4 py-3 text-left hover:border-theme-accent/40">
-        <span className="flex items-center gap-3 text-sm font-medium text-theme-text"><Download size={17} />Export Configuration</span>
-        <ArrowUpRight size={16} className="text-theme-text-muted" />
+    <PremiumCard className="flex min-h-0 flex-col justify-between p-4">
+      <div className="flex items-start gap-3">
+        <SettingsIcon size={19} strokeWidth={1.8} className="mt-0.5 shrink-0 text-theme-accent-light" />
+        <div>
+          <h2 className="text-base font-semibold text-theme-text">Commands</h2>
+          <p className="mt-0.5 text-xs text-theme-text-muted">Portable operational metadata.</p>
+        </div>
+      </div>
+      <button type="button" onClick={onExportConfig} className="mt-4 flex w-full items-center justify-between border-t border-theme-border pt-3 text-left text-sm font-medium text-theme-text hover:text-theme-accent-light">
+        <span className="flex items-center gap-2"><Download size={16} />Export configuration</span>
+        <ArrowUpRight size={15} className="text-theme-text-muted" />
       </button>
-    </UtilityCard>
+    </PremiumCard>
   )
 }
 

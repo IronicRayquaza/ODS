@@ -469,20 +469,20 @@ export default function Settings() {
 
 function SettingsPageHeader({ onRefresh, onCheckUpdates, onOpenEnvironment }) {
   return (
-    <header className="mb-7 flex w-full flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+    <header className="mb-7 flex w-full flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
       <div>
         <h1 className="text-3xl font-semibold tracking-[-0.01em] text-theme-text sm:text-4xl">Settings</h1>
         <p className="mt-2 text-base text-theme-text-muted">Configure your ODS installation.</p>
       </div>
-      <div className="flex flex-wrap items-center gap-3 lg:justify-end">
-        <button onClick={onRefresh} className="order-first flex items-center gap-2 text-sm font-medium text-theme-accent-light hover:text-white lg:-mt-8">
+      <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+        <button onClick={onRefresh} className="flex h-11 items-center gap-2 rounded-lg px-3 text-sm font-medium text-theme-accent-light transition-colors hover:bg-white/[0.04] hover:text-white">
           <RefreshCw size={16} />
           Refresh
         </button>
-        <button onClick={onCheckUpdates} className="rounded-lg border border-white/15 bg-black/20 px-5 py-3 text-sm font-medium text-theme-text transition-colors hover:border-theme-accent/50 hover:text-white">
+        <button onClick={onCheckUpdates} className="flex h-11 items-center rounded-lg border border-white/15 bg-black/20 px-4 text-sm font-medium text-theme-text transition-colors hover:border-theme-accent/50 hover:text-white">
           <span className="flex items-center gap-2"><RefreshCw size={15} />Check for Updates</span>
         </button>
-        <button onClick={onOpenEnvironment} className="liquid-metal-button rounded-lg px-5 py-3 text-sm font-semibold text-white">
+        <button onClick={onOpenEnvironment} className="liquid-metal-button flex h-11 items-center rounded-lg px-5 text-sm font-semibold text-white">
           <span className="flex items-center gap-2">Open Environment Editor<ChevronRight size={16} /></span>
         </button>
       </div>

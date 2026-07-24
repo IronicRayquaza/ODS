@@ -196,14 +196,19 @@ def test_llama31_8b_is_not_agent_viable_until_revalidated():
     assert not _agent_viable_for_release(by_id["llama3.1-8b-instruct-q4"])
 
 
-def test_phi35_mini_is_unsupported_on_windows_8gb_after_profile_revalidation():
+def test_phi35_mini_requires_perplexica_revalidation_globally_and_runtime_revalidation_on_windows():
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     by_id = {model["id"]: model for model in catalog["models"]}
     compatibility = by_id["phi3.5-mini-q4"]["app_compatibility"]
 
     assert compatibility["openai_chat"]["status"] == "unsupported_until_revalidated"
     assert compatibility["openai_chat"]["evidence"]
-    assert _agent_viable_for_release(by_id["phi3.5-mini-q4"])
+    assert compatibility["perplexica"]["status"] == "unsupported_until_revalidated"
+    assert compatibility["perplexica"]["globalScope"] is True
+    assert "tower2" in compatibility["perplexica"]["reason"]
+    assert "strix-halo" in compatibility["perplexica"]["reason"]
+    assert "cycle-001/{tower2,strix-halo}" in compatibility["perplexica"]["evidence"]
+    assert not _agent_viable_for_release(by_id["phi3.5-mini-q4"])
     assert not _agent_viable_for_release(by_id["phi3.5-mini-q4"], host="windows-laptop")
 
 

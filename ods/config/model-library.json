@@ -480,13 +480,13 @@
         "opencode": {
           "status": "unsupported_until_revalidated",
           "label": "OpenCode revalidation required",
-          "reason": "A fresh release-grade fleet model-UI run loaded Granite 4.1 3B on tower2, strix-halo, spark, m5-mbp, and strixy. Tower2, Spark, M5, and Strixy passed OpenCode, while strix-halo routed correctly through Lemonade but OpenCode received only the first character of the requested verification phrase. Keep this model out of all-app release coverage on strix-halo until the Lemonade/OpenCode path is revalidated.",
-          "evidence": "fleet-test/runs/2026-07-23T21-41-59Z-release-product-cf6dffb8e8bb-harness-47eedd6c0b40-hosts-six-scope-6cycle-switchboard/model-ui/cycle-004/tower2; fleet-test/runs/2026-07-23T21-41-59Z-release-product-cf6dffb8e8bb-harness-47eedd6c0b40-hosts-six-scope-6cycle-switchboard/model-ui/cycle-004/strix-halo; fleet-test/runs/2026-07-23T21-41-59Z-release-product-cf6dffb8e8bb-harness-47eedd6c0b40-hosts-six-scope-6cycle-switchboard/model-ui/cycle-004/spark; fleet-test/runs/2026-07-23T21-41-59Z-release-product-cf6dffb8e8bb-harness-47eedd6c0b40-hosts-six-scope-6cycle-switchboard/model-ui/cycle-004/m5-mbp; fleet-test/runs/2026-07-23T21-41-59Z-release-product-cf6dffb8e8bb-harness-47eedd6c0b40-hosts-six-scope-6cycle-switchboard/model-ui/cycle-004/strixy",
-          "recordedAt": "2026-07-23T23:10:16Z",
-          "productSha": "cf6dffb8e8bbf60f418caeab47d7ae3ef8815307",
-          "harnessSha": "47eedd6c0b40908272ad6ba324868f4acec2f308",
-          "hostScope": ["strix-halo"],
-          "expiresAt": "2026-08-23T00:00:00Z"
+          "reason": "Release-grade fleet evidence has shown intermittent one-character OpenCode answers for Granite 4.1 3B on strix-halo and spark. In the fresh exact-commit Spark failure, ODS Talk, LiteLLM, Open WebUI, and Perplexica passed and routed to the exact llama-server model, but OpenCode stopped after two output tokens and returned only \"O\" instead of its challenge-bound verification phrase. Keep this model out of all-app release coverage on those hosts until the OpenCode path is revalidated.",
+          "evidence": "fleet-test/runs/2026-07-23T21-41-59Z-release-product-cf6dffb8e8bb-harness-47eedd6c0b40-hosts-six-scope-6cycle-switchboard/model-ui/cycle-004/strix-halo; fleet-test/runs/2026-07-24T14-11-30Z-release-product-f35e9af8eeab-harness-954deb755b07-hosts-six-scope-6cycle-switchboard/model-ui/cycle-004/spark",
+          "recordedAt": "2026-07-24T16:36:20Z",
+          "productSha": "f35e9af8eeab7bb154081d1a3076ad9824f58616",
+          "harnessSha": "954deb755b0730719512ac3675a748474180e01c",
+          "hostScope": ["strix-halo", "spark"],
+          "expiresAt": "2026-08-24T00:00:00Z"
         },
         "hermes_talk": {
           "status": "unsupported_until_revalidated",

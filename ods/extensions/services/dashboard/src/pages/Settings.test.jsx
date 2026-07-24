@@ -195,4 +195,23 @@ describe('Settings', () => {
     expect(screen.getByDisplayValue('192.168.1.25')).toBeInTheDocument()
     expect(fetchMock.mock.calls.filter(([url]) => url === '/api/settings/env')).toHaveLength(2)
   })
+
+  test('preserves unsaved environment changes during editor refresh and reloads them only on explicit reload', async () => {
+    const { fetchMock } = renderSettings()
+    const input = await screen.findByDisplayValue('192.168.1.10')
+    const environmentEditor = screen.getByRole('heading', { name: 'Environment Editor' }).closest('section')
+    fireEvent.change(input, { target: { value: '192.168.1.25' } })
+
+    fireEvent.click(within(environmentEditor).getByRole('button', { name: 'Refresh' }))
+
+    await screen.findByText('System details refreshed. Unsaved environment changes were preserved.')
+    expect(screen.getByDisplayValue('192.168.1.25')).toBeInTheDocument()
+
+    const refreshedEnvironmentEditor = screen.getByRole('heading', { name: 'Environment Editor' }).closest('section')
+    fireEvent.click(within(refreshedEnvironmentEditor).getByRole('button', { name: 'Reload' }))
+
+    await screen.findByText('Environment editor reloaded from disk.')
+    expect(screen.getByDisplayValue('192.168.1.10')).toBeInTheDocument()
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/settings/env')).toHaveLength(3)
+  })
 })

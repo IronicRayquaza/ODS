@@ -447,7 +447,7 @@ export default function Settings() {
                 setEnvClearedSecrets(current => current.filter(item => item !== key))
                 setEnvValues(current => ({ ...current, [key]: value }))
               }}
-              onRefresh={fetchSettings}
+              onRefresh={() => fetchSettings({ preserveEnvChanges: envDirty })}
               onReload={() => fetchEnvEditor({ announce: true })}
               onSave={handleSaveEnv}
               onApply={handleApplyEnv}

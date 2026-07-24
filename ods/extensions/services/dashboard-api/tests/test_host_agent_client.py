@@ -115,7 +115,9 @@ def test_post_retries_connect_failure_before_request_is_sent(monkeypatch):
         nonlocal calls
         calls += 1
         if calls < 3:
-            raise httpx.ConnectError("temporary Docker host route", request=request)
+            raise httpx.ConnectError(
+                "[Errno 101] Network is unreachable", request=request
+            )
         return httpx.Response(200, json={"status": "accepted"})
 
     client = httpx.Client(base_url="http://agent", transport=httpx.MockTransport(handler))
@@ -141,7 +143,9 @@ async def test_async_post_retries_connect_failure_before_request_is_sent(monkeyp
         nonlocal calls
         calls += 1
         if calls == 1:
-            raise httpx.ConnectError("temporary Docker host route", request=request)
+            raise httpx.ConnectError(
+                "[Errno 101] Network is unreachable", request=request
+            )
         return httpx.Response(200, json={"status": "accepted"})
 
     async def fake_sleep(delay):
@@ -161,6 +165,26 @@ async def test_async_post_retries_connect_failure_before_request_is_sent(monkeyp
         assert sleeps == [agent_client._CONNECT_RETRY_DELAYS_SECONDS[0]]
     finally:
         await client.aclose()
+
+
+def test_post_does_not_retry_generic_connect_failure(monkeypatch):
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise httpx.ConnectError("connection refused", request=request)
+
+    client = httpx.Client(base_url="http://agent", transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(agent_client, "_sync_client", client)
+    try:
+        with pytest.raises(agent_client.AgentUnavailable):
+            agent_client.request_json(
+                "POST", "/v1/extension/install", payload={"service_id": "aider"}
+            )
+        assert calls == 1
+    finally:
+        client.close()
 
 
 @pytest.mark.parametrize(

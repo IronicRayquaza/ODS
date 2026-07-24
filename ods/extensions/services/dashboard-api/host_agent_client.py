@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import threading
 import time
@@ -61,6 +62,36 @@ _async_client_lock = threading.Lock()
 # non-retryable for POST so model activations and extension operations cannot be
 # duplicated after the agent may have accepted them.
 _CONNECT_RETRY_DELAYS_SECONDS = (0.25, 1.0, 3.0, 6.0)
+_TRANSIENT_ROUTE_ERRNOS = {
+    errno.ENETUNREACH,
+    errno.EHOSTUNREACH,
+    10051,  # WSAENETUNREACH
+    10065,  # WSAEHOSTUNREACH
+}
+_TRANSIENT_ROUTE_MESSAGES = (
+    "network is unreachable",
+    "no route to host",
+)
+
+
+def _is_transient_route_connect_error(exc: BaseException) -> bool:
+    """Return True only for a pre-connect host-route withdrawal.
+
+    Connection refused, DNS errors, and generic mocked ConnectErrors still
+    fail immediately.  The bounded retry is reserved for Docker Desktop's
+    observed ENETUNREACH/EHOSTUNREACH route flap.
+    """
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if getattr(current, "errno", None) in _TRANSIENT_ROUTE_ERRNOS:
+            return True
+        message = str(current).casefold()
+        if any(token in message for token in _TRANSIENT_ROUTE_MESSAGES):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _headers() -> dict[str, str]:
@@ -170,7 +201,10 @@ def _sync_request(
         except httpx.TimeoutException as exc:
             raise AgentTimeout(f"Host agent {method} {path} timed out") from exc
         except httpx.ConnectError as exc:
-            if connect_retry_index < len(_CONNECT_RETRY_DELAYS_SECONDS):
+            if (
+                _is_transient_route_connect_error(exc)
+                and connect_retry_index < len(_CONNECT_RETRY_DELAYS_SECONDS)
+            ):
                 time.sleep(_CONNECT_RETRY_DELAYS_SECONDS[connect_retry_index])
                 connect_retry_index += 1
                 continue
@@ -208,7 +242,10 @@ async def _async_request(
         except httpx.TimeoutException as exc:
             raise AgentTimeout(f"Host agent {method} {path} timed out") from exc
         except httpx.ConnectError as exc:
-            if connect_retry_index < len(_CONNECT_RETRY_DELAYS_SECONDS):
+            if (
+                _is_transient_route_connect_error(exc)
+                and connect_retry_index < len(_CONNECT_RETRY_DELAYS_SECONDS)
+            ):
                 await asyncio.sleep(_CONNECT_RETRY_DELAYS_SECONDS[connect_retry_index])
                 connect_retry_index += 1
                 continue

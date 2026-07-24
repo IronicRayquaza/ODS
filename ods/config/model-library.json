@@ -80,6 +80,17 @@
           "harnessSha": "954deb755b0730719512ac3675a748474180e01c",
           "hostScope": ["windows-laptop"],
           "expiresAt": "2026-08-24T00:00:00Z"
+        },
+        "perplexica": {
+          "status": "unsupported_until_revalidated",
+          "label": "Perplexica orchestration unsupported",
+          "reason": "Fresh exact-commit release cycles loaded Phi-3.5 Mini through the browser UI on tower2 (Linux llama-server) and strix-halo (Lemonade), then passed challenge-bound ODS Talk, LiteLLM, Open WebUI, and OpenCode where deployed. Perplexica alone failed to complete within 180 seconds on both independent backends, while its baseline probes and the following Granite H-Micro cycle passed. Keep Phi-3.5 Mini out of all-app release coverage until Perplexica orchestration is revalidated.",
+          "evidence": "fleet-test/runs/2026-07-24T09-22-58Z-release-product-4cd022b82609-harness-954deb755b07-hosts-six-scope-6cycle-switchboard/model-ui/cycle-001/{tower2,strix-halo}",
+          "recordedAt": "2026-07-24T10:09:00Z",
+          "productSha": "4cd022b826093913dda7137b2dd69502628d7f50",
+          "harnessSha": "954deb755b0730719512ac3675a748474180e01c",
+          "globalScope": true,
+          "expiresAt": "2026-08-24T00:00:00Z"
         }
       },
       "install_recommendation": false

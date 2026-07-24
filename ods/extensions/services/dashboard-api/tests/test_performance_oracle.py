@@ -712,7 +712,7 @@ def test_real_catalog_has_six_windows_8gb_release_swap_candidates(data_dir, tmp_
 
     assert len(candidates) >= 6
     assert {
-        "qwen2.5-coder-1.5b-128k-q4",
+        "qwen2.5-coder-3b-128k-q4",
         "granite4.0-h-micro-q4",
         "granite4.0-h-tiny-q4",
         "granite4.0-h-1b-q4",
@@ -726,7 +726,13 @@ def test_real_catalog_has_six_windows_8gb_release_swap_candidates(data_dir, tmp_
     )
     assert all_by_id["smollm3-3b-q4"]["contextLength"] == 65536
     assert all_by_id["qwen3-4b-128k-q4"]["contextLength"] == 131072
-    assert by_id["qwen2.5-coder-1.5b-128k-q4"]["contextLength"] == 131072
+    assert by_id["qwen2.5-coder-3b-128k-q4"]["contextLength"] == 128000
+    assert by_id["qwen2.5-coder-3b-128k-q4"]["appCompatibility"]["hermesTalk"]["status"] == (
+        "verified"
+    )
+    assert by_id["qwen2.5-coder-3b-128k-q4"]["appCompatibility"]["agentViability"]["status"] == (
+        "verified"
+    )
     assert "qwen3-4b-instruct-2507-q4" in candidate_ids
     assert by_id["qwen3-4b-instruct-2507-q4"]["contextLength"] >= 64000
     assert by_id["qwen3-4b-instruct-2507-q4"]["appCompatibility"]["agentViability"]["status"] == (
@@ -749,7 +755,11 @@ def test_real_catalog_has_six_windows_8gb_release_swap_candidates(data_dir, tmp_
     assert all_by_id["falcon-h1-3b-instruct-q4"]["appCompatibility"]["agentViability"]["status"] == (
         "not_agent_viable"
     )
-    assert all_by_id["qwen2.5-coder-1.5b-128k-q4"]["appCompatibility"]["hermesTalk"]["status"] == "unknown"
+    assert (
+        all_by_id["qwen2.5-coder-1.5b-128k-q4"]["appCompatibility"]["perplexica"]["status"]
+        == "unsupported_until_revalidated"
+    )
+    assert "qwen2.5-coder-1.5b-128k-q4" not in candidate_ids
     assert all_by_id["phi3-mini-128k-q4"]["appCompatibility"]["hermesTalk"]["status"] == "unknown"
     assert all_by_id["phi3-mini-128k-q4"]["appCompatibility"]["perplexica"]["status"] == (
         "unsupported_until_revalidated"

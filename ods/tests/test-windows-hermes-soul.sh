@@ -15,6 +15,8 @@ LINUX_PHASE_06="$ROOT_DIR/installers/phases/06-directories.sh"
 LINUX_PHASE_11="$ROOT_DIR/installers/phases/11-services.sh"
 LINUX_CLI="$ROOT_DIR/ods-cli"
 HERMES_COMPOSE="$ROOT_DIR/extensions/services/hermes/compose.yaml"
+HERMES_SOUL="$ROOT_DIR/extensions/services/hermes/SOUL.md.template"
+SOUL_BUILDER="$ROOT_DIR/scripts/build-installation-context.py"
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -78,6 +80,8 @@ check 'If a previous failed' "$LINUX_CLI" "Linux CLI documents pre-compose SOUL 
 
 check './data/persona/SOUL.md:/opt/hermes/docker/SOUL.md:ro' "$HERMES_COMPOSE" "Hermes compose mounts generated persona file"
 reject ':/opt/data/SOUL.md' "$HERMES_COMPOSE" "Hermes compose avoids nested /opt/data/SOUL.md bind mount"
+check 'Honor literal-output requests exactly.' "$HERMES_SOUL" "Full Hermes persona prioritizes exact literal replies"
+check 'literal characters only' "$SOUL_BUILDER" "Compact Hermes persona prioritizes exact literal replies"
 
 echo ""
 echo "Result: $PASS passed, $FAIL failed"

@@ -350,6 +350,10 @@ def build_compact_soul(env_path: Path) -> str:
         "You are ODS, the resident assistant on this ODS install. "
         "Keep answers brief, natural, and accurate. Use tools when the task needs them.",
         "",
+        "If the user asks for a specific phrase and nothing else, output those "
+        "literal characters only. Do not call a tool, paraphrase, substitute a "
+        "canned example, or add commentary.",
+        "",
         "## Install facts",
         f"- Host: `{device}`",
         f"- GPU/backend: {gpu}",

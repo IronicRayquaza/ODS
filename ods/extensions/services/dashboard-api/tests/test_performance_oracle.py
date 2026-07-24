@@ -393,7 +393,7 @@ def test_model_payload_applies_host_scoped_app_compatibility_from_install_env(da
     assert strixy_payload["models"][0]["appCompatibility"]["agentViability"]["status"] == "unknown"
 
 
-def test_real_catalog_gemma_perplexica_block_is_host_scoped():
+def test_real_catalog_gemma_perplexica_block_is_global():
     by_id = {model["id"]: model for model in _official_model_catalog()}
     model = by_id["gemma3-4b-it-q4"]
 
@@ -412,7 +412,151 @@ def test_real_catalog_gemma_perplexica_block_is_host_scoped():
 
     assert windows_laptop["perplexica"]["status"] == "unsupported_until_revalidated"
     assert strixy["perplexica"]["status"] == "unsupported_until_revalidated"
-    assert tower2["perplexica"]["status"] == "unknown"
+    assert tower2["perplexica"]["status"] == "unsupported_until_revalidated"
+
+
+def test_real_catalog_granite32_perplexica_block_is_tower2_and_m5_scoped():
+    by_id = {model["id"]: model for model in _official_model_catalog()}
+    model = by_id["granite3.2-2b-instruct-q4"]
+
+    windows_laptop = model_app_compatibility(
+        model,
+        runtime_context={"host": "windows-laptop", "hosts": ["windows-laptop"]},
+    )
+    strix_halo = model_app_compatibility(
+        model,
+        runtime_context={"host": "strix-halo", "hosts": ["strix-halo"]},
+    )
+    tower2 = model_app_compatibility(
+        model,
+        runtime_context={"host": "tower2", "hosts": ["tower2"]},
+    )
+    m5_mbp = model_app_compatibility(
+        model,
+        runtime_context={"host": "m5-mbp", "hosts": ["m5-mbp"]},
+    )
+
+    assert windows_laptop["perplexica"]["status"] == "unknown"
+    assert strix_halo["perplexica"]["status"] == "unknown"
+    assert tower2["perplexica"]["status"] == "unsupported_until_revalidated"
+    assert m5_mbp["perplexica"]["status"] == "unsupported_until_revalidated"
+
+
+def test_real_catalog_smollm3_perplexica_block_is_global():
+    by_id = {model["id"]: model for model in _official_model_catalog()}
+    model = by_id["smollm3-3b-q4"]
+
+    lemonade = model_app_compatibility(
+        model,
+        runtime_context={
+            "host": "strix-halo",
+            "hosts": ["strix-halo"],
+            "llmBackend": "lemonade",
+            "runtime": "lemonade",
+        },
+    )
+    llama_server = model_app_compatibility(
+        model,
+        runtime_context={
+            "host": "tower2",
+            "hosts": ["tower2"],
+            "llmBackend": "llama-server",
+            "runtime": "llama-server",
+        },
+    )
+
+    assert lemonade["perplexica"]["status"] == "unsupported_until_revalidated"
+    assert lemonade["agentViability"]["status"] == "agent_viable"
+    assert llama_server["perplexica"]["status"] == "unsupported_until_revalidated"
+    assert llama_server["agentViability"]["status"] == "agent_viable"
+
+
+def test_real_catalog_granite41_opencode_block_is_strix_halo_and_spark_scoped():
+    by_id = {model["id"]: model for model in _official_model_catalog()}
+    model = by_id["granite4.1-3b-q4"]
+
+    strix_halo = model_app_compatibility(
+        model,
+        runtime_context={"host": "strix-halo", "hosts": ["strix-halo"]},
+    )
+    spark = model_app_compatibility(
+        model,
+        runtime_context={"host": "spark", "hosts": ["spark"]},
+    )
+    tower2 = model_app_compatibility(
+        model,
+        runtime_context={"host": "tower2", "hosts": ["tower2"]},
+    )
+
+    assert strix_halo["opencode"]["status"] == "unsupported_until_revalidated"
+    assert spark["opencode"]["status"] == "unsupported_until_revalidated"
+    assert tower2["opencode"]["status"] == "unknown"
+
+
+def test_real_catalog_qwen3_4b_instruct_windows_revalidation_is_verified():
+    by_id = {model["id"]: model for model in _official_model_catalog()}
+    model = by_id["qwen3-4b-instruct-2507-q4"]
+
+    windows_laptop = model_app_compatibility(
+        model,
+        runtime_context={"host": "windows-laptop", "hosts": ["windows-laptop"]},
+    )
+    strix_halo = model_app_compatibility(
+        model,
+        runtime_context={"host": "strix-halo", "hosts": ["strix-halo"]},
+    )
+    tower2 = model_app_compatibility(
+        model,
+        runtime_context={"host": "tower2", "hosts": ["tower2"]},
+    )
+
+    assert windows_laptop["openaiChat"]["status"] == "verified"
+    assert windows_laptop["hermesTalk"]["status"] == "verified"
+    assert windows_laptop["perplexica"]["status"] == "verified"
+    assert windows_laptop["agentViability"]["status"] == "verified"
+    assert "Q4-KV profile" in windows_laptop["agentViability"]["reason"]
+    assert strix_halo["agentViability"]["status"] == "unknown"
+    assert tower2["agentViability"]["status"] == "unknown"
+
+
+def test_real_catalog_qwen35_4b_windows_revalidation_is_verified():
+    by_id = {model["id"]: model for model in _official_model_catalog()}
+    model = by_id["qwen3.5-4b-q4"]
+
+    windows_laptop = model_app_compatibility(
+        model,
+        runtime_context={"host": "windows-laptop", "hosts": ["windows-laptop"]},
+    )
+    strix_halo = model_app_compatibility(
+        model,
+        runtime_context={"host": "strix-halo", "hosts": ["strix-halo"]},
+    )
+
+    assert windows_laptop["openaiChat"]["status"] == "verified"
+    assert windows_laptop["hermesTalk"]["status"] == "verified"
+    assert windows_laptop["perplexica"]["status"] == "verified"
+    assert windows_laptop["agentViability"]["status"] == "verified"
+    assert strix_halo["hermesTalk"]["status"] == "unknown"
+    assert strix_halo["agentViability"]["status"] == "unknown"
+
+
+def test_real_catalog_qwen3_4b_128k_talk_block_is_m5_and_windows_scoped():
+    by_id = {model["id"]: model for model in _official_model_catalog()}
+    model = by_id["qwen3-4b-128k-q4"]
+
+    m5_mbp = model_app_compatibility(
+        model,
+        runtime_context={"host": "m5-mbp", "hosts": ["m5-mbp"]},
+    )
+    windows_laptop = model_app_compatibility(
+        model,
+        runtime_context={"host": "windows-laptop", "hosts": ["windows-laptop"]},
+    )
+
+    assert m5_mbp["hermesTalk"]["status"] == "unsupported_until_revalidated"
+    assert m5_mbp["agentViability"]["status"] == "not_agent_viable"
+    assert windows_laptop["hermesTalk"]["status"] == "unsupported_until_revalidated"
+    assert windows_laptop["agentViability"]["status"] == "not_agent_viable"
 
 
 def test_measured_local_too_slow_blocks_agent_compatibility(data_dir, tmp_path):
@@ -568,17 +712,31 @@ def test_real_catalog_has_six_windows_8gb_release_swap_candidates(data_dir, tmp_
 
     assert len(candidates) >= 6
     assert {
-        "qwen3.5-4b-q4",
-        "qwen3-4b-instruct-2507-q4",
-        "qwen3-4b-128k-q4",
         "qwen2.5-coder-1.5b-128k-q4",
         "granite4.0-h-micro-q4",
         "granite4.0-h-tiny-q4",
+        "granite4.0-h-1b-q4",
+        "qwen3-4b-instruct-2507-q4",
+        "qwen3.5-4b-q4",
     }.issubset(candidate_ids)
-    assert by_id["qwen3.5-4b-q4"]["contextLength"] == 262144
-    assert by_id["qwen3-4b-instruct-2507-q4"]["contextLength"] == 262144
-    assert by_id["qwen3-4b-128k-q4"]["contextLength"] == 131072
+    assert "qwen3.5-4b-q4" in candidate_ids
+    assert by_id["qwen3.5-4b-q4"]["contextLength"] >= 64000
+    assert by_id["qwen3.5-4b-q4"]["appCompatibility"]["agentViability"]["status"] == (
+        "verified"
+    )
+    assert all_by_id["smollm3-3b-q4"]["contextLength"] == 65536
+    assert all_by_id["qwen3-4b-128k-q4"]["contextLength"] == 131072
     assert by_id["qwen2.5-coder-1.5b-128k-q4"]["contextLength"] == 131072
+    assert "qwen3-4b-instruct-2507-q4" in candidate_ids
+    assert by_id["qwen3-4b-instruct-2507-q4"]["contextLength"] >= 64000
+    assert by_id["qwen3-4b-instruct-2507-q4"]["appCompatibility"]["agentViability"]["status"] == (
+        "verified"
+    )
+    assert "phi3.5-mini-q4" not in candidate_ids
+    assert (
+        all_by_id["phi3.5-mini-q4"]["appCompatibility"]["openaiChat"]["status"]
+        == "unsupported_until_revalidated"
+    )
     assert all_by_id["falcon-h1-1.5b-instruct-q4"]["appCompatibility"]["hermesTalk"]["status"] == (
         "unsupported_until_revalidated"
     )
@@ -615,6 +773,15 @@ def test_real_catalog_has_six_windows_8gb_release_swap_candidates(data_dir, tmp_
     assert "phi3-mini-128k-q4" not in candidate_ids
     assert "granite3.3-8b-instruct-q4" not in candidate_ids
     assert "smollm3-3b-q4" not in candidate_ids
+    assert (
+        all_by_id["smollm3-3b-q4"]["appCompatibility"]["perplexica"]["status"]
+        == "unsupported_until_revalidated"
+    )
+    assert "qwen3-4b-128k-q4" not in candidate_ids
+    assert (
+        all_by_id["qwen3-4b-128k-q4"]["appCompatibility"]["hermesTalk"]["status"]
+        == "unsupported_until_revalidated"
+    )
     assert "qwen2.5-3b-instruct-q4" not in candidate_ids
     assert "qwen3-4b-q4" not in candidate_ids
     assert "qwen3-1.7b-q4" not in candidate_ids

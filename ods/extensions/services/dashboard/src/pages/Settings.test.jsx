@@ -38,9 +38,19 @@ const editor = {
       readOnly: true,
       default: null,
     },
+    HOST_LAN_IP: {
+      key: 'HOST_LAN_IP',
+      label: 'LAN Host IP',
+      description: 'Host address exposed to services.',
+      type: 'string',
+      secret: false,
+      required: false,
+      readOnly: false,
+      default: null,
+    },
   },
-  sections: [{ id: 'configuration', title: 'Configuration', keys: ['ODS_VERSION'] }],
-  values: { ODS_VERSION: '2.5.3' },
+  sections: [{ id: 'configuration', title: 'Configuration', keys: ['ODS_VERSION', 'HOST_LAN_IP'] }],
+  values: { ODS_VERSION: '2.5.3', HOST_LAN_IP: '192.168.1.10' },
   issues: [],
   applyPlan: null,
   agentAvailable: true,
@@ -172,5 +182,17 @@ describe('Settings', () => {
     expect(screen.queryByRole('button', { name: 'More information about ODS Version' })).not.toBeInTheDocument()
     expect(screen.queryByText('K', { selector: 'span' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'localhost' })).not.toBeInTheDocument()
+  })
+
+  test('preserves unsaved environment changes during a global refresh', async () => {
+    const { fetchMock } = renderSettings()
+    const input = await screen.findByDisplayValue('192.168.1.10')
+    fireEvent.change(input, { target: { value: '192.168.1.25' } })
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Refresh' })[0])
+
+    await screen.findByText('System details refreshed. Unsaved environment changes were preserved.')
+    expect(screen.getByDisplayValue('192.168.1.25')).toBeInTheDocument()
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/settings/env')).toHaveLength(2)
   })
 })

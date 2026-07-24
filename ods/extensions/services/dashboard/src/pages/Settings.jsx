@@ -232,7 +232,7 @@ export default function Settings() {
     if (announce) setNotice({ type: 'info', text: 'Environment editor reloaded from disk.' })
   }
 
-  const fetchSettings = async () => {
+  const fetchSettings = async ({ preserveEnvChanges = false } = {}) => {
     const failures = []
     try {
       setLoading(true)
@@ -262,7 +262,9 @@ export default function Settings() {
       if (storageResult.status === 'fulfilled') setStorage(storageResult.value)
       else failures.push(storageResult.reason)
 
-      if (envResult.status === 'fulfilled') applyEnvEditorPayload(envResult.value)
+      if (envResult.status === 'fulfilled') {
+        if (!preserveEnvChanges) applyEnvEditorPayload(envResult.value)
+      }
       else failures.push(envResult.reason)
 
       if (usageResult.status === 'fulfilled') setUsageReport(usageResult.value)
@@ -273,6 +275,7 @@ export default function Settings() {
 
       if (failures.length === 3) setError(getErrorText(failures[0]))
       else if (failures.length > 0) setNotice({ type: 'warn', text: 'Some settings details are temporarily unavailable. Showing the data that loaded successfully.' })
+      else if (preserveEnvChanges) setNotice({ type: 'info', text: 'System details refreshed. Unsaved environment changes were preserved.' })
     } catch (err) {
       setError(getErrorText(err))
       console.error('Settings fetch error:', err)
@@ -388,7 +391,7 @@ export default function Settings() {
   return (
     <div className="min-h-full px-3 py-6 sm:px-4 lg:px-5 xl:px-6">
       <SettingsPageHeader
-        onRefresh={fetchSettings}
+        onRefresh={() => fetchSettings({ preserveEnvChanges: envDirty })}
         onCheckUpdates={() => {
           setNotice({ type: 'info', text: 'Checking for updates...' })
           void fetchVersionInfo({ announce: true })

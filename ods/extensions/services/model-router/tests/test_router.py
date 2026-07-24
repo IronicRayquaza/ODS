@@ -900,6 +900,61 @@ class TestRoutedTelemetry:
         assert recorder.events[0]["output_tokens"] == 7
         assert recorder.events[0]["stop_reason"] == "stop"
 
+    def test_truncated_stream_without_terminal_event_is_not_emitted(self, router):
+        mod, client, write_state, calls = router
+        write_state()
+        recorder = _RecordingTelemetry()
+        mod.app.state.telemetry = recorder
+        _set_stream_upstream(mod, [
+            (
+                b'data: {"model":"Concrete.gguf","choices":'
+                b'[{"delta":{"content":"partial"},"finish_reason":null}],'
+                b'"usage":{"prompt_tokens":11,"completion_tokens":1}}\n\n'
+            ),
+        ])
+
+        with client.stream("POST", "/v1/chat/completions", json={
+            "model": "default",
+            "stream": True,
+            "messages": [{"role": "user", "content": "hi"}],
+        }) as response:
+            assert response.status_code == 200
+            raw = b"".join(response.iter_bytes())
+
+        assert b"partial" in raw
+        assert recorder.events == []
+
+    def test_responses_completed_event_emits_stream_usage(self, router):
+        mod, client, write_state, calls = router
+        write_state()
+        recorder = _RecordingTelemetry()
+        mod.app.state.telemetry = recorder
+        _set_stream_upstream(mod, [
+            (
+                b'data: {"type":"response.output_text.delta",'
+                b'"response":{"model":"Concrete.gguf"},'
+                b'"delta":"hi"}\n\n'
+            ),
+            (
+                b'data: {"type":"response.completed","response":'
+                b'{"model":"Concrete.gguf","status":"completed",'
+                b'"usage":{"input_tokens":9,"output_tokens":4}}}\n\n'
+            ),
+        ])
+
+        with client.stream("POST", "/v1/responses", json={
+            "model": "default",
+            "stream": True,
+            "input": "hi",
+        }) as response:
+            assert response.status_code == 200
+            b"".join(response.iter_bytes())
+
+        assert len(recorder.events) == 1
+        assert recorder.events[0]["input_tokens"] == 9
+        assert recorder.events[0]["output_tokens"] == 4
+        assert recorder.events[0]["stop_reason"] == "completed"
+
     def test_telemetry_failure_never_changes_model_response(self, router):
         mod, client, write_state, calls = router
         write_state()

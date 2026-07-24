@@ -679,17 +679,20 @@ def _sanitize_choice_content(obj: dict[str, Any]) -> bool:
 
 def _rewrite_sse_event(
     event: bytes, alias: str
-) -> tuple[bytes, list[str], list[dict[str, Any]]]:
+) -> tuple[bytes, list[str], list[dict[str, Any]], bool]:
     """Rewrite complete SSE data lines and return observable response metadata."""
     out_lines: list[bytes] = []
     models: list[str] = []
     payloads: list[dict[str, Any]] = []
+    saw_done = False
     for line in event.splitlines(keepends=True):
         content = line.rstrip(b"\r\n")
         ending = line[len(content):]
         if content.startswith(b"data:"):
             payload = content[5:].strip()
-            if payload and payload != b"[DONE]":
+            if payload == b"[DONE]":
+                saw_done = True
+            elif payload:
                 try:
                     obj = json.loads(payload)
                 except ValueError:
@@ -706,7 +709,25 @@ def _rewrite_sse_event(
                         + json.dumps(obj, separators=(",", ":")).encode("utf-8")
                     )
         out_lines.append(content + ending)
-    return b"".join(out_lines), models, payloads
+    return b"".join(out_lines), models, payloads, saw_done
+
+
+def _is_terminal_stream_payload(payload: dict[str, Any]) -> bool:
+    """Recognize terminal Chat/Completions and Responses API stream events."""
+    choices = payload.get("choices")
+    if isinstance(choices, list) and any(
+        isinstance(choice, dict) and choice.get("finish_reason") is not None
+        for choice in choices
+    ):
+        return True
+
+    event_type = payload.get("type")
+    if event_type == "response.completed":
+        return True
+    response = payload.get("response")
+    if isinstance(response, dict) and response.get("status") == "completed":
+        return True
+    return payload.get("status") == "completed"
 
 
 class _SSERewriter:
@@ -723,14 +744,19 @@ class _SSERewriter:
             "cache_write_tokens": 0,
         }
         self.stop_reason = ""
+        self.completed = False
 
-    def _observe(self, payloads: list[dict[str, Any]]) -> None:
+    def _observe(
+        self, payloads: list[dict[str, Any]], *, saw_done: bool = False
+    ) -> None:
+        self.completed = self.completed or saw_done
         for payload in payloads:
             usage, stop_reason = _usage_from_response(payload)
             for key, value in usage.items():
                 self.usage[key] = max(self.usage[key], value)
             if stop_reason:
                 self.stop_reason = stop_reason
+            self.completed = self.completed or _is_terminal_stream_payload(payload)
 
     def feed(self, chunk: bytes) -> list[bytes]:
         self.buffer += chunk
@@ -739,20 +765,22 @@ class _SSERewriter:
             event = self.buffer[:match.start()]
             delimiter = self.buffer[match.start():match.end()]
             self.buffer = self.buffer[match.end():]
-            rewritten, models, payloads = _rewrite_sse_event(event, self.alias)
+            rewritten, models, payloads, saw_done = _rewrite_sse_event(
+                event, self.alias
+            )
             self.models.extend(models)
-            self._observe(payloads)
+            self._observe(payloads, saw_done=saw_done)
             output.append(rewritten + delimiter)
         return output
 
     def finish(self) -> bytes:
         if not self.buffer:
             return b""
-        rewritten, models, payloads = _rewrite_sse_event(
+        rewritten, models, payloads, saw_done = _rewrite_sse_event(
             self.buffer, self.alias
         )
         self.models.extend(models)
-        self._observe(payloads)
+        self._observe(payloads, saw_done=saw_done)
         self.buffer = b""
         return rewritten
 
@@ -962,6 +990,7 @@ async def _forward_inner(request: Request, path: str, payload: dict[str, Any],
                     await upstream.aclose()
                     if (
                         completed
+                        and rewriter.completed
                         and probe_id
                         and 200 <= upstream.status_code < 300
                         and all(
@@ -975,7 +1004,11 @@ async def _forward_inner(request: Request, path: str, payload: dict[str, Any],
                             "responseModel": route["runtimeModelId"],
                             "lemonadeRoute": lemonade_route,
                         })
-                    if completed and 200 <= upstream.status_code < 300:
+                    if (
+                        completed
+                        and rewriter.completed
+                        and 200 <= upstream.status_code < 300
+                    ):
                         _emit_telemetry(_build_telemetry_event(
                             payload,
                             raw_body_bytes=len(raw_body),

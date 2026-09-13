@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { getSystemRules } from '../lib/pixelSystemRules'
 import { readConversations, saveConversation, SELECT_EVENT, DELETE_EVENT, deleteConversation, isConversationDeleted } from '../lib/pixelConversations'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { Link } from 'react-router-dom'
+import { getSystemRules } from '../lib/pixelSystemRules'
 import PixelAdvice from '../components/PixelAdvice.jsx'
 import PixelMascot from '../components/PixelMascot.jsx'
 import UserAvatar from '../components/UserAvatar'
@@ -1237,6 +1237,15 @@ export default function Pixel({ systemStatus = null }) {
             >
               <span className="truncate text-theme-text-secondary">{activeModel}</span>
             </div>
+          )}
+          {getSystemRules() && (
+            <Link
+              to="/settings"
+              className="hidden min-w-0 items-center rounded-md border border-theme-border px-2 py-1.5 font-mono text-[10px] text-theme-accent sm:flex transition hover:bg-theme-surface-hover"
+              title="Global system rules are active for this conversation"
+            >
+              <span className="truncate">⚙️ Custom Rules Active</span>
+            </Link>
           )}
           <Link
             to="/models"

@@ -6,6 +6,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UPGRADE="$ROOT_DIR/scripts/upgrade-model.sh"
+# shellcheck source=../lib/safe-env.sh
+source "$ROOT_DIR/lib/safe-env.sh"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
@@ -58,9 +60,9 @@ assert_args "recorded .compose-flags stack is used verbatim" \
     -f "$ODS_DIR/docker-compose.nvidia.yml" \
     -f "$ODS_DIR/extensions/services/n8n/compose.yaml"
 
-# 2-4. Without a recorded stack, the overlay follows GPU_BACKEND, not the
+# Without a recorded stack, the overlay follows GPU_BACKEND, not the
 # first overlay file that happens to exist.
-for backend in nvidia cpu amd; do
+for backend in nvidia cpu amd apple intel; do
     ODS_DIR="$(make_install "backend-$backend")"
     printf 'GPU_BACKEND="%s"\n' "$backend" > "$ODS_DIR/.env"
     detect_compose_file
@@ -69,7 +71,28 @@ for backend in nvidia cpu amd; do
         -f "$ODS_DIR/docker-compose.$backend.yml"
 done
 
-# 5. Pre-split installs with a single docker-compose.yml keep working.
+# Dotenv quoting/comments must not change which backend is selected.
+for value in "'cpu'" '"amd" # selected by installer' ' nvidia # retained backend'; do
+    ODS_DIR="$(make_install dotenv)"
+    printf 'GPU_BACKEND=%s\r\n' "$value" > "$ODS_DIR/.env"
+    detect_compose_file
+    backend="$(safe_env_decode_value "$value")"
+    assert_args "dotenv backend $value" \
+        -f "$ODS_DIR/docker-compose.base.yml" \
+        -f "$ODS_DIR/docker-compose.$backend.yml"
+done
+
+# Readers must accept a saved file without a trailing newline and CRLF files.
+for ending in '' $'\r\n'; do
+    ODS_DIR="$(make_install 'saved stack')"
+    printf '%s%s' '-f docker-compose.base.yml -f docker-compose.cpu.yml' "$ending" > "$ODS_DIR/.compose-flags"
+    detect_compose_file
+    assert_args "saved flags with alternate line ending" \
+        -f "$ODS_DIR/docker-compose.base.yml" \
+        -f "$ODS_DIR/docker-compose.cpu.yml"
+done
+
+# Pre-split installs with a single docker-compose.yml keep working.
 ODS_DIR="$WORK_DIR/legacy"
 mkdir -p "$ODS_DIR"
 : > "$ODS_DIR/docker-compose.yml"

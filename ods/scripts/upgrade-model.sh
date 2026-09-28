@@ -17,6 +17,9 @@
 
 set -euo pipefail
 
+# shellcheck source=../lib/safe-env.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/safe-env.sh"
+
 # Prerequisites
 command -v jq >/dev/null 2>&1 || { echo "Error: jq is required but not installed." >&2; exit 1; }
 
@@ -46,8 +49,11 @@ detect_compose_file() {
     COMPOSE_FILE_ARGS=()
     if [[ -s "$ODS_DIR/.compose-flags" ]]; then
         local -a recorded=()
-        local token previous=""
-        read -ra recorded < "$ODS_DIR/.compose-flags"
+        local token previous="" saved_flags
+        saved_flags="$(cat "$ODS_DIR/.compose-flags")" || return 1
+        # read returns failure at EOF without a newline; normalize the saved
+        # one-line format before splitting, including Windows CRLF files.
+        read -ra recorded <<< "${saved_flags%$'\r'}"
         for token in "${recorded[@]}"; do
             if [[ "$previous" == "-f" ]]; then
                 [[ "$token" == /* ]] || token="$ODS_DIR/$token"
@@ -58,7 +64,8 @@ detect_compose_file() {
     elif [[ -f "$ODS_DIR/docker-compose.base.yml" ]]; then
         local backend="" overlay
         if [[ -f "$ODS_DIR/.env" ]]; then
-            backend="$(sed -n 's/^GPU_BACKEND=//p' "$ODS_DIR/.env" | tail -n 1 | tr -d '\r"')"
+            backend="$(sed -n 's/^[[:space:]]*GPU_BACKEND[[:space:]]*=//p' "$ODS_DIR/.env" | tail -n 1)"
+            backend="$(safe_env_decode_value "$backend")"
         fi
         overlay="$ODS_DIR/docker-compose.${backend:-nvidia}.yml"
         COMPOSE_FILE_ARGS=(-f "$ODS_DIR/docker-compose.base.yml")

@@ -108,22 +108,39 @@ def test_retained_identity_proof_is_read_only_and_fails_closed(monkeypatch):
     assert module.retained_identity_only() is False
 
 
-@pytest.mark.parametrize('prompt,stdin_tty,stderr_tty,interactive', [
+@pytest.mark.parametrize('prompt,tty,stderr_tty,interactive', [
     (False, True, True, False), (True, False, True, False),
     (True, True, False, False), (True, True, True, True)])
 def test_identity_prompt_requires_explicit_opt_in_and_terminal(
-        monkeypatch, prompt, stdin_tty, stderr_tty, interactive):
-    monkeypatch.setattr(module.sys.stdin, 'isatty', lambda: stdin_tty)
+        monkeypatch, prompt, tty, stderr_tty, interactive):
+    # `curl ... | bash` leaves stdin a pipe; sudo still prompts on /dev/tty.
+    monkeypatch.setattr(module.sys.stdin, 'isatty', lambda: False)
     monkeypatch.setattr(module.sys.stderr, 'isatty', lambda: stderr_tty)
+    monkeypatch.setattr(module, 'controlling_terminal', lambda: tty)
     calls = []
     monkeypatch.setattr(module.subprocess, 'run', lambda argv, **kw:
         calls.append((argv, kw)) or SimpleNamespace(returncode=0))
     assert module.retained_identity_only(prompt_for_sudo=prompt)
     argv, kw = calls[0]
     assert ('-n' not in argv) == interactive
-    assert kw['stdin'] == (None if interactive else subprocess.DEVNULL)
+    assert kw['stdin'] == subprocess.DEVNULL
     assert kw['stderr'] == (None if interactive else subprocess.PIPE)
     assert argv[-1] == '--verify-identity-only'
+
+
+@pytest.mark.parametrize('available', [True, False])
+def test_controlling_terminal_probes_dev_tty_without_acquiring_it(monkeypatch, available):
+    opened, closed = [], []
+    def fake_open(path, flags):
+        opened.append((path, flags))
+        if not available:
+            raise OSError('no controlling terminal')
+        return 99
+    monkeypatch.setattr(module.os, 'open', fake_open)
+    monkeypatch.setattr(module.os, 'close', closed.append)
+    assert module.controlling_terminal() is available
+    assert opened == [('/dev/tty', module.os.O_RDWR | module.os.O_NOCTTY)]
+    assert closed == ([99] if available else [])
 
 
 @pytest.mark.parametrize('result', [1, 127, -9])

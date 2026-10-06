@@ -65,14 +65,30 @@ def command(args, *, env=None, timeout=60):
     return result.stdout.strip()
 
 
+def controlling_terminal():
+    """Report whether sudo can prompt on this process's controlling terminal.
+
+    sudo reads passwords from /dev/tty, never stdin, so the documented
+    `curl ... | bash` installer can still prompt although stdin is the pipe.
+    """
+    try:
+        fd = os.open('/dev/tty', os.O_RDWR | os.O_NOCTTY)
+    except OSError:
+        return False
+    os.close(fd)
+    return True
+
+
 def retained_identity_only(*, empty_home=False, prompt_for_sudo=False):
     """Ask the root-owned account helper to prove an identity-only reinstall."""
     try:
-        interactive = prompt_for_sudo and sys.stdin.isatty() and sys.stderr.isatty()
+        # The post-Docker re-check can outlive the sudo ticket from the
+        # preflight. With a terminal, let sudo prompt again instead of failing.
+        interactive = prompt_for_sudo and sys.stderr.isatty() and controlling_terminal()
         result = subprocess.run(['/usr/bin/sudo', *([] if interactive else ['-n']), '/usr/bin/python3',
             str(HERE / 'pixel-native-ops-account.py'),
             '--verify-empty-home-only' if empty_home else '--verify-identity-only'],
-            stdin=None if interactive else subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=None if interactive else subprocess.PIPE, timeout=60, check=False)
     except (OSError, subprocess.SubprocessError) as error:
         raise ValueError('native-identity-verification-unavailable') from error

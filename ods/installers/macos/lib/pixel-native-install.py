@@ -93,7 +93,9 @@ def retained_identity_only(*, empty_home=False, prompt_for_sudo=False):
     try:
         # The post-Docker re-check can outlive the sudo ticket from the
         # preflight. With a terminal, let sudo prompt again instead of failing.
-        interactive = prompt_for_sudo and sys.stderr.isatty() and controlling_terminal()
+        # Diagnostics are piped through tee by the installer; neither stdin
+        # nor stderr needs to be a TTY for sudo to use /dev/tty.
+        interactive = prompt_for_sudo and controlling_terminal()
         result = subprocess.run(['/usr/bin/sudo', *([] if interactive else ['-n']), '/usr/bin/python3',
             str(HERE / 'pixel-native-ops-account.py'),
             '--verify-empty-home-only' if empty_home else '--verify-identity-only'],

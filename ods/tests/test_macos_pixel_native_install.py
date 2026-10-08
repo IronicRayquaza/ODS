@@ -197,7 +197,8 @@ def test_retained_identity_proof_is_read_only_and_fails_closed(monkeypatch):
 
 @pytest.mark.parametrize('prompt,tty,stderr_tty,interactive', [
     (False, True, True, False), (True, False, True, False),
-    (True, True, False, False), (True, True, True, True)])
+    (False, True, False, False), (True, False, False, False),
+    (True, True, False, True), (True, True, True, True)])
 def test_identity_prompt_requires_explicit_opt_in_and_terminal(
         monkeypatch, prompt, tty, stderr_tty, interactive):
     # `curl ... | bash` leaves stdin a pipe; sudo still prompts on /dev/tty.
@@ -213,6 +214,57 @@ def test_identity_prompt_requires_explicit_opt_in_and_terminal(
     assert kw['stdin'] == subprocess.DEVNULL
     assert kw['stderr'] == (None if interactive else subprocess.PIPE)
     assert argv[-1] == '--verify-identity-only'
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='requires a POSIX controlling terminal')
+def test_identity_prompt_survives_shipped_installer_logging_pipeline(tmp_path):
+    import fcntl
+    import pty
+    import termios
+
+    installer = (ROOT / 'installers/macos/install-macos.sh').read_text()
+    start = installer.index('        if ! /usr/bin/python3 "$LIB_DIR/pixel-native-install.py"')
+    end = installer.index('\n        fi', start) + len('\n        fi')
+    command = installer[start:end].replace('/usr/bin/python3', shlex.quote(sys.executable))
+    helper = tmp_path / 'pixel-native-install.py'
+    source = ROOT / 'installers/macos/lib/pixel-native-install.py'
+    # Only sudo execution is replaced. Terminal detection and the installer's
+    # actual stderr/stdout logging pipeline run in a real child process.
+    helper.write_text(f'''import importlib.util, json, sys
+from types import SimpleNamespace
+spec = importlib.util.spec_from_file_location('native', {str(source)!r})
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+def sudo(argv, **kwargs):
+    print(json.dumps({{'argv': argv, 'stdin_tty': sys.stdin.isatty(),
+                      'stderr_tty': sys.stderr.isatty(),
+                      'controlling_tty': module.controlling_terminal()}}))
+    return SimpleNamespace(returncode=0)
+module.subprocess.run = sudo
+assert module.retained_identity_only(prompt_for_sudo='--prompt-for-sudo' in sys.argv)
+''')
+    log = tmp_path / 'install.log'
+    shell = 'set -euo pipefail\nai_err() { printf "%s\\n" "$*"; }\n_pixel_install_args=(--prompt-for-sudo)\n' + command
+    master, slave = pty.openpty()
+
+    def acquire_terminal():
+        os.setsid()
+        fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+
+    try:
+        result = subprocess.run(['/bin/bash', '-c', shell], input='', text=True,
+            capture_output=True, timeout=10, preexec_fn=acquire_terminal,
+            pass_fds=(slave,), env={**os.environ, 'LIB_DIR': str(tmp_path), 'ODS_LOG_FILE': str(log)})
+    finally:
+        os.close(slave)
+        os.close(master)
+    assert result.returncode == 0, result.stderr
+    observed = json.loads(result.stdout)
+    assert observed['controlling_tty'] is True
+    assert observed['stdin_tty'] is False
+    assert observed['stderr_tty'] is False
+    assert '-n' not in observed['argv']
+    assert log.read_text() == result.stdout
 
 
 @pytest.mark.parametrize('available', [True, False])

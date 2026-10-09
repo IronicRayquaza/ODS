@@ -203,7 +203,7 @@ unset MODEL_PROFILE
 echo ""
 
 # Only the NVIDIA overlay runs the CUDA build. CPU and Intel overlays already
-# default to their own pinned b9014 image, and AMD (Lemonade) and Apple pin
+# default to their own pinned b9014 image, and the AMD overlays and Apple pin
 # their runtime, so every other backend gets no override at all.
 echo "Gemma 4 runtime image per backend (tier 2):"
 for backend_image in \

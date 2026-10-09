@@ -126,7 +126,7 @@ $tierConfig = Resolve-CatalogModelRecommendation `
     -MinContext $script:HERMES_MIN_CONTEXT
 # The tier's runtime override is the CUDA build, which only the NVIDIA overlay
 # runs. CPU keeps docker-compose.cpu.yml's default (already a Gemma-capable
-# b9014 build) and AMD pins its own Lemonade image.
+# b9014 build) and AMD runs the native llama-server.exe.
 $llamaServerImage = if ($tierConfig.LlamaServerImage -and $gpuInfo.Backend -eq "nvidia") { $tierConfig.LlamaServerImage } else { "" }
 $whisperCudaSupported = Test-ODSWindowsWhisperCudaSupported -GpuInfo $gpuInfo
 if ($tierConfig.LlamaCppReleaseTag) {

@@ -47,7 +47,7 @@ configure_llama_runtime_defaults() {
             # Keep this aligned with docker-compose.nvidia.yml so the installer
             # pre-pulls the same image compose will start. Only the NVIDIA
             # overlay runs the CUDA build: the CPU and Intel overlays already
-            # default to their own pinned b9014 image, and AMD (Lemonade) and
+            # default to their own pinned b9014 image, and the AMD overlays and
             # Apple pin their runtime. Empty GPU_BACKEND means nvidia, as in
             # phase 02.
             if [[ "${GPU_BACKEND:-nvidia}" == nvidia ]]; then

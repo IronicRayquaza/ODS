@@ -776,6 +776,69 @@ def test_huggingface_restricted_import_requires_token_before_registry_write(
     assert not (tmp_path / "model-imports.json").exists()
 
 
+def test_agent_disk_refusal_becomes_a_plain_507(monkeypatch):
+    import routers.models as models_router
+
+    agent_body = {
+        "error": "Not enough free disk space for this model",
+        "code": "insufficient_disk_space",
+        "requiredBytes": 10 * 1024 ** 3,
+        "freeBytes": 11 * 1024 ** 3,
+        "marginBytes": 5 * 1024 ** 3,
+    }
+
+    def refuse(*_args, **_kwargs):
+        raise models_router.AgentHTTPError(507, "insufficient storage", json.dumps(agent_body))
+
+    monkeypatch.setattr(models_router, "request_agent_json", refuse)
+
+    with pytest.raises(models_router.HTTPException) as raised:
+        models_router._call_agent_model("/v1/model/download", {"gguf_file": "m.gguf"})
+
+    assert raised.value.status_code == 507
+    detail = raised.value.detail
+    assert isinstance(detail, dict)
+    assert detail["code"] == "insufficient_disk_space"
+    assert detail["requiredBytes"] == agent_body["requiredBytes"]
+    assert detail["message"] == (
+        "Not enough free disk space for this model. It needs 10.0 GB, ODS keeps 5.0 GB "
+        "free, and 11.0 GB is free now. Delete models you no longer use or free up space "
+        "on this drive, then retry."
+    )
+
+
+def test_huggingface_import_disk_refusal_is_definitively_not_started(
+    test_client, monkeypatch, tmp_path,
+):
+    import routers.models as models_router
+
+    async def fake_details(_repo_id):
+        return _hf_import_details()
+
+    def refuse(_path, _payload):
+        raise models_router.HTTPException(
+            status_code=507,
+            detail=models_router._insufficient_disk_detail({
+                "requiredBytes": 1024, "freeBytes": 0, "marginBytes": 2 * 1024 ** 3,
+            }),
+        )
+
+    monkeypatch.setattr(models_router, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(models_router, "_hf_repo_details", fake_details)
+    monkeypatch.setattr(models_router, "_call_agent_model", refuse)
+    monkeypatch.setattr(models_router, "_bootstrap_upgrade_download_conflict", lambda: None)
+
+    response = test_client.post(
+        "/api/models/huggingface/import",
+        headers=test_client.auth_headers,
+        json={"repoId": "org/repo", "artifactId": "d" * 20},
+    )
+
+    assert response.status_code == 507
+    assert response.headers["X-ODS-Import-Started"] == "false"
+    assert response.json()["detail"]["code"] == "insufficient_disk_space"
+
+
 def test_huggingface_preparation_failure_is_definitively_not_started(test_client, monkeypatch):
     import routers.models as models_router
 
@@ -3140,6 +3203,100 @@ def test_reload_at_the_floor_stays_idempotent(test_client, monkeypatch, tmp_path
     assert resp.json()["status"] == "already_active"
 
 
+def _running_tower_model(monkeypatch, tmp_path, *, ctx=65536):
+    models_router, install_dir, data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
+    _write_model_library(install_dir, _repo_catalog_entries("qwen3.5-27b-q4"))
+    (data_dir / "models" / "Qwen3.5-27B-Q4_K_M.gguf").write_text("model", encoding="utf-8")
+    _tower_env(install_dir, llm_model="qwen3.5-27b", gguf="Qwen3.5-27B-Q4_K_M.gguf", ctx=ctx)
+    monkeypatch.setattr(models_router, "get_gpu_info", _rtx_5090)
+    monkeypatch.setattr(models_router, "_already_active_model", lambda *_args: (True, "Qwen3.5-27B-Q4_K_M.gguf"))
+    monkeypatch.setattr(models_router, "_verified_activation_context", lambda _loaded: ctx)
+    return models_router
+
+
+def test_a_fixed_template_restarts_the_running_model_at_its_context(test_client, monkeypatch, tmp_path):
+    """WP5 manual action: always a real switch (never "already active"), the context kept."""
+    models_router = _running_tower_model(monkeypatch, tmp_path, ctx=49152)
+    calls = []
+
+    def _call_agent(path, body, timeout=30, **_kwargs):
+        calls.append((path, body))
+        return {"status": "activated"}
+
+    monkeypatch.setattr(models_router, "_call_agent_model", _call_agent)
+
+    resp = test_client.post("/api/models/qwen3.5-27b-q4/chat-template", headers=test_client.auth_headers,
+                            json={"override": "qwen-tools-fix"})
+
+    assert resp.status_code == 200
+    assert calls == [("/v1/model/activate", {
+        "model_id": "qwen3.5-27b-q4", "context_length": 49152, "chat_template_override": "qwen-tools-fix",
+    })]
+
+
+@pytest.mark.parametrize("body", [None, {}, {"override": 7}, {"override": "Qwen Fix"}, {"override": "../x"},
+                                  {"override": "qwen-tools-fix", "context_length": 65536}])
+def test_a_fixed_template_request_names_exactly_one_template(test_client, monkeypatch, tmp_path, body):
+    models_router = _running_tower_model(monkeypatch, tmp_path)
+    monkeypatch.setattr(models_router, "_call_agent_model", lambda *_a, **_k: pytest.fail("not dispatched"))
+
+    resp = test_client.post("/api/models/qwen3.5-27b-q4/chat-template", headers=test_client.auth_headers,
+                            json=body)
+
+    assert resp.status_code == 400
+
+
+@pytest.mark.parametrize("windows", ["hosted", "legacy"])
+def test_windows_runtimes_refuse_a_fixed_template_in_words(test_client, monkeypatch, tmp_path, windows):
+    models_router = _running_tower_model(monkeypatch, tmp_path)
+    monkeypatch.setattr(models_router, "_windows_hosted_runtime", lambda: windows == "hosted")
+    monkeypatch.setattr(models_router, "read_live_env_values", lambda keys: {
+        "AMD_INFERENCE_RUNTIME_MODE": "windows-native-llama-server" if windows == "legacy" else "linux-container"})
+    monkeypatch.setattr(models_router, "_call_agent_model", lambda *_a, **_k: pytest.fail("not dispatched"))
+
+    resp = test_client.post("/api/models/qwen3.5-27b-q4/chat-template", headers=test_client.auth_headers,
+                            json={"override": "qwen-tools-fix"})
+
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert detail["code"] == "chat_template_override_unsupported"
+    assert "cannot use a fixed chat template" in detail["message"]
+
+
+def test_the_agents_refusal_of_a_fixed_template_reaches_the_page(test_client, monkeypatch, tmp_path):
+    from host_agent_client import AgentHTTPError
+
+    models_router = _running_tower_model(monkeypatch, tmp_path)
+    refusal = {"error": "This fixed chat template is not for this model.", "code": "chat_template_override_not_matched"}
+
+    def agent(method, path, *, payload=None, timeout):
+        raise AgentHTTPError(409, "conflict", response_text=json.dumps(refusal))
+
+    monkeypatch.setattr(models_router, "request_agent_json", agent)
+
+    resp = test_client.post("/api/models/qwen3.5-27b-q4/chat-template", headers=test_client.auth_headers,
+                            json={"override": "qwen-tools-fix"})
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == refusal
+
+
+def test_a_plain_run_never_asks_for_a_fixed_template(test_client, monkeypatch, tmp_path):
+    models_router = _running_tower_model(monkeypatch, tmp_path, ctx=32768)
+    monkeypatch.setattr(models_router, "_already_active_model", lambda *_args: (False, None))
+    calls = []
+
+    def _call_agent(path, body, timeout=30, **_kwargs):
+        calls.append(body)
+        return {"status": "activated"}
+
+    monkeypatch.setattr(models_router, "_call_agent_model", _call_agent)
+
+    test_client.post("/api/models/qwen3.5-27b-q4/load", headers=test_client.auth_headers)
+
+    assert calls and "chat_template_override" not in calls[0]
+
+
 def test_explicit_context_is_never_replanned(test_client, monkeypatch, tmp_path):
     models_router, install_dir, data_dir = _patch_model_router_paths(monkeypatch, tmp_path)
     _write_model_library(install_dir, _repo_catalog_entries("qwen3.5-27b-q4"))
@@ -3228,3 +3385,12 @@ def test_api_models_names_the_external_api_model_and_host(test_client, monkeypat
 def test_external_api_host_keeps_only_host_and_port(url, host):
     from routers import models as models_router
     assert models_router._external_api_host(url) == host
+
+
+def test_huggingface_quantization_names_mxfp4_artifacts():
+    import routers.models as models_router
+
+    assert models_router._hf_quantization("gpt-oss-20b-MXFP4.gguf") == "MXFP4"
+    assert models_router._hf_quantization("Qwen3.6-35B-A3B-MXFP4_MOE.gguf") == "MXFP4_MOE"
+    assert models_router._hf_quantization("Qwen3.6-35B-A3B-UD-Q4_K_M.gguf") == "Q4_K_M"
+    assert models_router._hf_quantization("model.gguf") is None

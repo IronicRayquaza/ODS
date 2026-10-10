@@ -380,6 +380,10 @@ function New-ODSPortalRuntimeOptions($Runtime, $Qualification) {
         ZipSha256 = [string]$Runtime.ZipSha256
         ReasoningArguments = $reasoning
         ExtraArguments = @()
+        # Optional plan fields the launcher copied with these options reads.
+        # The model controller plans a projector only when this lists it, so
+        # an older launcher (setup not rerun since) is never handed one.
+        PlanFeatures = @('MmprojFile')
     }
 }
 
@@ -395,7 +399,9 @@ function New-ODSPortalRuntimeAction($Plan, $Options, [string]$ApiKey, [string]$W
     Write-ODSNativeLlamaApiKeyFile (Join-Path $runtimeDir 'api-key') $ApiKey
     Write-ODSPrivateEnvFile -Path (Join-Path $runtimeDir 'runtime-options.json') -Content ($Options | ConvertTo-Json -Depth 4 -Compress)
     # Exactly the key set the WSL bridge accepts; extra launch options stay in
-    # runtime-options.json, which the controller never projects.
+    # runtime-options.json, whose PlanFeatures is all the controller reads.
+    # ($plan below replaces the $Plan parameter: PowerShell names ignore case.)
+    $projector = $Plan.MmprojFile
     $plan = [ordered]@{
         ExecutablePath = [string]$Plan.ExecutablePath
         Port = [int]$Plan.Port
@@ -407,6 +413,7 @@ function New-ODSPortalRuntimeAction($Plan, $Options, [string]$ApiKey, [string]$W
         $plan.WslDistro = $WslDistro
         $plan.WslInstallDir = $WslInstallDir
     }
+    if ($null -ne $projector) { $plan.MmprojFile = [string]$projector }
     Write-ODSPrivateEnvFile -Path (Join-Path $runtimeDir 'runtime.json') -Content ($plan | ConvertTo-Json -Compress)
     Set-ODSPortalRuntimeIntent 'running'
     $readyPath = Join-Path $runtimeDir 'ready.json'
@@ -493,7 +500,8 @@ function Get-ODSPortalExistingRuntime {
         $launch = Get-ODSPortalRuntimeOwnedLaunch $task
         return [pscustomobject]@{ Kind = 'llama-server'; Task = $task; Launch = $launch
             WasEnabled = ([string]$task.State -ne 'Disabled'); Launches = $launches
-            Selection = [pscustomobject]@{ Port = $launch.Port; GgufFile = [string]$launch.Plan.GgufFile; ContextSize = $launch.Plan.ContextSize } }
+            Selection = [pscustomobject]@{ Port = $launch.Port; GgufFile = [string]$launch.Plan.GgufFile; ContextSize = $launch.Plan.ContextSize
+                MmprojFile = $launch.Plan.MmprojFile } }
     }
     if ($launches.Count) {
         $primary = $launches[0].Launch
@@ -520,11 +528,17 @@ function Resolve-ODSPortalRuntimeSelection($Existing, $Plan) {
             if ($name -ne $Plan.GgufFile -or $context -ne $Plan.ContextSize) {
                 Write-Host "         Keeping your selected model $name with $context tokens of context."
             }
-            return [pscustomobject]@{ GgufFile = $name; ContextSize = [int]$context; Carried = $true }
+            # Its vision projector stays with it while the file is still there.
+            $projector = [string]$saved.MmprojFile
+            $keepProjector = $projector -cmatch '^[\x20-\x7e]{1,240}$' -and $projector -match '\.gguf$' -and
+                $projector -notmatch '[\\/:*?"<>|]' -and -not $projector.StartsWith('.') -and $projector -eq $projector.Trim() -and
+                $projector -ine $name -and (Test-Path -LiteralPath (Join-Path (Get-ODSPortalModelsDir) $projector) -PathType Leaf)
+            return [pscustomobject]@{ GgufFile = $name; ContextSize = [int]$context; Carried = $true
+                MmprojFile = $(if ($keepProjector) { $projector } else { $null }) }
         }
         Write-Host "         The previously selected model $name cannot run on llama.cpp here; using the recommended $($Plan.GgufFile)."
     }
-    return [pscustomobject]@{ GgufFile = [string]$Plan.GgufFile; ContextSize = [int]$Plan.ContextSize; Carried = $false }
+    return [pscustomobject]@{ GgufFile = [string]$Plan.GgufFile; ContextSize = [int]$Plan.ContextSize; Carried = $false; MmprojFile = $null }
 }
 
 function Backup-ODSPortalRuntimeDirectory([string]$Label) {
@@ -710,6 +724,7 @@ function Initialize-ODSPortalAmdRuntime($Plan, [string]$SourceRoot, [bool]$NonIn
     $options = New-ODSPortalRuntimeOptions $runtime $qualification
     $runtimePlan = [ordered]@{ ExecutablePath = $runtime.ExecutablePath; Port = $port; ModelsDir = (Get-ODSPortalModelsDir)
         ContextSize = $selection.ContextSize; GgufFile = $selection.GgufFile }
+    if ($selection.MmprojFile) { $runtimePlan.MmprojFile = $selection.MmprojFile }
     Write-Host "         Starting llama.cpp on 127.0.0.1:$port with $($selection.GgufFile)..."
     $null = Invoke-ODSPortalRuntimeCutover -Existing $existing -Plan $runtimePlan -Options $options -ApiKey $apiKey `
         -KeepPort $keepPort -WslDistro $WslDistro -WslInstallDir $WslInstallDir

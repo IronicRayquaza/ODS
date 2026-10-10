@@ -5,7 +5,7 @@ from model_activation_status import model_activation_status
 from test_pixel import pixel, pixel_env as pixel_env
 
 
-@pytest.mark.parametrize('phase', ['preparing', 'loading', 'verifying', 'rolling_back', 'rollback_verifying'])
+@pytest.mark.parametrize('phase', ['preparing', 'loading', 'profiling', 'verifying', 'rolling_back', 'rollback_verifying'])
 def test_owned_phase_is_projected_without_private_diagnostics(phase):
     value = model_activation_status({'lifecycleActive': True, 'activeOperation': 'model_activation',
         'activationPhase': phase, 'activationFailureCode': 'runtime_load_failed', 'error': '/private/raw failure',

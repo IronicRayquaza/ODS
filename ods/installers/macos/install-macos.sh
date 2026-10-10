@@ -2390,6 +2390,11 @@ else
         macos_resolve_checkpoint_args "$INSTALL_DIR" "$LLAMA_SERVER_BIN" "$_reasoning_fmt" || exit 1
         _llama_args+=(${MACOS_NATIVE_CHECKPOINT_ARGS[@]+"${MACOS_NATIVE_CHECKPOINT_ARGS[@]}"})
         fi
+        # The projector the host agent's switch launches with: a qualified profile's
+        # or a vision import's own (WP2), so a restart keeps the model's vision.
+        [[ -n "${MACOS_NATIVE_PROJECTOR_PATH:-}" ]] && _llama_args+=(--mmproj "$MACOS_NATIVE_PROJECTOR_PATH")
+        # A fixed chat template the switch chose for an exact template match (WP5).
+        [[ -n "${MACOS_NATIVE_CHAT_TEMPLATE_PATH:-}" ]] && _llama_args+=(--chat-template-file "$MACOS_NATIVE_CHAT_TEMPLATE_PATH")
 
         _macos_stop_install_owned_native_llama \
             "Stopping prior install-owned native inference before replacement..."

@@ -3505,6 +3505,7 @@ class _FakeHandler:
         self.rfile = io.BytesIO(body)
         self.wfile = io.BytesIO()
         self.client_address = ("127.0.0.1", 12345)
+        self.path = "/"
         self.response_code = None
         self.response_headers = []
 
@@ -4711,10 +4712,10 @@ class TestRemoteProviderLifecycle:
         monkeypatch.setattr(_mod.subprocess, "run", fake_run)
         runtime = {"model": "same-model", "contextLength": 32768, "maxTokens": 4096, "reasoning": False}
         assert _mod._reconcile_managed_pixel_contract({**runtime, "routeFingerprint": "a" * 64}) == "reconciled"
-        assert calls[-1][-2:] == ["a" * 64, "unknown"]
+        assert calls[-1][-3:] == ["a" * 64, "unknown", ""]
         assert 'target_route_fingerprint="$8"' in calls[-1][2]
         assert _mod._reconcile_managed_pixel_contract(runtime) == "reconciled"
-        assert calls[-1][-2:] == ["", "unknown"]
+        assert calls[-1][-3:] == ["", "unknown", ""]
         with pytest.raises(RuntimeError, match="route identity"):
             _mod._reconcile_managed_pixel_contract({**runtime, "routeFingerprint": "a" * 64 + "\n"})
         assert len(calls) == 2
@@ -5968,6 +5969,86 @@ class TestModelActivationOwnership:
         payload = {"status": "idle"}
         _mod._project_switchboard_agent_viability(payload)
         assert "activeRuntime" not in payload and "activeAgentViable" not in payload
+
+    def _profiled_install(self, tmp_path, monkeypatch, *, mode, last_model="same-model", summary=None):
+        install_dir = tmp_path / "ods"
+        install_dir.mkdir()
+        (install_dir / ".env").write_text(
+            "ODS_MODE=local\nGPU_BACKEND=cpu\nLLM_MODEL=same-model\nGGUF_FILE=same-model.gguf\n"
+            f"CTX_SIZE=65536\nODS_MODEL_PROFILES={mode}\n",
+            encoding="utf-8",
+        )
+        _mod._switchboard_state.record_verified_route(
+            install_dir / "data" / "model-state.json", catalog_id="same-model",
+            runtime_model_id="same-model.gguf", backend_kind="llama-server",
+            endpoint_id="llama-server-default", context_length=65536,
+            capabilities={"chat": True, "tools": True, "vision": False, "agentViable": True},
+            proof_identity="same-model.gguf",
+        )
+        if summary is not None:
+            store = _mod._model_profile_store
+            key = store.profile_key(
+                gguf_sha256=["a" * 64], projector_sha256=None, build_info="b11429-x", backend="cpu",
+                template_sha256="b" * 64, template_source="embedded", suite="3", host="host",
+            )
+            profile = store.recorded_profile(key, model_id=last_model, gguf_file="same-model.gguf",
+                                             result={"probes": {}, "summary": summary, "elapsedMs": 1},
+                                             product_version="test")
+            doc = store.with_last_activation(store.with_profile(store.empty(), profile),
+                                             last_model, profile["keyHash"])
+            store.atomic_write(install_dir / "data" / "model-profiles.json", doc)
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "_active_remote_provider_pixel_runtime", lambda **_: None)
+        return install_dir
+
+    SUMMARY = {"chat": True, "tools": False, "toolsStreamed": False, "vision": None, "tokensPerSecond": 50.0,
+               "thinking": {"control": "always", "separated": True, "works": True}}
+
+    def test_model_status_reports_the_active_profile_only_when_enabled(self, tmp_path, monkeypatch):
+        # Any-model WP4.3: Portal and Talk advisories read the active model's profile.
+        self._profiled_install(tmp_path, monkeypatch, mode="enabled", summary=self.SUMMARY)
+        payload = {"status": "idle"}
+        _mod._project_switchboard_agent_viability(payload)
+        assert payload["activeModelProfile"] == {"state": "measured", "tools": False, "thinkingControl": "always"}
+        # The route was recorded agent-viable before profiles were on (an upgrade):
+        # the failed tool check narrows it now, not at the next switch.
+        assert payload["activeAgentViable"] is False
+
+    def test_a_verified_catalog_model_stays_agent_viable_in_status(self, tmp_path, monkeypatch):
+        install_dir = self._profiled_install(tmp_path, monkeypatch, mode="enabled", summary=self.SUMMARY)
+        (install_dir / "config").mkdir()
+        (install_dir / "config" / "model-library.json").write_text(json.dumps({"models": [{
+            "id": "same-model", "gguf_file": "same-model.gguf",
+            "app_compatibility": {"pixel_agent": {"status": "verified"}},
+        }]}), encoding="utf-8")
+        payload: dict = {}
+        _mod._project_switchboard_agent_viability(payload)
+        assert payload["activeModelProfile"]["tools"] is False
+        assert payload["activeAgentViable"] is True
+
+    @pytest.mark.parametrize("mode", ["observe", "off"])
+    def test_model_status_is_unchanged_without_enabled_profiles(self, tmp_path, monkeypatch, mode):
+        self._profiled_install(tmp_path, monkeypatch, mode=mode, summary=self.SUMMARY)
+        payload = {"status": "idle"}
+        _mod._project_switchboard_agent_viability(payload)
+        assert "activeModelProfile" not in payload
+        assert payload["activeAgentViable"] is True
+
+    @pytest.mark.parametrize("last_model, summary", [("other-model", SUMMARY), ("same-model", None)])
+    def test_a_model_without_its_own_profile_is_reported_not_profiled(
+        self, tmp_path, monkeypatch, last_model, summary,
+    ):
+        self._profiled_install(tmp_path, monkeypatch, mode="enabled", last_model=last_model, summary=summary)
+        payload: dict = {}
+        _mod._project_switchboard_agent_viability(payload)
+        assert payload["activeModelProfile"] == {"state": "not-profiled", "tools": None, "thinkingControl": None}
+
+    def test_an_unreadable_profile_store_reads_as_not_profiled(self, tmp_path, monkeypatch):
+        install_dir = self._profiled_install(tmp_path, monkeypatch, mode="enabled", summary=self.SUMMARY)
+        (install_dir / "data" / "model-profiles.json").write_text("{not json", encoding="utf-8")
+        payload: dict = {}
+        _mod._project_switchboard_agent_viability(payload)
+        assert payload["activeModelProfile"]["state"] == "not-profiled"
 
     def test_non_activation_lock_owner_reports_unknown_target(self, monkeypatch):
         monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
@@ -8377,6 +8458,156 @@ class TestModelDownloadCatalogUnavailable:
         assert body["error"] == "Model not in library catalog"
 
 
+class TestModelDownloadDiskSpace:
+    """A download that cannot leave the model store its margin is refused first."""
+
+    GIB = 1024 ** 3
+
+    def _setup(self, tmp_path, monkeypatch, *, size_bytes, free_bytes, total_bytes):
+        install_dir = tmp_path / "install"
+        (install_dir / "config").mkdir(parents=True)
+        (install_dir / "data" / "models").mkdir(parents=True)
+        (install_dir / "config" / "model-library.json").write_text(json.dumps({"models": [{
+            "id": "test-model",
+            "gguf_file": "test-model.gguf",
+            "gguf_url": "https://example.com/test-model.gguf",
+            "size_bytes": size_bytes,
+        }]}), encoding="utf-8")
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
+        monkeypatch.setattr(_mod, "_model_download_directory", lambda: install_dir / "data" / "models")
+        storage = {
+            "freeBytes": free_bytes,
+            "totalBytes": total_bytes,
+            "marginBytes": _mod._download_disk_margin(total_bytes),
+        }
+        monkeypatch.setattr(_mod, "_model_storage_status", lambda _path: dict(storage))
+        return install_dir
+
+    def _body(self):
+        return json.dumps({
+            "gguf_file": "test-model.gguf",
+            "gguf_url": "https://example.com/test-model.gguf",
+        }).encode("utf-8")
+
+    def _no_lifecycle(self, monkeypatch):
+        def refuse(*_args, **_kwargs):
+            raise AssertionError("a refused download must not take the model lifecycle")
+        monkeypatch.setattr(_mod, "_begin_model_lifecycle", refuse)
+
+    def test_insufficient_space_returns_507_before_the_lifecycle(self, tmp_path, monkeypatch):
+        self._setup(tmp_path, monkeypatch, size_bytes=10 * self.GIB,
+                    free_bytes=11 * self.GIB, total_bytes=100 * self.GIB)
+        self._no_lifecycle(monkeypatch)
+        handler = _FakeHandler(self._body())
+
+        _mod.AgentHandler._handle_model_download(handler)
+
+        assert handler.response_code == 507
+        body = handler.parse_response()
+        assert body["code"] == "insufficient_disk_space"
+        assert body["requiredBytes"] == 10 * self.GIB
+        assert body["freeBytes"] == 11 * self.GIB
+        assert body["marginBytes"] == 5 * self.GIB
+
+    def test_exact_margin_passes_the_space_check(self, tmp_path, monkeypatch):
+        self._setup(tmp_path, monkeypatch, size_bytes=10 * self.GIB,
+                    free_bytes=12 * self.GIB, total_bytes=20 * self.GIB)
+        monkeypatch.setattr(
+            _mod, "_begin_model_lifecycle",
+            lambda *_args, **_kwargs: (False, {"operation": "model_activation"}),
+        )
+        handler = _FakeHandler(self._body())
+
+        _mod.AgentHandler._handle_model_download(handler)
+
+        # The space check passed; the next gate (the lifecycle) answered.
+        assert handler.response_code == 409
+
+    def test_artifact_already_on_disk_at_its_size_needs_no_space(self, tmp_path, monkeypatch):
+        install_dir = self._setup(tmp_path, monkeypatch, size_bytes=5,
+                                  free_bytes=0, total_bytes=100 * self.GIB)
+        (install_dir / "data" / "models" / "test-model.gguf").write_bytes(b"12345")
+        monkeypatch.setattr(
+            _mod, "_model_storage_status",
+            lambda _path: (_ for _ in ()).throw(AssertionError("no space check is needed")),
+        )
+        monkeypatch.setattr(
+            _mod, "_begin_model_lifecycle",
+            lambda *_args, **_kwargs: (False, {"operation": "model_activation"}),
+        )
+        handler = _FakeHandler(self._body())
+
+        _mod.AgentHandler._handle_model_download(handler)
+
+        assert handler.response_code == 409
+
+    def test_unreadable_free_space_is_a_409(self, tmp_path, monkeypatch):
+        self._setup(tmp_path, monkeypatch, size_bytes=10, free_bytes=0, total_bytes=0)
+
+        def fail(_path):
+            raise OSError("no such volume")
+
+        monkeypatch.setattr(_mod, "_model_storage_status", fail)
+        self._no_lifecycle(monkeypatch)
+        handler = _FakeHandler(self._body())
+
+        _mod.AgentHandler._handle_model_download(handler)
+
+        assert handler.response_code == 409
+        assert handler.parse_response()["error"] == "Free space on the model store could not be checked"
+
+    def test_margin_is_two_gib_or_five_percent(self):
+        assert _mod._download_disk_margin(10 * self.GIB) == 2 * self.GIB
+        assert _mod._download_disk_margin(100 * self.GIB) == 5 * self.GIB
+
+    def test_bytes_needed_skips_present_and_unsized_artifacts(self, tmp_path):
+        present = tmp_path / "present.gguf"
+        present.write_bytes(b"abc")
+        wrong_size = tmp_path / "partial.gguf"
+        wrong_size.write_bytes(b"a")
+        artifacts = [
+            {"file": "present.gguf", "size_bytes": 3},
+            {"file": "partial.gguf", "size_bytes": 4},
+            {"file": "missing.gguf", "size_bytes": 7},
+            {"file": "unsized.gguf", "size_bytes": None},
+        ]
+        paths = {name: tmp_path / name for name in (
+            "present.gguf", "partial.gguf", "missing.gguf", "unsized.gguf")}
+
+        assert _mod._download_bytes_needed(artifacts, paths) == 11
+
+    def test_storage_status_uses_the_nearest_existing_directory(self, tmp_path):
+        status = _mod._model_storage_status(tmp_path / "not" / "created" / "yet")
+
+        assert status["totalBytes"] > 0
+        assert status["freeBytes"] >= 0
+        assert status["marginBytes"] == _mod._download_disk_margin(status["totalBytes"])
+
+    def test_storage_endpoint_reports_the_download_volume(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
+        monkeypatch.setattr(_mod, "_model_download_directory", lambda: tmp_path)
+        handler = _FakeHandler(b"")
+
+        _mod.AgentHandler._handle_model_storage(handler)
+
+        assert handler.response_code == 200
+        assert set(handler.parse_response()) == {"freeBytes", "totalBytes", "marginBytes"}
+
+    def test_storage_endpoint_is_409_when_the_directory_cannot_be_verified(self, monkeypatch):
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
+
+        def unverified():
+            raise RuntimeError("Windows runtime model-store ownership changed")
+
+        monkeypatch.setattr(_mod, "_model_download_directory", unverified)
+        handler = _FakeHandler(b"")
+
+        _mod.AgentHandler._handle_model_storage(handler)
+
+        assert handler.response_code == 409
+
+
 class TestModelDeleteSafety:
 
     def _setup(self, tmp_path, monkeypatch, *, active="other.gguf"):
@@ -10134,3 +10365,269 @@ class TestWslServiceInterop:
         _mod._wsl_sensor_run(['powershell.exe'])
         assert calls == ['/run/WSL/1973_interop', '/run/WSL/2_interop']
         assert _mod._wsl_metrics_interop == ('/run/WSL/2_interop', (1, 2))
+
+
+class TestModelProfileRoutes:
+    """WP3.5: GET /v1/model/profile and POST /v1/model/profile/recheck."""
+
+    RESULT = {"suite": "1", "status": "complete", "probes": {"P1": {"status": "pass"}},
+              "summary": {"chat": True, "tools": False}}
+
+    def _setup(self, tmp_path, monkeypatch, env_text="GGUF_FILE=running.gguf\n"):
+        install_dir = tmp_path / "install"
+        (install_dir / "data").mkdir(parents=True)
+        (install_dir / ".env").write_text(env_text, encoding="utf-8")
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
+        return install_dir
+
+    def _seed(self, install_dir, *entries, last=None):
+        store = _mod._model_profile_store
+        doc = store.empty()
+        for model_id, build in entries:
+            key = store.profile_key(gguf_sha256=["a" * 64], projector_sha256=None, build_info=build,
+                                    backend="nvidia", template_sha256=None, template_source="embedded",
+                                    suite="1", host="0123456789abcdef")
+            if model_id != "running":
+                key["ggufSha256"] = [model_id.encode().hex().ljust(64, "0")[:64]]
+            doc = store.with_profile(doc, store.recorded_profile(
+                key, model_id=model_id, gguf_file=f"{model_id}.gguf", result=self.RESULT, product_version="t"))
+        if last:
+            doc = store.with_last_activation(doc, last, next(p["keyHash"] for p in doc["profiles"] if p["modelId"] == last))
+        store.atomic_write(install_dir / "data" / "model-profiles.json", doc)
+
+    def _get(self, query=""):
+        handler = _FakeHandler(b"")
+        handler.path = "/v1/model/profile" + query
+        _mod.AgentHandler._handle_model_profile(handler)
+        return handler
+
+    def _recheck(self, model_id):
+        handler = _FakeHandler(json.dumps({"model": model_id}).encode())
+        handler.path = "/v1/model/profile/recheck"
+        _mod.AgentHandler._handle_model_profile_recheck(handler)
+        return handler
+
+    def test_get_returns_the_last_activated_models_profile(self, tmp_path, monkeypatch):
+        install_dir = self._setup(tmp_path, monkeypatch)
+        self._seed(install_dir, ("running", "b11429-x"), ("other", "b11429-x"), last="running")
+
+        handler = self._get()
+
+        assert handler.response_code == 200
+        body = handler.parse_response()
+        assert body["mode"] == "observe" and body["modelId"] == "running"
+        assert body["profile"]["modelId"] == "running"
+
+    def test_get_for_a_named_model_returns_its_newest_profile(self, tmp_path, monkeypatch):
+        install_dir = self._setup(tmp_path, monkeypatch)
+        self._seed(install_dir, ("running", "b11429-x"), ("other", "b9014-y"), last="running")
+
+        body = self._get("?model=other").parse_response()
+
+        assert body["profile"]["modelId"] == "other"
+        assert body["profile"]["key"]["buildInfo"] == "b9014-y"
+
+    def test_get_without_a_store_or_with_profiles_off(self, tmp_path, monkeypatch):
+        self._setup(tmp_path, monkeypatch, env_text="ODS_MODEL_PROFILES=off\n")
+
+        body = self._get("?model=x").parse_response()
+
+        assert body == {"mode": "off", "modelId": "x", "profile": None}
+
+    def test_recheck_measures_the_running_model_under_its_own_lifecycle(self, tmp_path, monkeypatch):
+        self._setup(tmp_path, monkeypatch)
+        monkeypatch.setattr(_mod, "_load_model_library_records",
+                            lambda: [{"id": "running", "gguf_file": "running.gguf"}])
+        seen = []
+
+        def advisory(env, model, *, model_id, gguf_file, force=False):
+            seen.append((model_id, gguf_file, force, _mod._model_lifecycle_status().get("activeOperation")))
+            return {"status": "recorded", "keyHash": "f" * 64, "summary": {}}
+
+        monkeypatch.setattr(_mod, "_profile_model_advisory", advisory)
+
+        handler = self._recheck("running")
+
+        assert handler.response_code == 200
+        assert handler.parse_response()["status"] == "recorded"
+        assert seen == [("running", "running.gguf", True, "model_profile_recheck")]
+        assert _mod._model_lifecycle_status() == {} or not _mod._model_lifecycle_status().get("lifecycleActive")
+
+    @pytest.mark.parametrize("env_text, model_id, code", [
+        ("GGUF_FILE=running.gguf\n", "stopped", "not_running"),
+        ("GGUF_FILE=running.gguf\nODS_MODEL_PROFILES=off\n", "running", "profiles_off"),
+    ])
+    def test_recheck_refuses_a_model_that_is_not_running_or_profiles_off(
+            self, tmp_path, monkeypatch, env_text, model_id, code):
+        self._setup(tmp_path, monkeypatch, env_text=env_text)
+        monkeypatch.setattr(_mod, "_load_model_library_records", lambda: [
+            {"id": "running", "gguf_file": "running.gguf"}, {"id": "stopped", "gguf_file": "stopped.gguf"}])
+        monkeypatch.setattr(_mod, "_profile_model_advisory", lambda *_a, **_k: pytest.fail("no probe"))
+
+        handler = self._recheck(model_id)
+
+        assert handler.response_code == 409
+        assert handler.parse_response()["code"] == code
+
+    def test_recheck_waits_for_no_one_when_another_model_task_holds_the_lifecycle(self, tmp_path, monkeypatch):
+        self._setup(tmp_path, monkeypatch)
+        monkeypatch.setattr(_mod, "_load_model_library_records",
+                            lambda: [{"id": "running", "gguf_file": "running.gguf"}])
+        monkeypatch.setattr(_mod, "_begin_model_lifecycle",
+                            lambda *_a, **_k: (False, {"operation": "model_download", "target": "x.gguf"}))
+        monkeypatch.setattr(_mod, "_profile_model_advisory", lambda *_a, **_k: pytest.fail("no probe"))
+
+        handler = self._recheck("running")
+
+        assert handler.response_code == 409
+        assert handler.parse_response()["activeOperation"] == "model_download"
+
+
+class TestChatTemplateOffer:
+    """WP5: the profile answer names a fixed template only when one matches the model exactly."""
+
+    TEMPLATE = b"{{ messages }}"
+    EMBEDDED = "c" * 64
+
+    def _setup(self, tmp_path, monkeypatch, env_text="GGUF_FILE=running.gguf\n"):
+        install_dir = tmp_path / "install"
+        (install_dir / "data").mkdir(parents=True)
+        (install_dir / ".env").write_text(env_text, encoding="utf-8")
+        vendored = install_dir / "config" / "chat-templates" / "upstream-b9014"
+        vendored.mkdir(parents=True)
+        (vendored / "Fixed.jinja").write_bytes(self.TEMPLATE)
+        entry = {"id": "running-fix", "embeddedTemplateSha256": self.EMBEDDED,
+                 "file": "upstream-b9014/Fixed.jinja", "fileSha256": hashlib.sha256(self.TEMPLATE).hexdigest(),
+                 "builds": ["b11429"], "reason": "Its own template drops tool calls."}
+        (install_dir / "config" / "chat-templates" / "index.json").write_text(
+            json.dumps({"schemaVersion": 1, "overrides": [entry]}), encoding="utf-8")
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
+        return install_dir
+
+    def _seed(self, install_dir, *, template_sha, source="embedded", build="b11429-x"):
+        store = _mod._model_profile_store
+        path = install_dir / "data" / "model-profiles.json"
+        key = store.profile_key(gguf_sha256=["a" * 64], projector_sha256=None, build_info=build, backend="nvidia",
+                                template_sha256=template_sha, template_source=source, suite="3",
+                                host="0123456789abcdef")
+        profile = store.recorded_profile(key, model_id="running", gguf_file="running.gguf",
+                                         result=TestModelProfileRoutes.RESULT, product_version="t")
+        doc = store.with_profile(store.load(path), profile)
+        store.atomic_write(path, store.with_last_activation(doc, "running", profile["keyHash"]))
+
+    def _get(self):
+        handler = _FakeHandler(b"")
+        handler.path = "/v1/model/profile?model=running"
+        _mod.AgentHandler._handle_model_profile(handler)
+        assert handler.response_code == 200
+        return handler.parse_response()
+
+    def test_an_exact_match_is_offered(self, tmp_path, monkeypatch):
+        install_dir = self._setup(tmp_path, monkeypatch)
+        self._seed(install_dir, template_sha=self.EMBEDDED)
+
+        body = self._get()
+
+        assert body["templateOverride"] == {"id": "running-fix", "reason": "Its own template drops tool calls.",
+                                            "active": False, "supported": True}
+
+    @pytest.mark.parametrize("template_sha, build", [("d" * 64, "b11429-x"), ("c" * 64, "b9014-y"), (None, "b11429-x")])
+    def test_no_exact_match_leaves_the_answer_as_before(self, tmp_path, monkeypatch, template_sha, build):
+        install_dir = self._setup(tmp_path, monkeypatch)
+        self._seed(install_dir, template_sha=template_sha, build=build)
+
+        assert set(self._get()) == {"mode", "modelId", "profile"}
+
+    def test_profiles_off_never_offers_one(self, tmp_path, monkeypatch):
+        install_dir = self._setup(tmp_path, monkeypatch, env_text="ODS_MODEL_PROFILES=off\n")
+        self._seed(install_dir, template_sha=self.EMBEDDED)
+
+        assert "templateOverride" not in self._get()
+
+    def test_a_running_fixed_template_is_reported_as_active(self, tmp_path, monkeypatch):
+        install_dir = self._setup(tmp_path, monkeypatch,
+                                  env_text="GGUF_FILE=running.gguf\nMODEL_CHAT_TEMPLATE_OVERRIDE=running-fix\n")
+        self._seed(install_dir, template_sha=self.EMBEDDED)
+        self._seed(install_dir, template_sha=hashlib.sha256(self.TEMPLATE).hexdigest(), source="override:running-fix")
+
+        body = self._get()
+
+        assert body["profile"]["key"]["templateSource"] == "override:running-fix"
+        assert body["templateOverride"]["active"] is True
+
+    def test_a_windows_runtime_learns_of_the_fix_but_cannot_use_it(self, tmp_path, monkeypatch):
+        install_dir = self._setup(tmp_path, monkeypatch, env_text=(
+            "GPU_BACKEND=amd\nAMD_INFERENCE_RUNTIME_MODE=windows-native-llama-server\nAMD_INFERENCE_LOCATION=host\n"))
+        self._seed(install_dir, template_sha=self.EMBEDDED)
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
+
+        assert self._get()["templateOverride"]["supported"] is False
+
+
+class TestVisionProjectorFiles:
+    """WP2: the projector is downloaded, verified and deleted with the weights."""
+
+    RECORD = {
+        "id": "hf-vision", "gguf_file": "hf-vision-Q4.gguf", "gguf_url": "https://huggingface.co/o/m/resolve/r/m-Q4.gguf",
+        "gguf_sha256": "a" * 64, "size_bytes": 100,
+        "mmproj_file": "hf-vision-mmproj-F16.gguf", "mmproj_url": "https://huggingface.co/o/m/resolve/r/mmproj-F16.gguf",
+        "mmproj_sha256": "b" * 64, "mmproj_size_bytes": 50,
+    }
+
+    def test_the_manifest_carries_the_projector_last(self):
+        manifest = _mod._model_download_manifest(dict(self.RECORD))
+        assert [artifact["file"] for artifact in manifest["artifacts"]] == ["hf-vision-Q4.gguf", "hf-vision-mmproj-F16.gguf"]
+        assert manifest["artifacts"][1]["role"] == "projector"
+        assert manifest["artifacts"][1]["size_bytes"] == 50
+        assert _mod._model_profile_digests(dict(self.RECORD), "hf-vision-Q4.gguf") == ["a" * 64]
+
+    @pytest.mark.parametrize("with_projector, expected", [(True, 409), (False, 403)])
+    def test_a_download_must_bring_exactly_the_records_projector(self, tmp_path, monkeypatch, with_projector, expected):
+        install_dir = tmp_path / "install"
+        (install_dir / "config").mkdir(parents=True)
+        (install_dir / "data" / "models").mkdir(parents=True)
+        (install_dir / "config" / "model-library.json").write_text(json.dumps({"models": [self.RECORD]}), encoding="utf-8")
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
+        monkeypatch.setattr(_mod, "_model_download_directory", lambda: install_dir / "data" / "models")
+        monkeypatch.setattr(_mod, "_model_storage_status",
+                            lambda _path: {"freeBytes": 10 ** 12, "totalBytes": 10 ** 12, "marginBytes": 0})
+        # Past validation the request meets a busy lifecycle: 409 proves it was accepted.
+        monkeypatch.setattr(_mod, "_begin_model_lifecycle",
+                            lambda *_a, **_k: (False, {"operation": "model_activation", "target": "x"}))
+        body = {"gguf_file": self.RECORD["gguf_file"], "gguf_url": self.RECORD["gguf_url"]}
+        if with_projector:
+            body["mmproj"] = {"file": self.RECORD["mmproj_file"], "url": self.RECORD["mmproj_url"]}
+        handler = _FakeHandler(json.dumps(body).encode("utf-8"))
+
+        _mod.AgentHandler._handle_model_download(handler)
+
+        assert handler.response_code == expected
+
+    def test_delete_keeps_a_projector_another_installed_quantization_uses(self, tmp_path, monkeypatch):
+        install_dir = tmp_path / "install"
+        models = install_dir / "data" / "models"
+        (install_dir / "config").mkdir(parents=True)
+        models.mkdir(parents=True)
+        (install_dir / ".env").write_text("GPU_BACKEND=nvidia\nGGUF_FILE=other.gguf\nOLLAMA_PORT=8080\n", encoding="utf-8")
+        q4 = dict(self.RECORD)
+        q8 = {**self.RECORD, "id": "hf-vision-q8", "gguf_file": "hf-vision-Q8.gguf"}
+        (install_dir / "config" / "model-library.json").write_text(json.dumps({"models": [q4, q8]}), encoding="utf-8")
+        for name in ("hf-vision-Q4.gguf", "hf-vision-Q8.gguf", "hf-vision-mmproj-F16.gguf"):
+            (models / name).write_bytes(b"x")
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
+        monkeypatch.setattr(_mod, "_live_runtime_has_model", lambda *_args: False)
+
+        first = _FakeHandler(json.dumps({"gguf_file": "hf-vision-Q4.gguf"}).encode())
+        _mod.AgentHandler._handle_model_delete(first)
+        assert first.response_code == 200, first.parse_response()
+        assert (models / "hf-vision-mmproj-F16.gguf").exists()
+
+        second = _FakeHandler(json.dumps({"gguf_file": "hf-vision-Q8.gguf"}).encode())
+        _mod.AgentHandler._handle_model_delete(second)
+        assert second.response_code == 200, second.parse_response()
+        assert not (models / "hf-vision-mmproj-F16.gguf").exists()
+        assert sorted(path.name for path in models.iterdir()) == []

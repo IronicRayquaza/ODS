@@ -17,6 +17,7 @@ import atexit
 import base64
 import collections
 import hashlib
+import http.client
 import importlib
 import importlib.util
 import json
@@ -50,7 +51,20 @@ _SWITCHBOARD_BIN_DIR = str(Path(__file__).resolve().parent)
 if _SWITCHBOARD_BIN_DIR not in sys.path:
     sys.path.insert(0, _SWITCHBOARD_BIN_DIR)
 from model_switchboard.router_transport import request as _router_transport_request
+from model_switchboard.router_transport import exchange as _router_transport_exchange
 from model_switchboard import wsl_runtime as _wsl_runtime
+# Model profiles (WP3): measured capabilities per GGUF x llama.cpp build x host.
+# Fail-open like the switchboard: without the package a switch runs as before.
+try:
+    import model_profile as _model_profile
+    from model_profile import probes as _model_profile_probes
+    from model_profile import store as _model_profile_store
+    from model_profile import templates as _model_profile_templates
+except ImportError:  # pragma: no cover - import environment dependent
+    _model_profile = None
+    _model_profile_probes = None
+    _model_profile_store = None
+    _model_profile_templates = None
 
 try:
     from model_switchboard import state as _switchboard_state
@@ -537,6 +551,8 @@ _model_lifecycle_revision = 0
 _MODEL_RUNTIME_NEUTRAL_OPERATIONS = frozenset({
     'pixel_startup_reproof', 'pixel_access_mode', 'pixel_open_app',
     'pixel_providers', 'pixel_settings',
+    # Re-measuring the running model reads it; the runtime does not change.
+    'model_profile_recheck',
 })
 # Advances only for lifecycle operations that can change the model runtime.
 _model_runtime_revision = 0
@@ -551,7 +567,7 @@ _model_activation_failure_code: str | None = None
 # restart. Neutral status/reproof work preserves it; a new runtime operation
 # invalidates it. Restored outcomes are recorded only after rollback proof.
 _model_activation_result: dict | None = None
-_MODEL_ACTIVATION_PHASES = frozenset({'preparing', 'loading', 'verifying', 'rolling_back', 'rollback_verifying'})
+_MODEL_ACTIVATION_PHASES = frozenset({'preparing', 'loading', 'profiling', 'verifying', 'rolling_back', 'rollback_verifying'})
 _MODEL_ACTIVATION_FAILURE_CODES = frozenset({'runtime_load_failed', 'runtime_readiness_failed', 'consumer_verification_failed', 'rollback_unconfirmed'})
 _model_status_verify_thread: threading.Thread | None = None
 _switchboard_initial_verify_lock = threading.Lock()
@@ -1018,6 +1034,49 @@ def _artifact_expected_size(metadata: dict) -> int | None:
     return None
 
 
+_DOWNLOAD_DISK_MARGIN_MIN_BYTES = 2 * 1024 ** 3
+_DOWNLOAD_DISK_MARGIN_FRACTION = 0.05
+
+
+def _download_disk_margin(total_bytes: int) -> int:
+    """Free space a download must leave on the model store volume."""
+    return max(_DOWNLOAD_DISK_MARGIN_MIN_BYTES, int(total_bytes * _DOWNLOAD_DISK_MARGIN_FRACTION))
+
+
+def _download_bytes_needed(artifacts: list[dict], paths: dict[str, Path]) -> int:
+    """Bytes still to fetch: sized artifacts not already on disk at that size.
+
+    An artifact of unknown size is not counted; the download verifies it.
+    """
+    needed = 0
+    for artifact in artifacts:
+        expected = artifact.get("size_bytes")
+        if not isinstance(expected, int) or isinstance(expected, bool) or expected <= 0:
+            continue
+        target = paths.get(artifact["file"])
+        try:
+            if target is not None and target.stat().st_size == expected:
+                continue
+        except OSError:
+            # Not present, or not readable here: it still has to be fetched.
+            pass
+        needed += expected
+    return needed
+
+
+def _model_storage_status(models_dir: Path) -> dict:
+    """Free and total bytes of the volume that holds models_dir."""
+    probe = Path(models_dir)
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    usage = shutil.disk_usage(probe)
+    return {
+        "freeBytes": int(usage.free),
+        "totalBytes": int(usage.total),
+        "marginBytes": _download_disk_margin(int(usage.total)),
+    }
+
+
 def _model_download_manifest(model: dict) -> dict | None:
     """Build the complete integrity manifest for one catalog model."""
     gguf_file = str(model.get("gguf_file") or "").strip()
@@ -1051,10 +1110,58 @@ def _model_download_manifest(model: dict) -> dict | None:
             "size_bytes": _artifact_expected_size(model),
         })
 
+    projector = _model_projector_artifact(model)
+    if projector is not None:
+        artifacts.append(projector)
     filenames = [artifact["file"] for artifact in artifacts]
     if gguf_file not in filenames or len(filenames) != len(set(filenames)):
         return None
     return {"gguf_file": gguf_file, "artifacts": artifacts}
+
+
+def _library_record_for_gguf(gguf_file: str) -> dict | None:
+    """The catalog or import record whose weights are ``gguf_file``, if any."""
+    try:
+        library = _load_model_library_records()
+    except RuntimeError:
+        logger.warning("Model library unavailable; launching %s without library extras", gguf_file)
+        return None
+    return next((entry for entry in library if entry.get("gguf_file") == gguf_file), None)
+
+
+def _model_projector_file(model: dict | None, models_dir: Path) -> Path | None:
+    """The downloaded vision projector of a model record, if it has one on disk."""
+    filename = str((model or {}).get("mmproj_file") or "").strip()
+    if not filename:
+        return None
+    projector = _safe_model_artifact_path(models_dir, filename)
+    return projector if projector is not None and projector.is_file() else None
+
+
+def _projector_shared(library: list[dict], owner: dict, projector: Path, models_dir: Path) -> bool:
+    """Does another installed model use this projector? Quantizations of one repo share it."""
+    for entry in library:
+        if entry is owner or str(entry.get("mmproj_file") or "") != projector.name:
+            continue
+        weights = _safe_model_artifact_path(models_dir, entry.get("gguf_file"))
+        if weights is not None and weights.exists():
+            return True
+    return False
+
+
+def _model_projector_artifact(model: dict) -> dict | None:
+    """The vision projector (mmproj) an import downloads and verifies with its weights (WP2)."""
+    filename = str(model.get("mmproj_file") or "").strip()
+    url = str(model.get("mmproj_url") or "").strip()
+    if not filename or not url:
+        return None
+    return {
+        "file": filename,
+        "url": url,
+        "sha256": str(model.get("mmproj_sha256") or "").strip().lower(),
+        "size_bytes": _artifact_expected_size({"size_bytes": model.get("mmproj_size_bytes")}),
+        "role": "projector",
+    }
 
 
 def _load_model_library_records() -> list[dict]:
@@ -2167,8 +2274,10 @@ def _model_management_snapshot() -> tuple[int, dict]:
                 value = _managed_wsl_runtime(env)
                 managed = value.get('managed') is True
                 running = managed and value.get('running') is True
+                # vision: the owned launcher loads a projector with its model.
                 result = (200, {'managed': managed, 'canActivate': running,
-                                'canUnload': managed, 'running': running})
+                                'canUnload': managed, 'running': running,
+                                'vision': _wsl_runtime.supports_projector(value)})
             except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
                 logger.warning('Windows runtime management verification failed: %s', exc)
                 result = unavailable
@@ -2427,6 +2536,61 @@ def _start_pixel_sharing_change(action, body, route):
         raise
 
 
+# (file mtime_ns, size) -> store document; one tuple, replaced whole, so
+# concurrent status handlers never pair one file's key with another's content.
+_ACTIVE_PROFILE_CACHE: list[tuple[tuple[int, int], dict | None]] = []
+
+
+def _model_profile_doc_cached() -> dict | None:
+    """The profile store, re-read only when the file changes (status is polled)."""
+    path = _model_profile_path()
+    try:
+        info = path.stat()
+    except FileNotFoundError:
+        return None
+    key = (info.st_mtime_ns, info.st_size)
+    cached = _ACTIVE_PROFILE_CACHE[0] if _ACTIVE_PROFILE_CACHE else None
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    try:
+        doc = _model_profile_store.load(path)
+    except (_model_profile_store.StoreError, OSError, UnicodeError):
+        logger.warning("Model profile store unreadable for status; reporting not profiled")
+        doc = None
+    _ACTIVE_PROFILE_CACHE[:] = [(key, doc)]
+    return doc
+
+
+def _stored_profile_traits(catalog_id: object) -> dict | None:
+    """Traits of the profile this model's last switch recorded or reused, if any.
+
+    A model switched to before profiling existed has none; "Check again"
+    replaces it without a switch.
+    """
+    if _model_profile_store is None or not isinstance(catalog_id, str) or not catalog_id:
+        return None
+    doc = _model_profile_doc_cached()
+    last = (doc or {}).get("lastActivation") or {}
+    if last.get("modelId") != catalog_id:
+        return None
+    profile = next((entry for entry in reversed(doc["profiles"])
+                    if entry.get("keyHash") == last.get("keyHash")), None)
+    if profile is None:
+        return None
+    return _summary_traits((profile.get("result") or {}).get("summary"))
+
+
+def _active_model_profile(env: dict, catalog_id: object) -> dict | None:
+    """What the active model's profile says, for the Portal and Talk advisories (enabled only)."""
+    if (_model_profiles_mode(env) != "enabled" or _model_profile_store is None
+            or not isinstance(catalog_id, str) or not catalog_id):
+        return None
+    traits = _stored_profile_traits(catalog_id)
+    if traits is None:
+        return {"state": "not-profiled", "tools": None, "thinkingControl": None}
+    return {"state": "measured", "tools": traits["tools"], "thinkingControl": traits["control"]}
+
+
 def _project_switchboard_agent_viability(payload: dict) -> None:
     """Project the verified active route's identity and Pixel viability.
 
@@ -2483,6 +2647,9 @@ def _project_switchboard_agent_viability(payload: dict) -> None:
             "model": local_model,
             "contextLength": local_context,
         }
+    active_profile = _active_model_profile(env, active.get("catalogId"))
+    if active_profile is not None:
+        payload["activeModelProfile"] = active_profile
     capabilities = active.get("capabilities")
     if not isinstance(capabilities, dict):
         return
@@ -2496,6 +2663,7 @@ def _project_switchboard_agent_viability(payload: dict) -> None:
     projected = agent_viable
     catalog_id = active.get("catalogId")
     context_length = active.get("contextLength")
+    catalog_model = None
     if isinstance(catalog_id, str) and isinstance(context_length, int):
         try:
             catalog_model = next(
@@ -2513,6 +2681,12 @@ def _project_switchboard_agent_viability(payload: dict) -> None:
                 catalog_model,
                 context_length,
             )
+    # With profiles enabled a failed tool check narrows it as well, at once
+    # (after an upgrade or "Check again") instead of at the next switch; a
+    # curated "verified" agent verdict keeps a model agent-viable (WP4.1).
+    if (active_profile is not None and active_profile.get("tools") is False
+            and not _catalog_agent_verified(catalog_model)):
+        projected = False
     payload["activeAgentViable"] = projected
 
 
@@ -2739,6 +2913,11 @@ def _publish_verified_initial_switchboard_route(
         "vision": bool(model.get("vision")),
         "agentViable": _model_agent_viable(model, context_length),
     }
+    if _model_profiles_mode(env) == "enabled":
+        # After an install or upgrade, re-publish what the model's last switch
+        # measured instead of the catalog booleans (WP4.1).
+        capabilities = _profiled_capabilities(
+            capabilities, _stored_profile_traits(model_id or llm_model_name or gguf_file), model)
     # A model transition can begin while the slow runtime proof is in flight.
     # Serialize the final write with lifecycle admission and recheck the
     # durable journal: a held transaction's before-state must stay immutable
@@ -3412,6 +3591,30 @@ def _pixel_model_reasoning_capable(model: str, env: dict[str, str]) -> bool:
     return configured not in {"", "off", "none", "false", "0"}
 
 
+def _profiled_pixel_reasoning(configured: bool, traits: dict | None) -> bool:
+    """Pixel's reasoning flag; a measured thinking control decides it (WP4.2, enabled only).
+
+    A model that cannot turn thinking off reasons whatever ODS asks, and one
+    without thinking never does; otherwise the configured runtime rule stands.
+    """
+    control = (traits or {}).get("control")
+    if control == "always":
+        return True
+    if control == "none":
+        return False
+    return configured
+
+
+def _profiled_pixel_image_input(configured: str, traits: dict | None) -> str:
+    """Pixel's image input from the vision probe when a projector was loaded (WP4.2)."""
+    vision = (traits or {}).get("vision")
+    if vision is True:
+        return "supported"
+    if vision is False:
+        return "unsupported"
+    return configured
+
+
 def _pixel_max_tokens_for_context(context_length: int) -> int:
     """Keep enough prompt room for Pixel's managed agent/tool contract."""
     if context_length < _MIN_MANAGED_PIXEL_CONTEXT:
@@ -3457,8 +3660,13 @@ def _reconcile_ods_managed_pixel_model(
     reasoning: bool = False,
     route_fingerprint: str | None = None,
     image_input: str | None = None,
+    thinking_control: str | None = None,
 ) -> str:
-    """Transactionally bind the managed Pixel gateway to an activated model."""
+    """Transactionally bind the managed Pixel gateway to an activated model.
+
+    ``thinking_control`` is the model's measured control. None keeps the
+    renderer's name rule and clears a control saved for an earlier model.
+    """
     identity = _ods_managed_pixel_identity()
     if identity is None:
         return "not_installed"
@@ -3466,6 +3674,8 @@ def _reconcile_ods_managed_pixel_model(
         raise RuntimeError("The promoted Pixel model identity is invalid")
     if image_input is not None and image_input not in ("supported", "unsupported", "unknown"):
         raise RuntimeError("The promoted Pixel image-input policy is invalid")
+    if thinking_control is not None and thinking_control not in ("enable_thinking", "always", "none"):
+        raise RuntimeError("The promoted Pixel thinking control is invalid")
     if not isinstance(context_length, int) or isinstance(context_length, bool) \
             or not 4096 <= context_length <= 10_000_000:
         raise RuntimeError("Pixel requires a model context between 4096 and 10000000 tokens")
@@ -3515,6 +3725,7 @@ target_max_tokens="$6"
 target_reasoning="$7"
 target_route_fingerprint="$8"
 target_image_input="$9"
+target_thinking_control="${10}"
 INTERACTIVE=false
 DRY_RUN=false
 log() { printf '%s\n' "$*" >&2; }
@@ -3533,7 +3744,8 @@ export INSTALL_DIR INTERACTIVE DRY_RUN ODS_SUDO_AVAILABLE
 . "$INSTALL_DIR/installers/lib/sudo.sh"
 . "$INSTALL_DIR/installers/lib/pixel-host-install.sh"
 ods_pixel_reconcile_promoted_model "$owner" "$home" "$target_model" ready \
-    "$target_context" "$target_max_tokens" "$target_reasoning" "$target_route_fingerprint" "" "$target_image_input"
+    "$target_context" "$target_max_tokens" "$target_reasoning" "$target_route_fingerprint" "" "$target_image_input" \
+    "$target_thinking_control"
 '''
     child_env = {
         "HOME": str(home),
@@ -3554,6 +3766,7 @@ ods_pixel_reconcile_promoted_model "$owner" "$home" "$target_model" ready \
                 "true" if reasoning else "false",
                 route_fingerprint or "",
                 image_input or "unknown",
+                thinking_control or "",
             ],
             env=child_env,
             capture_output=True,
@@ -4953,7 +5166,33 @@ def _managed_pixel_runtime_contract() -> dict[str, object] | None:
     return contract
 
 
-def _reconcile_managed_pixel_contract(contract: dict[str, object] | None) -> str:
+def _thinking_control_kwargs(control: str | None) -> dict:
+    """Pass a measured control only when there is one, so calls without one stay as today."""
+    return {"thinking_control": control} if control else {}
+
+
+def _managed_pixel_thinking_control() -> str | None:
+    """The measured thinking control saved in the ODS-managed Pixel answers, if any.
+
+    It lives only in the owner-private answers (a plugin-config key would
+    break rollback to older code), so a rollback that restores a previous
+    model reads it here first. Coordinator-managed installs never carry it.
+    """
+    if load_env(INSTALL_DIR / ".env").get("PIXEL_OPENWEBUI_KEY") or _ods_managed_pixel_identity() is None:
+        return None
+    snapshot = _snapshot_text_file(INSTALL_DIR / "data" / "pixel" / "onboarding.json")
+    if not snapshot.get("exists"):
+        return None
+    try:
+        value = json.loads(str(snapshot.get("text") or ""))
+    except json.JSONDecodeError:
+        return None
+    control = value.get("modelThinkingControl") if isinstance(value, dict) else None
+    return control if control in _THINKING_CONTROLS else None
+
+
+def _reconcile_managed_pixel_contract(contract: dict[str, object] | None,
+                                      *, thinking_control: str | None = None) -> str:
     if contract is None:
         return "not_installed"
     return _reconcile_ods_managed_pixel_model(
@@ -4963,6 +5202,7 @@ def _reconcile_managed_pixel_contract(contract: dict[str, object] | None) -> str
         reasoning=bool(contract["reasoning"]),
         route_fingerprint=contract.get("routeFingerprint"),
         image_input=contract.get("imageInput"),
+        **_thinking_control_kwargs(thinking_control),
     )
 
 
@@ -5038,6 +5278,8 @@ def _activate_remote_provider_route(
     activation_snapshot = _snapshot_text_file(activation_path)
     activation_public_snapshot = _snapshot_text_file(activation_public_path)
     pixel_before = transaction.previous if transaction is not None else _managed_pixel_runtime_contract()
+    # The local model's measured thinking control, restored if activation fails.
+    pixel_before_control = None if transaction is not None else _managed_pixel_thinking_control()
     container_state = _capture_container_state("ods-litellm")
     if not container_state.get("running"):
         raise RuntimeError("LiteLLM must be running before a remote provider can become active")
@@ -5134,7 +5376,7 @@ def _activate_remote_provider_route(
                 rollback_errors.append(f"LiteLLM: {rollback_exc}")
         if pixel_attempted and transaction is None:
             try:
-                _reconcile_managed_pixel_contract(pixel_before)
+                _reconcile_managed_pixel_contract(pixel_before, **_thinking_control_kwargs(pixel_before_control))
             except Exception as rollback_exc:
                 rollback_errors.append(f"Pixel: {rollback_exc}")
         if transaction is not None and rollback_errors:
@@ -9634,6 +9876,10 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._handle_model_status()
         elif path == "/v1/model/management":
             self._handle_model_management()
+        elif path == "/v1/model/storage":
+            self._handle_model_storage()
+        elif path == "/v1/model/profile":
+            self._handle_model_profile()
         elif path == "/v1/model/external-observation":
             self._handle_retired_lemonade_endpoint()
         elif path == "/v1/model/recovery":
@@ -10296,6 +10542,8 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._handle_service_restart()
         elif self.path == "/v1/model/download":
             self._handle_model_download()
+        elif self.path == "/v1/model/profile/recheck":
+            self._handle_model_profile_recheck()
         elif self.path == "/v1/model/download/cancel":
             self._handle_model_download_cancel()
         elif self.path == "/v1/model/activate":
@@ -12768,6 +13016,78 @@ class AgentHandler(BaseHTTPRequestHandler):
 
     # ── Model management handlers ──
 
+    def _handle_model_profile(self):
+        """The stored profile for ``?model=<id>`` (default: the last activated model)."""
+        if not check_auth(self):
+            return
+        requested = (parse_qs(urlparse(self.path).query).get("model") or [""])[0].strip()
+        env = load_env(INSTALL_DIR / ".env")
+        mode = _model_profiles_mode(env)
+        if _model_profile_store is None:
+            json_response(self, 200, {"mode": "off", "modelId": requested or None, "profile": None})
+            return
+        doc = _model_profile_doc()
+        last = doc.get("lastActivation") or {}
+        model_id = requested or str(last.get("modelId") or "")
+        profile = None
+        if model_id and model_id == last.get("modelId"):
+            profile = next((entry for entry in doc["profiles"] if entry["keyHash"] == last.get("keyHash")), None)
+        if profile is None and model_id:
+            profile = _model_profile_store.latest_for_model(doc, model_id)
+        payload = {"mode": mode, "modelId": model_id or None, "profile": profile}
+        # A fixed chat template (WP5) is named only when one matches this
+        # model exactly or runs with it; every other answer is unchanged.
+        offer = _chat_template_offer(env, doc, model_id, profile) if mode != "off" and model_id else None
+        if offer is not None:
+            payload["templateOverride"] = offer
+        json_response(self, 200, payload)
+
+    def _handle_model_profile_recheck(self):
+        """Measure the running model again, ignoring its stored profile."""
+        if not check_auth(self):
+            return
+        body = read_json_body(self)
+        if body is None:
+            return
+        model_id = str(body.get("model") or "").strip()
+        env = load_env(INSTALL_DIR / ".env")
+        if _model_profiles_mode(env) == "off" or _model_profile_store is None:
+            json_response(self, 409, {"error": "Model profiles are turned off on this machine", "code": "profiles_off"})
+            return
+        try:
+            library = _load_model_library_records()
+        except RuntimeError as exc:
+            json_response(self, 500, {"error": str(exc)})
+            return
+        model = next((entry for entry in library if entry.get("id") == model_id), None)
+        if model is None:
+            json_response(self, 404, {"error": "Unknown model"})
+            return
+        if str(model.get("gguf_file") or "") != str(env.get("GGUF_FILE") or ""):
+            json_response(self, 409, {"error": "Only the running model can be checked; run it first", "code": "not_running"})
+            return
+        acquired, active = _begin_model_lifecycle("model_profile_recheck", model_id)
+        if not acquired:
+            json_response(self, 409, _model_lifecycle_conflict("a model check", active))
+            return
+        try:
+            result = _profile_model_advisory(env, model, model_id=model_id,
+                                             gguf_file=str(model.get("gguf_file")), force=True)
+        finally:
+            _end_model_lifecycle("model_profile_recheck")
+        json_response(self, 200, result)
+
+    def _handle_model_storage(self):
+        """Report free space where model downloads land, for download preflight."""
+        if not check_auth(self):
+            return
+        try:
+            storage = _model_storage_status(_model_download_directory())
+        except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired):
+            json_response(self, 409, {"error": "The model download directory could not be checked"})
+            return
+        json_response(self, 200, storage)
+
     def _handle_model_list(self):
         """Return model library catalog + on-disk GGUFs + active model."""
         if not check_auth(self):
@@ -12887,6 +13207,10 @@ class AgentHandler(BaseHTTPRequestHandler):
                 return
         else:
             download_plan = [(gguf_file, gguf_url)]
+        # A vision import brings its projector (WP2) as the plan's last file.
+        mmproj = body.get("mmproj")
+        if isinstance(mmproj, dict) and mmproj.get("file") and mmproj.get("url"):
+            download_plan.append((mmproj["file"], mmproj["url"]))
 
         # Validate the complete request against the library. A split request
         # must include every catalog part; accepting a subset can otherwise
@@ -12905,18 +13229,11 @@ class AgentHandler(BaseHTTPRequestHandler):
             candidate_manifest = _model_download_manifest(m)
             if candidate_manifest is None:
                 break
-            if gguf_parts:
-                catalog_plan = [
-                    (artifact["file"], artifact["url"])
-                    for artifact in candidate_manifest["artifacts"]
-                ]
-                if download_plan == catalog_plan:
-                    allowed = True
-                    manifest = candidate_manifest
-            elif (
-                len(candidate_manifest["artifacts"]) == 1
-                and candidate_manifest["artifacts"][0]["url"] == gguf_url
-            ):
+            catalog_plan = [
+                (artifact["file"], artifact["url"])
+                for artifact in candidate_manifest["artifacts"]
+            ]
+            if download_plan == catalog_plan:
                 allowed = True
                 manifest = candidate_manifest
             break
@@ -12944,6 +13261,23 @@ class AgentHandler(BaseHTTPRequestHandler):
                 json_response(self, 500, {"error": "Model catalog contains an unsafe filename"})
                 return
             artifact_paths[artifact["file"]] = target
+
+        needed_bytes = _download_bytes_needed(manifest["artifacts"], artifact_paths)
+        if needed_bytes:
+            try:
+                storage = _model_storage_status(models_dir)
+            except OSError:
+                json_response(self, 409, {"error": "Free space on the model store could not be checked"})
+                return
+            if storage["freeBytes"] < needed_bytes + storage["marginBytes"]:
+                json_response(self, 507, {
+                    "error": "Not enough free disk space for this model",
+                    "code": "insufficient_disk_space",
+                    "requiredBytes": needed_bytes,
+                    "freeBytes": storage["freeBytes"],
+                    "marginBytes": storage["marginBytes"],
+                })
+                return
 
         lifecycle_acquired, active = _begin_model_lifecycle("model_download", gguf_file)
         if not lifecycle_acquired:
@@ -13516,6 +13850,22 @@ class AgentHandler(BaseHTTPRequestHandler):
                 json_response(self, 400, {"error": "tier is not supported"})
                 return
 
+        # The owner's "Try a fixed template" (WP5): run the model with the
+        # index entry that fixes exactly its measured template, or refuse.
+        requested_template = body.get("chat_template_override")
+        template_override = None
+        if requested_template is not None:
+            if (not isinstance(requested_template, str)
+                    or (_model_profile_templates is not None
+                        and not re.fullmatch(_model_profile_templates.ID_PATTERN, requested_template))):
+                json_response(self, 400, {"error": "chat_template_override must be the id of a fixed chat template"})
+                return
+            template_override, refusal = _chat_template_request(
+                load_env(INSTALL_DIR / ".env"), model_id, requested_template)
+            if refusal is not None:
+                json_response(self, 409, {**refusal, "requestedModelId": model_id})
+                return
+
         acquired, active_model_id = _begin_model_activation(model_id)
         if not acquired:
             with _model_lifecycle_state_lock:
@@ -13542,6 +13892,8 @@ class AgentHandler(BaseHTTPRequestHandler):
                 activation_options["requested_context_length"] = requested_context_length
             if requested_tier is not None:
                 activation_options["requested_tier"] = requested_tier
+            if template_override is not None:
+                activation_options["template_override"] = template_override
             self._do_model_activate(model_id, **activation_options)
         finally:
             _end_model_activation()
@@ -13552,8 +13904,13 @@ class AgentHandler(BaseHTTPRequestHandler):
         *,
         requested_context_length: int | None = None,
         requested_tier: str | None = None,
+        template_override: dict | None = None,
     ):
-        """Inner activate logic — called with _model_activate_lock held."""
+        """Inner activate logic — called with _model_activate_lock held.
+
+        ``template_override`` is a validated chat-template index entry (WP5):
+        the model runs with that fixed template instead of its own.
+        """
         env_path = INSTALL_DIR / ".env"
         if not env_path.exists():
             json_response(
@@ -13682,6 +14039,7 @@ class AgentHandler(BaseHTTPRequestHandler):
         if requested_context_length is not None:
             context_length = requested_context_length
         llama_server_image = model.get("llama_server_image")
+        catalog_images = _catalog_model_images(library)
 
         # Verify GGUF exists on disk (with path traversal protection)
         target = _installed_model_file(gguf_file)
@@ -13765,6 +14123,14 @@ class AgentHandler(BaseHTTPRequestHandler):
         except (ValueError, OSError, subprocess.SubprocessError) as exc:
             json_response(self, 400, {"error": str(exc)})
             return
+
+        if template_override is not None:
+            # A fixed chat template (WP5) is refused before anything changes
+            # where it cannot be loaded, never silently dropped.
+            refusal = _chat_template_refusal(persisted_env, wsl_managed, template_override)
+            if refusal is not None:
+                json_response(self, 409, {**refusal, "requestedModelId": model_id})
+                return
 
         tier_context_limit: int | None = None
         if requested_tier is not None:
@@ -13864,6 +14230,9 @@ class AgentHandler(BaseHTTPRequestHandler):
         gpu_assignment_plan: dict | None = None
         previous_pixel_context: int | None = None
         previous_pixel_image_input = "unknown"
+        previous_pixel_contract: dict[str, object] | None = None
+        previous_pixel_thinking_control: str | None = None
+        profile_traits: dict | None = None
         router_target_published = False
         previous_router_active = {}
         wsl_changed_digest = None
@@ -14096,12 +14465,19 @@ class AgentHandler(BaseHTTPRequestHandler):
                         previous_model,
                         rollback_env,
                     )
+                    # With profiles enabled the previous model's reasoning
+                    # came from its profile; restore what was in effect.
+                    captured_reasoning = (previous_pixel_contract or {}).get("reasoning")
+                    if (_model_profiles_mode(rollback_env) == "enabled"
+                            and isinstance(captured_reasoning, bool)):
+                        previous_reasoning = captured_reasoning
                     restored_pixel = _reconcile_ods_managed_pixel_model(
                         previous_hermes_model,
                         previous_pixel_context,
                         max_tokens=_pixel_max_tokens_for_context(previous_pixel_context),
                         reasoning=previous_reasoning,
                         image_input=previous_pixel_image_input,
+                        **_thinking_control_kwargs(previous_pixel_thinking_control),
                     )
                     if restored_pixel != "reconciled":
                         raise RuntimeError(
@@ -14112,6 +14488,63 @@ class AgentHandler(BaseHTTPRequestHandler):
                 logger.exception("Failed to prove previous model route during rollback")
                 _record_model_activation_result('rollback_unconfirmed', 'rollback_unconfirmed')
                 return False, str(rollback_exc)
+
+        def restart_with_template(entry: dict | None) -> dict:
+            """Restart the staged model with ``entry`` or its own template (WP5.3).
+
+            The .env snapshot taken before the first write stays the rollback
+            point. Each wait starts from a clean diagnosis: a "final" left by
+            an earlier wait would end the next one before it probes.
+            """
+            nonlocal runtime_stage_started
+            updates, removals = _chat_template_env_changes(entry, container=gpu_backend != "apple")
+            _write_bound_env_text(env_path, _env_text_with_changes(
+                env_path.read_text(encoding="utf-8").splitlines(), updates, removals))
+            readiness_diagnosis.clear()
+            _set_model_activation_phase('loading')
+            runtime_stage_started = time.time()
+            return _switchboard_reconciler.run_runtime_activation(switchboard_adapter, load_env(env_path))
+
+        def retry_with_fixed_template(entry: dict, first: dict, profiled_seconds: float) -> tuple[dict, dict]:
+            """WP5.3 automatic retry (enabled only, D3): run the model once with the fixed
+            template that matches its own exactly, keep it when it answers the chat
+            check, else return to the model's own template. Both probe runs share
+            the one D2 budget. Returns the env and profile status of what stays loaded.
+            """
+            nonlocal switchboard_run, healthy
+            budget = _model_profile_probes.BUDGET_SECONDS - profiled_seconds
+            if budget < _TEMPLATE_RETRY_MIN_BUDGET_SECONDS:
+                logger.info("No time left in the profiling budget to try fixed chat template %s", entry["id"])
+                return load_env(env_path), {**first, "templateRetry": {
+                    "id": entry["id"], "outcome": "skipped", "reason": "budget"}}
+            logger.info("%s did not answer the chat check; trying fixed chat template %s", model_id, entry["id"])
+            outcome = {"id": entry["id"]}
+            retried_run = restart_with_template(entry)
+            if retried_run["ok"]:
+                switchboard_run = retried_run
+                retried_env = load_env(env_path)
+                probing_started = time.monotonic()
+                retried = _profile_model_advisory(retried_env, model, model_id=model_id, gguf_file=gguf_file,
+                                                  budget_seconds=budget)
+                budget -= time.monotonic() - probing_started
+                if (retried.get("summary") or {}).get("chat") is True:
+                    return retried_env, {**retried, "templateRetry": {**outcome, "outcome": "kept"}}
+                outcome["fixedTemplateChat"] = (retried.get("summary") or {}).get("chat")
+            else:
+                outcome["failure"] = str(retried_run.get("detail") or retried_run.get("phase") or "")[:200]
+            own_run = restart_with_template(None)
+            switchboard_run = own_run
+            if not own_run["ok"]:
+                healthy = False
+                raise RuntimeError(
+                    f"{gguf_file} did not restart with its own chat template after a fixed template was tried: "
+                    f"{own_run.get('detail') or own_run.get('phase')}")
+            own_env = load_env(env_path)
+            # Normally a cache hit that puts lastActivation back on the model's
+            # own profile; it never probes beyond the shared budget.
+            own = _profile_model_advisory(own_env, model, model_id=model_id, gguf_file=gguf_file,
+                                          budget_seconds=max(budget, 0.0))
+            return own_env, {**own, "templateRetry": {**outcome, "outcome": "reverted"}}
 
         try:
             # Read current env BEFORE modification — needed for gpu_backend guard
@@ -14365,21 +14798,32 @@ class AgentHandler(BaseHTTPRequestHandler):
                 # images name another backend's (CUDA) build.
                 if llama_server_image and gpu_backend not in {"apple", "amd"}:
                     updates["LLAMA_SERVER_IMAGE"] = llama_server_image
-                new_lines = []
-                seen = set()
-                for line in lines:
-                    key = line.split("=", 1)[0] if "=" in line and not line.startswith("#") else None
-                    if key and key in updates:
-                        new_lines.append(_env_assignment(key, str(updates[key])))
-                        seen.add(key)
-                    elif key and key in remove_keys:
-                        continue
-                    else:
-                        new_lines.append(line)
-                for key, val in updates.items():
-                    if key not in seen:
-                        new_lines.append(_env_assignment(key, str(val)))
-                _write_bound_env_text(env_path, "\n".join(new_lines) + "\n")
+                elif (
+                    gpu_backend not in {"apple", "amd"}
+                    and str(env_pre.get("LLAMA_SERVER_IMAGE") or "").strip() in catalog_images
+                ):
+                    # A catalog entry's or runtime profile's image belongs to
+                    # the model that selected it. A model without its own image
+                    # runs the backend default again; a host or owner image that
+                    # no catalog model names is kept.
+                    remove_keys.add("LLAMA_SERVER_IMAGE")
+                # A vision import loads its projector in the container (WP2);
+                # any other model clears the previous one's. Host-native
+                # runtimes take the projector as an argument instead.
+                projector_file = _model_projector_file(model, target.parent)
+                if projector_file is not None and not host_native_llama and gpu_backend != "apple":
+                    updates["LLAMA_ARG_MMPROJ"] = f"/models/{projector_file.name}"
+                else:
+                    remove_keys.add("LLAMA_ARG_MMPROJ")
+                # A fixed chat template (WP5) for an exact template match; any
+                # other model clears the previous one's. The container reads
+                # it from its read-only /chat-templates mount; native macOS
+                # takes it as an argument (_launch_native_llama_server).
+                template_updates, template_removals = _chat_template_env_changes(
+                    template_override, container=not host_native_llama and gpu_backend != "apple")
+                updates.update(template_updates)
+                remove_keys.update(template_removals)
+                _write_bound_env_text(env_path, _env_text_with_changes(lines, updates, remove_keys))
 
             # Update models.ini
             models_ini.parent.mkdir(parents=True, exist_ok=True)
@@ -14442,13 +14886,22 @@ class AgentHandler(BaseHTTPRequestHandler):
             if wsl_managed.get('managed') is True:
                 runtime_restart_strategy = 'wsl-native-llama'
 
+                # A launcher from before vision support (Windows setup not
+                # rerun since) runs the weights alone.
+                wsl_projector = _model_projector_file(model, target.parent)
+                if wsl_projector is not None and not _wsl_runtime.supports_projector(wsl_managed):
+                    logger.warning('The Windows model runtime predates vision support; %s runs without %s',
+                                   gguf_file, wsl_projector.name)
+                    wsl_projector = None
+
                 def _bridge_activate(_e):
                     # The CAS digest the controller reports, even on failure,
                     # decides whether rollback restores or restarts the plan.
                     nonlocal wsl_changed_digest
                     try:
                         switched = _wsl_runtime.activate(INSTALL_DIR, _e, gguf_file,
-                                                          int(context_length), wsl_managed['planDigest'])
+                                                          int(context_length), wsl_managed['planDigest'],
+                                                          mmproj=wsl_projector.name if wsl_projector else None)
                     except _wsl_runtime.BridgeError as exc:
                         wsl_changed_digest = exc.new_plan_digest
                         raise
@@ -14580,6 +15033,27 @@ class AgentHandler(BaseHTTPRequestHandler):
                 healthy = bool(runtime_identity)
 
             if healthy:
+                # WP3: measure what the new model can do before any consumer
+                # is touched (first switch per file x build x host only).
+                profiling_started = time.monotonic()
+                model_profile_status = _profile_model_advisory(
+                    env, model, model_id=model_id, gguf_file=gguf_file)
+                # WP5.3: a model that fails the chat check with its own
+                # template, which ODS fixes exactly, gets one retry with the
+                # fixed template (ODS_MODEL_PROFILES=enabled only).
+                retry_template = (
+                    _template_retry_entry(env, model_profile_status)
+                    if template_override is None and switchboard_adapter is not None
+                    and runtime_restart_strategy in _TEMPLATE_RETRY_STRATEGIES else None)
+                if retry_template is not None:
+                    env, model_profile_status = retry_with_fixed_template(
+                        retry_template, model_profile_status, time.monotonic() - profiling_started)
+                # WP4 (enabled only): the measured traits of what stays loaded
+                # replace the catalog booleans for every reader of the route.
+                profile_traits = _profile_traits(env, model_profile_status)
+                if switchboard_run is not None and profile_traits is not None:
+                    switchboard_run["capabilities"] = _profiled_capabilities(
+                        switchboard_run.get("capabilities"), profile_traits, model)
                 _set_model_activation_phase('verifying')
                 if host_native_llama:
                     _write_host_native_litellm_config(env, gguf_file, llm_model_name)
@@ -14758,6 +15232,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                 if pixel_transaction is None:
                     previous_pixel_contract = _managed_pixel_runtime_contract()
                     previous_pixel_image_input = (previous_pixel_contract or {}).get("imageInput", "unknown")
+                    previous_pixel_thinking_control = _managed_pixel_thinking_control()
                 pixel_reconcile_attempted = True
                 if pixel_transaction is not None and (
                     final_runtime_proof.get('contextVerified') is not True
@@ -14768,14 +15243,17 @@ class AgentHandler(BaseHTTPRequestHandler):
                     'model': pixel_runtime_identity,
                     'contextLength': int(context_length),
                     'maxTokens': _pixel_max_tokens_for_context(int(context_length)),
-                    'reasoning': _pixel_model_reasoning_capable(str(llm_model_name), env),
-                    'imageInput': _pixel_model_image_input(model_id),
+                    'reasoning': _profiled_pixel_reasoning(
+                        _pixel_model_reasoning_capable(str(llm_model_name), env), profile_traits),
+                    'imageInput': _profiled_pixel_image_input(
+                        _pixel_model_image_input(model_id), profile_traits),
                 }
                 pixel_status = (pixel_transaction.apply(pixel_target) if pixel_transaction is not None
                     else _reconcile_ods_managed_pixel_model(
                         pixel_runtime_identity, int(context_length),
                         max_tokens=pixel_target['maxTokens'], reasoning=pixel_target['reasoning'],
-                        image_input=pixel_target['imageInput']))
+                        image_input=pixel_target['imageInput'],
+                        **_thinking_control_kwargs((profile_traits or {}).get('control'))))
                 if pixel_status == "not_installed":
                     pixel_reconcile_attempted = False
                 consumers = {
@@ -14906,6 +15384,9 @@ class AgentHandler(BaseHTTPRequestHandler):
                         "context_length": int(context_length),
                         "gpu_assignment_changed": bool(gpu_assignment_plan),
                         "consumers": consumers,
+                        "profile": model_profile_status,
+                        **({"chatTemplateOverride": template_override["id"]}
+                           if template_override is not None else {}),
                     },
                 )
             else:
@@ -15009,13 +15490,18 @@ class AgentHandler(BaseHTTPRequestHandler):
             except RuntimeError:
                 library = []
             for entry in library:
-                if entry.get("gguf_file") == gguf_file and entry.get("gguf_parts"):
+                if entry.get("gguf_file") != gguf_file:
+                    continue
+                if entry.get("gguf_parts"):
                     parts_to_delete = []
                     for part in entry["gguf_parts"]:
                         part_file = _safe_model_artifact_path(models_dir, part.get("file"))
                         if part_file is not None and part_file.exists():
                             parts_to_delete.append(part_file)
-                    break
+                projector = _model_projector_file(entry, models_dir)
+                if projector is not None and not _projector_shared(library, entry, projector, models_dir):
+                    parts_to_delete.append(projector)
+                break
 
             deleted_names = {path.name for path in parts_to_delete}
             deleted_names.add(gguf_file)
@@ -15033,7 +15519,8 @@ class AgentHandler(BaseHTTPRequestHandler):
                     'code': 'model_store_read_only',
                 })
                 return
-            if managed.get('managed') is True and managed['plan']['GgufFile'] in deleted_names:
+            if managed.get('managed') is True and (managed['plan']['GgufFile'] in deleted_names
+                                                    or managed['plan'].get('MmprojFile') in deleted_names):
                 json_response(self, 409, {'error': 'Cannot delete the model selected in the Windows startup plan'})
                 return
             if str(env.get("GGUF_FILE") or "") in deleted_names:
@@ -15256,6 +15743,433 @@ def _runtime_http(
     if result.returncode != 0:
         raise OSError(f"llama-server {path} is unreachable (curl exit {result.returncode})")
     return result.stdout
+
+
+class _RefuseRedirects(urllib_request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib_error.HTTPError(req.full_url, code, "redirect refused", headers, fp)
+
+
+# Probe answers are small; a streamed tool call with its deltas stays far below this.
+# A streamed probe answer is one JSON event per token: about 400 KB for the
+# 1,000 tokens a thinking model may use (Tower3, 2026-10-09).
+_RUNTIME_EXCHANGE_LIMIT = 2097152
+
+
+def _runtime_exchange(
+    env: dict,
+    path: str,
+    *,
+    payload: dict | None = None,
+    timeout: float = 30,
+) -> tuple[int, str]:
+    """``(http_status, text)`` from the runtime, error statuses included.
+
+    For capability probes (WP3), which classify llama-server's own error text
+    such as a 400 "Unable to generate parser for this template". Same
+    endpoint and key handling as ``_runtime_http``: the key travels in a
+    request header (never argv), no proxy, no redirects, bounded body.
+    Raises OSError when the runtime cannot be reached or does not answer in time.
+    """
+    origin, transport = _runtime_endpoint(env)
+    api_key = _runtime_api_key(env)
+    if transport == "router":
+        return _router_transport_exchange(
+            INSTALL_DIR, origin, path, payload=payload, api_key=api_key, timeout=timeout,
+        )
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = urllib_request.Request(f"{origin}{path}", data=data, headers=headers)
+    opener = urllib_request.build_opener(urllib_request.ProxyHandler({}), _RefuseRedirects())
+    try:
+        try:
+            with opener.open(request, timeout=timeout) as response:
+                status, body = response.status, response.read(_RUNTIME_EXCHANGE_LIMIT + 1)
+        except urllib_error.HTTPError as exc:
+            if 300 <= exc.code < 400:
+                raise OSError(f"llama-server {path} redirected; refusing") from exc
+            status, body = exc.code, exc.read(_RUNTIME_EXCHANGE_LIMIT + 1)
+    except http.client.HTTPException as exc:
+        raise OSError(f"llama-server {path} answered incompletely: {exc}") from exc
+    if len(body) > _RUNTIME_EXCHANGE_LIMIT:
+        raise OSError(f"llama-server {path} answer exceeds {_RUNTIME_EXCHANGE_LIMIT} bytes")
+    return status, body.decode("utf-8", errors="replace")
+
+
+_MODEL_PROFILE_MODES = frozenset({"off", "observe", "enabled"})
+_MODEL_PROFILE_DEFAULT_MODE = "observe"  # PLAN D5: observe in the first release
+
+
+def _model_profiles_mode(env: dict) -> str:
+    """``ODS_MODEL_PROFILES``: off, observe (default) or enabled."""
+    value = str(env.get("ODS_MODEL_PROFILES") or _MODEL_PROFILE_DEFAULT_MODE).strip().lower()
+    if value not in _MODEL_PROFILE_MODES:
+        logger.warning("ODS_MODEL_PROFILES=%r is not off, observe or enabled; using %s",
+                       value, _MODEL_PROFILE_DEFAULT_MODE)
+        return _MODEL_PROFILE_DEFAULT_MODE
+    return value
+
+
+def _model_profile_path() -> Path:
+    return INSTALL_DIR / "data" / "model-profiles.json"
+
+
+def _model_profile_backend(env: dict) -> str:
+    if _runtime_uses_router_transport(env) or _is_windows_host_llama_server(env):
+        return "windows-native"
+    return str(env.get("GPU_BACKEND") or "cpu").strip().lower() or "cpu"
+
+
+def _model_profile_digests(model: dict, gguf_file: str) -> list[str]:
+    """Every GGUF part's SHA-256 from the model's integrity manifest, else a file marker."""
+    manifest = _model_download_manifest(model) if isinstance(model, dict) else None
+    digests = [str(artifact["sha256"]) for artifact in (manifest or {}).get("artifacts", [])
+               if artifact.get("sha256") and artifact.get("role") != "projector"]
+    return digests or [f"file:{gguf_file}"]
+
+
+# Fixed chat templates (WP5). An activation for an exact template match sets
+# both keys; every other activation removes them (the WP0.1 rule). The
+# override id is the record every runtime reads (the profile key, the native
+# macOS launch); the file path is what the llama-server container loads from
+# its read-only /chat-templates mount.
+_CHAT_TEMPLATE_OVERRIDE_KEY = "MODEL_CHAT_TEMPLATE_OVERRIDE"
+_CHAT_TEMPLATE_FILE_KEY = "LLAMA_ARG_CHAT_TEMPLATE_FILE"
+_CHAT_TEMPLATE_CONTAINER_DIR = "/chat-templates"
+
+
+def _env_text_with_changes(lines: list[str], updates: dict, remove_keys: set) -> str:
+    """``.env`` text from ``lines``: ``updates`` set in place (appended when new), ``remove_keys`` dropped."""
+    new_lines = []
+    seen = set()
+    for line in lines:
+        key = line.split("=", 1)[0] if "=" in line and not line.startswith("#") else None
+        if key and key in updates:
+            new_lines.append(_env_assignment(key, str(updates[key])))
+            seen.add(key)
+        elif key and key in remove_keys:
+            continue
+        else:
+            new_lines.append(line)
+    for key, val in updates.items():
+        if key not in seen:
+            new_lines.append(_env_assignment(key, str(val)))
+    return "\n".join(new_lines) + "\n"
+
+
+def _chat_template_root() -> Path:
+    return INSTALL_DIR / "config" / "chat-templates"
+
+
+def _chat_template_overrides() -> list[dict]:
+    """The curated override index; none when it is missing or malformed (logged)."""
+    if _model_profile_templates is None:
+        return []
+    try:
+        return _model_profile_templates.load_index(_chat_template_root())
+    except (OSError, UnicodeError, _model_profile_templates.TemplateIndexError) as exc:
+        logger.warning("Chat template index unavailable; no fixed template is offered: %s", exc)
+        return []
+
+
+def _active_chat_template_override(env: dict) -> str | None:
+    """The fixed template id the configured model runs with, if any."""
+    return str(env.get(_CHAT_TEMPLATE_OVERRIDE_KEY) or "").strip() or None
+
+
+def _chat_template_env_changes(entry: dict | None, *, container: bool) -> tuple[dict, set]:
+    """The .env updates and removals that run the next model with ``entry``, or with its own template."""
+    if entry is None:
+        return {}, {_CHAT_TEMPLATE_OVERRIDE_KEY, _CHAT_TEMPLATE_FILE_KEY}
+    updates = {_CHAT_TEMPLATE_OVERRIDE_KEY: entry["id"]}
+    if container:
+        updates[_CHAT_TEMPLATE_FILE_KEY] = f"{_CHAT_TEMPLATE_CONTAINER_DIR}/{entry['file']}"
+        return updates, set()
+    return updates, {_CHAT_TEMPLATE_FILE_KEY}
+
+
+def _chat_template_unsupported(env: dict, wsl_managed: dict) -> bool:
+    """Windows runtimes (the WSL Portal's llama-server.exe and the legacy Docker
+    Desktop launch) have no fixed-template input yet; they refuse an override."""
+    return (wsl_managed.get("managed") is True or _runtime_uses_router_transport(env)
+            or _is_windows_host_llama_server(env))
+
+
+def _chat_template_refusal(env: dict, wsl_managed: dict, entry: dict) -> dict | None:
+    """Why the next model cannot run with the fixed template ``entry``, or None.
+
+    Checked before an activation changes anything: the runtime must be able
+    to load a template file, and the vendored file must still have the
+    SHA-256 its index entry records.
+    """
+    if _chat_template_unsupported(env, wsl_managed):
+        return {"error": "The Windows model runtime on this machine cannot use a fixed chat template yet. "
+                         "Nothing was changed.",
+                "code": "chat_template_override_unsupported"}
+    if _model_profile_templates is None:
+        return {"error": "This installation is missing its chat template support files. Nothing was changed; "
+                         "run the installer again to restore them.",
+                "code": "chat_template_override_unavailable"}
+    try:
+        _model_profile_templates.template_path(_chat_template_root(), entry)
+    except (OSError, _model_profile_templates.TemplateIndexError) as exc:
+        return {"error": f"The fixed chat template cannot be used: {exc}. Nothing was changed; "
+                         "run the installer again to restore the template files.",
+                "code": "chat_template_override_unavailable"}
+    return None
+
+
+def _model_profile_doc() -> dict:
+    """The profile store, or an empty one when it cannot be read (logged)."""
+    try:
+        return _model_profile_store.load(_model_profile_path())
+    except _model_profile_store.StoreError as exc:
+        logger.warning("Model profile store unreadable: %s", exc)
+        return _model_profile_store.empty()
+
+
+def _chat_template_match(doc: dict, model_id: str, entries: list[dict]) -> dict | None:
+    """The index entry for exactly the template this model was last measured with, if any.
+
+    The evidence is the model's newest profile made with its own template:
+    its /props template hash and llama.cpp build must match an entry exactly
+    (PLAN D3: exact-hash matches only).
+    """
+    for profile in reversed(doc["profiles"]):
+        if profile["modelId"] == model_id and profile["key"]["templateSource"] == "embedded":
+            return _model_profile_templates.match(
+                entries, profile["key"]["templateSha256"], profile["key"]["buildInfo"])
+    return None
+
+
+def _chat_template_request(env: dict, model_id: str, override_id: str) -> tuple[dict | None, dict | None]:
+    """``(index entry, None)`` when the owner may run ``model_id`` with ``override_id``, else ``(None, refusal)``."""
+    if _model_profiles_mode(env) == "off":
+        return None, {"error": "Model profiles are turned off on this machine, so ODS cannot check which chat "
+                               "template this model needs. Nothing was changed.",
+                      "code": "profiles_off"}
+    if _model_profile_templates is None or _model_profile_store is None:
+        return None, {"error": "This installation is missing its chat template support files. Nothing was "
+                               "changed; run the installer again to restore them.",
+                      "code": "chat_template_override_unavailable"}
+    entries = _chat_template_overrides()
+    entry = _model_profile_templates.entry_by_id(entries, override_id)
+    if entry is None:
+        return None, {"error": f"ODS has no fixed chat template called {override_id}. Nothing was changed.",
+                      "code": "chat_template_override_unknown"}
+    matched = _chat_template_match(_model_profile_doc(), model_id, entries)
+    if matched is None or matched["id"] != entry["id"]:
+        return None, {"error": "This fixed chat template is not for this model: ODS uses one only when the "
+                               "model's own template is exactly the one it fixes. Nothing was changed.",
+                      "code": "chat_template_override_not_matched"}
+    return entry, None
+
+
+def _chat_template_offer(env: dict, doc: dict, model_id: str, profile: dict | None) -> dict | None:
+    """What the Models page may show about a fixed template for ``model_id`` (only when there is one)."""
+    if _model_profile_templates is None:
+        return None
+    entries = _chat_template_overrides()
+    active_id = _active_chat_template_override(env)
+    shown_source = ((profile or {}).get("key") or {}).get("templateSource")
+    last = doc.get("lastActivation") or {}
+    if active_id and shown_source == f"override:{active_id}" and last.get("modelId") == model_id:
+        entry = _model_profile_templates.entry_by_id(entries, active_id) or {}
+        return {"id": active_id, "reason": entry.get("reason", ""), "active": True, "supported": True}
+    entry = _chat_template_match(doc, model_id, entries)
+    if entry is None:
+        return None
+    return {"id": entry["id"], "reason": entry["reason"], "active": False,
+            "supported": not _chat_template_unsupported(env, {})}
+
+
+# The automatic retry (WP5.3) restarts the runtime the activation itself
+# staged; the Windows runtimes have no template input (see above).
+_TEMPLATE_RETRY_STRATEGIES = frozenset({"compose-llama", "container-llama", "macos-native-llama"})
+# A retry starts only with time for at least the chat probe (P1) left in the
+# one profiling budget (PLAN D2) that both variants share.
+_TEMPLATE_RETRY_MIN_BUDGET_SECONDS = 30.0
+
+
+def _template_retry_entry(env: dict, status: dict) -> dict | None:
+    """The fixed template to retry a first switch with, or None (PLAN D3, WP5.3).
+
+    Only with ODS_MODEL_PROFILES=enabled, only when the profile just used
+    shows the model failing the chat check (P1) with its own template, and
+    only when the index fixes exactly that template on this llama.cpp build.
+    """
+    if (_model_profiles_mode(env) != "enabled" or _model_profile_templates is None
+            or status.get("status") not in {"recorded", "cached"}
+            or (status.get("summary") or {}).get("chat") is not False):
+        return None
+    doc = _model_profile_doc()
+    profile = next((entry for entry in doc["profiles"] if entry["keyHash"] == status.get("keyHash")), None)
+    if profile is None or profile["key"]["templateSource"] != "embedded":
+        return None
+    entry = _model_profile_templates.match(
+        _chat_template_overrides(), profile["key"]["templateSha256"], profile["key"]["buildInfo"])
+    if entry is None:
+        return None
+    try:
+        _model_profile_templates.template_path(_chat_template_root(), entry)
+    except (OSError, _model_profile_templates.TemplateIndexError) as exc:
+        logger.warning("Fixed chat template %s cannot be tried: %s", entry["id"], exc)
+        return None
+    return entry
+
+
+def _native_chat_template_file(env: dict) -> Path | None:
+    """The fixed template a native launch passes as --chat-template-file, proven by its SHA-256."""
+    override_id = _active_chat_template_override(env)
+    if override_id is None:
+        return None
+    if _model_profile_templates is None:
+        raise RuntimeError("Fixed chat templates need the model_profile package; re-run the installer")
+    entry = _model_profile_templates.entry_by_id(_chat_template_overrides(), override_id)
+    if entry is None:
+        raise RuntimeError(f"The fixed chat template {override_id} is not in this installation's template index")
+    return _model_profile_templates.template_path(_chat_template_root(), entry)
+
+
+def _profile_model(env: dict, model: dict, *, model_id: str, gguf_file: str, force: bool = False,
+                   budget_seconds: float | None = None) -> dict:
+    """Measure the loaded model once per GGUF x llama.cpp build x host (PLAN WP3).
+
+    A stored profile with the same key is reused unless ``force``. Inside an
+    activation this runs after the runtime proof and before any consumer is
+    touched (D1), under one total budget (D2), shown as the "profiling" phase.
+    ``budget_seconds`` is what is left of that budget for a template retry.
+    """
+    if _model_profiles_mode(env) == "off" or _model_profile_probes is None or _model_profile_store is None:
+        return {"status": "off"}
+    if str(env.get("ODS_MODE") or "local").lower() == "cloud":
+        return {"status": "skipped", "reason": "cloud"}
+    status, text = _runtime_exchange(env, "/props", timeout=15)
+    props = json.loads(text) if status == 200 else None
+    if not isinstance(props, dict):
+        return {"status": "unavailable", "reason": f"props-http-{status}"}
+    facts = _model_profile_probes.static_facts(props)
+    projector_sha = str(model.get("mmproj_sha256") or "").strip().lower() if isinstance(model, dict) else ""
+    # A fixed template (WP5) gets its own profile: /props then reports that
+    # template, and the key records which index entry supplied it.
+    template_override = _active_chat_template_override(env)
+    key = _model_profile_store.profile_key(
+        gguf_sha256=_model_profile_digests(model, gguf_file),
+        projector_sha256=projector_sha if projector_sha and facts["vision"] else None,
+        build_info=facts["buildInfo"],
+        backend=_model_profile_backend(env),
+        template_sha256=facts["templateSha256"],
+        template_source=f"override:{template_override}" if template_override else "embedded",
+        suite=_model_profile.SUITE_VERSION,
+        host=_model_profile_store.host_id(),
+    )
+    path = _model_profile_path()
+    try:
+        doc = _model_profile_store.load(path)
+    except _model_profile_store.StoreError as exc:
+        logger.warning("Model profile store unreadable; starting a new one: %s", exc)
+        doc = _model_profile_store.empty()
+    profile = None if force else _model_profile_store.find(doc, key)
+    cached = profile is not None
+    if profile is None:
+        _set_model_activation_phase("profiling")
+        result = _model_profile_probes.run_battery(
+            lambda probe_path, probe_payload, probe_timeout: _runtime_exchange(
+                env, probe_path, payload=probe_payload, timeout=probe_timeout),
+            props,
+            budget_seconds=_model_profile_probes.BUDGET_SECONDS if budget_seconds is None else budget_seconds,
+        )
+        profile = _model_profile_store.recorded_profile(
+            key, model_id=model_id, gguf_file=gguf_file, result=result, product_version=ODS_VERSION)
+        doc = _model_profile_store.with_profile(doc, profile)
+        logger.info("Model profile for %s took %d ms: %s", model_id, result["elapsedMs"],
+                    json.dumps(result["summary"], sort_keys=True))
+    _model_profile_store.atomic_write(
+        path, _model_profile_store.with_last_activation(doc, model_id, profile["keyHash"]))
+    return {"status": "cached" if cached else "recorded", "keyHash": profile["keyHash"],
+            "summary": profile["result"]["summary"]}
+
+
+def _profile_model_advisory(env: dict, model: dict, *, model_id: str, gguf_file: str, force: bool = False,
+                            budget_seconds: float | None = None) -> dict:
+    """``_profile_model`` that can never fail a switch (PLAN D4, the no-lockout rule).
+
+    These are the I/O and response-shape failures a probe run can meet; each
+    is logged with its trace and reported as the profile's status instead.
+    """
+    try:
+        return _profile_model(env, model, model_id=model_id, gguf_file=gguf_file, force=force,
+                              budget_seconds=budget_seconds)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError) as exc:
+        logger.exception("Model profile for %s did not complete", model_id)
+        return {"status": "error", "reason": type(exc).__name__}
+
+
+_THINKING_CONTROLS = frozenset({"enable_thinking", "always", "none"})
+
+
+def _summary_traits(summary: object) -> dict:
+    """The measured answers consumers read from a profile summary (WP4).
+
+    ``None`` means not known. The static template rule calls any template that
+    mentions ``<think>`` "always"; when the thinking probe found no working
+    reasoning, the model is treated as having none.
+    """
+    summary = summary if isinstance(summary, dict) else {}
+    thinking = summary.get("thinking") if isinstance(summary.get("thinking"), dict) else {}
+    control = thinking.get("control") if thinking.get("control") in _THINKING_CONTROLS else None
+    if control == "always" and thinking.get("works") is False:
+        control = "none"
+    tools, vision = summary.get("tools"), summary.get("vision")
+    return {
+        "tools": tools if isinstance(tools, bool) else None,
+        "vision": vision if isinstance(vision, bool) else None,
+        "control": control,
+    }
+
+
+def _profile_traits(env: dict, profile_status: object) -> dict | None:
+    """This switch's measured traits, or None: consumers then keep today's values.
+
+    Only ``ODS_MODEL_PROFILES=enabled`` lets a profile change what consumers
+    are told (PLAN D5), and only a profile this switch recorded or reused.
+    """
+    if _model_profiles_mode(env) != "enabled" or not isinstance(profile_status, dict):
+        return None
+    if profile_status.get("status") not in {"recorded", "cached"}:
+        return None
+    return _summary_traits(profile_status.get("summary"))
+
+
+def _catalog_agent_verified(model: object) -> bool:
+    """Whether the curated catalog records this model as verified for agents."""
+    compatibility = model.get("app_compatibility") if isinstance(model, dict) else None
+    if not isinstance(compatibility, dict):
+        return False
+    return any(
+        isinstance(compatibility.get(key), dict) and compatibility[key].get("status") == "verified"
+        for key in ("agent_viability", "pixel_agent")
+    )
+
+
+def _profiled_capabilities(capabilities: object, traits: dict | None, model: dict) -> object:
+    """Switchboard capabilities with the measured profile applied (WP4.1).
+
+    An unknown tools result changes nothing. A catalog ``verified`` agent
+    verdict keeps a curated model agent-viable through one failed probe run,
+    so a flaky probe cannot break a curated default (batch C decision 1).
+    """
+    if traits is None or traits["tools"] is None or not isinstance(capabilities, dict):
+        return capabilities
+    return {
+        **capabilities,
+        "tools": traits["tools"],
+        "vision": traits["vision"] is True,
+        "agentViable": capabilities.get("agentViable") is True
+        and (traits["tools"] or _catalog_agent_verified(model)),
+    }
 
 
 def _runtime_health(env: dict) -> str:
@@ -15522,7 +16436,18 @@ def _meaningful_completion(data: object, *, include_reasoning: bool = True) -> b
     return bool(non_space) and set(non_space) != {"?"}
 
 
-def _completion_probe_payload(model_name: str, *, disable_thinking: bool) -> dict:
+_COMPLETION_PROBE_TOKENS = 64
+# A model that always thinks (the DeepSeek-R1 distills ignore enable_thinking)
+# spends the short probe inside its reasoning and never reaches visible
+# content, so every switch to one rolled back: R1-Distill-Qwen-1.5B needs 441
+# tokens to answer (Tower3, 2026-10-09). An answer cut off while thinking earns
+# one longer probe; visible content is still required.
+_COMPLETION_PROBE_THINKING_TOKENS = 1024
+_COMPLETION_PROBE_THINKING_SECONDS = 120
+
+
+def _completion_probe_payload(model_name: str, *, disable_thinking: bool,
+                              max_tokens: int = _COMPLETION_PROBE_TOKENS) -> dict:
     payload = {
         "model": model_name,
         "messages": [{
@@ -15531,12 +16456,21 @@ def _completion_probe_payload(model_name: str, *, disable_thinking: bool) -> dic
         }],
         # A few reasoning-capable servers ignore enable_thinking. Leave enough
         # room for them to reach visible output while still bounding the probe.
-        "max_tokens": 64,
+        "max_tokens": max_tokens,
         "temperature": 0,
     }
     if disable_thinking:
         payload["chat_template_kwargs"] = {"enable_thinking": False}
     return payload
+
+
+def _reasoning_cut_short(response: object) -> bool:
+    """The answer hit max_tokens inside its reasoning: thinking, but no visible text yet."""
+    choices = response.get("choices") if isinstance(response, dict) else None
+    first = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
+    return (first.get("finish_reason") == "length"
+            and _meaningful_completion(response, include_reasoning=True)
+            and not _meaningful_completion(response, include_reasoning=False))
 
 
 def _completion_response_ready(
@@ -15581,10 +16515,12 @@ def _chat_completion_ready(
     prefix = "/" + api_prefix.strip("/")
     origin = base_url.rstrip("/") if base_url else f"http://{host}:{port}"
     url = f"{origin}{prefix}/chat/completions"
-    payload = json.dumps(_completion_probe_payload(model_name, disable_thinking=disable_thinking))
-    try:
+
+    def probe(max_tokens: int, seconds: int):
+        payload = json.dumps(_completion_probe_payload(
+            model_name, disable_thinking=disable_thinking, max_tokens=max_tokens))
         command = [
-            "curl", "-sf", "--max-time", "30", "--max-filesize", "65536",
+            "curl", "-sf", "--max-time", str(seconds), "--max-filesize", "65536",
             "-X", "POST", url,
             "-H", "Content-Type: application/json",
         ]
@@ -15601,11 +16537,16 @@ def _chat_completion_ready(
             capture_output=True,
             text=True,
             input=header_input,
-            timeout=35,
+            timeout=seconds + 5,
         )
-        if result.returncode != 0:
+        return json.loads(result.stdout or "{}") if result.returncode == 0 else None
+
+    try:
+        response = probe(_COMPLETION_PROBE_TOKENS, 30)
+        if response is not None and require_visible_content and _reasoning_cut_short(response):
+            response = probe(_COMPLETION_PROBE_THINKING_TOKENS, _COMPLETION_PROBE_THINKING_SECONDS)
+        if response is None:
             return False
-        response = json.loads(result.stdout or "{}")
     except (json.JSONDecodeError, subprocess.TimeoutExpired, OSError):
         return False
     return _completion_response_ready(
@@ -15651,6 +16592,15 @@ def _runtime_completion_ready(
             timeout=30,
         )
         response = json.loads(body or "{}")
+        if _reasoning_cut_short(response):
+            body = _runtime_http(
+                env,
+                "/v1/chat/completions",
+                payload=_completion_probe_payload(
+                    model_name, disable_thinking=True, max_tokens=_COMPLETION_PROBE_THINKING_TOKENS),
+                timeout=_COMPLETION_PROBE_THINKING_SECONDS,
+            )
+            response = json.loads(body or "{}")
     except (json.JSONDecodeError, subprocess.TimeoutExpired, OSError):
         return False
     return _completion_response_ready(response, require_visible_content=True, **expected)
@@ -15946,6 +16896,12 @@ def _wait_for_model_readiness(
                         "verifiedAt": _iso_now(),
                     }
                 return runtime_identity if return_identity else True
+            if runtime_identity:
+                # Loaded and serving, yet no visible answer: never leave the
+                # earlier "still loading" in place (Tower3, 2026-10-09).
+                diagnosis["reason"] = (
+                    f"{runtime_identity} is loaded but did not answer a test message with visible text"
+                )
             if attempt % 6 == 0:
                 logger.info(
                     "Model %s readiness incomplete (attempt %d, identity=%s)%s",
@@ -18652,6 +19608,26 @@ def _default_runtime_incompatibility(model: dict, env: dict) -> str | None:
     return note or "This model needs a newer llama.cpp runtime than ODS ships by default."
 
 
+def _catalog_model_images(library: list[dict]) -> frozenset[str]:
+    """Images that a catalog entry or one of its runtime profiles selects."""
+    images = set()
+    for entry in library:
+        profiles = entry.get("runtime_profiles")
+        candidates = [entry.get("llama_server_image")]
+        if isinstance(profiles, list):
+            candidates.extend(
+                profile.get("llama_server_image")
+                for profile in profiles
+                if isinstance(profile, dict)
+            )
+        images.update(
+            candidate.strip()
+            for candidate in candidates
+            if isinstance(candidate, str) and candidate.strip()
+        )
+    return frozenset(images)
+
+
 def _select_runtime_profile(model: dict, env: dict) -> dict | None:
     profiles = model.get("runtime_profiles")
     if not isinstance(profiles, list):
@@ -18939,6 +19915,17 @@ def _launch_native_llama_server(env_path: Path, llama_bin: Path, llama_log: Path
         if projector is None:
             raise RuntimeError("The memory-qualified vision projector is unavailable")
         args.extend(["--mmproj", str(projector)])
+    else:
+        # A vision import's own projector (WP2), downloaded with its weights.
+        imported_projector = _model_projector_file(_library_record_for_gguf(gguf_file), model_path.parent)
+        if imported_projector is not None:
+            args.extend(["--mmproj", str(imported_projector)])
+    # A fixed chat template the activation chose for an exact template match
+    # (WP5), checked against its SHA-256 before every launch. The LaunchAgent
+    # plist keeps these arguments across restarts.
+    template_file = _native_chat_template_file(env)
+    if template_file is not None:
+        args.extend(["--chat-template-file", str(template_file)])
     # On macOS the default runtime gets its reasoning flags from the tuning
     # helper below (--reasoning on b9014, where --reasoning-format none put an
     # empty think block into every reply). Everything else passes the format.

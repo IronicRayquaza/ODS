@@ -783,7 +783,9 @@ async def test_a_profile_advisory_never_blocks_a_send(monkeypatch):
     with patch.object(pixel.httpx, "AsyncClient", return_value=FakeClient(FakeResponse(chunks=[body]))):
         result = await pixel.pixel_status()
     assert result["available"] is True
-    assert result["modelSupport"]["reason"] == "tools-unavailable"
+    support = result["modelSupport"]
+    assert isinstance(support, dict)
+    assert support["reason"] == "tools-unavailable"
     assert await pixel._model_readiness_issue() is None
 
 

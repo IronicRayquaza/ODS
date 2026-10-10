@@ -206,7 +206,9 @@ function ConvertTo-ODSDotenvValue {
 # Settings ODS tells the owner to put in .env that no installer writes: the
 # dashboard's n8n API key (routers/workflows.py), the Hugging Face token for
 # gated downloads (routers/models.py), the Intel Arc image override
-# (docker-compose.arc.yml) and Open WebUI's speech settings (tts/README.md).
+# (docker-compose.arc.yml), Open WebUI's speech settings (tts/README.md) and
+# whether apps use measured model profiles (ODS_MODEL_PROFILES,
+# docs/MODEL-MANAGEMENT.md).
 # Same list as ODS_OWNER_ENV_KEYS in installers/lib/extension-env-carry.sh.
 # Installer-managed keys must not be listed: an old value would override the
 # installer's new choice.
@@ -219,6 +221,7 @@ $script:ODS_OWNER_ENV_KEYS = @(
     "AUDIO_TTS_VOICE"
     "AUDIO_TTS_OPENAI_API_BASE_URL"
     "AUDIO_TTS_OPENAI_API_KEY"
+    "ODS_MODEL_PROFILES"
 )
 
 function Get-ODSCarriedEnvLines {

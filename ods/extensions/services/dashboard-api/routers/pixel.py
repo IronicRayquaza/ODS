@@ -478,12 +478,14 @@ def _model_support_from_status(status: object) -> dict[str, str] | None:
     With ``ODS_MODEL_PROFILES=enabled`` the host reports the active model's
     measured profile and the advisory names its reason; it never blocks a send.
     """
-    profile = status.get("activeModelProfile") if isinstance(status, dict) else None
+    if not isinstance(status, dict):
+        return None
+    profile = status.get("activeModelProfile")
     if isinstance(profile, dict):
         reason = _profile_support_reason(profile, status)
         if reason is not None:
             return {"tier": "adaptive", "detail": _MODEL_SUPPORT_REASONS[reason], "reason": reason}
-    if isinstance(status, dict) and status.get("activeAgentViable") is False:
+    if status.get("activeAgentViable") is False:
         # Keep the legacy wire value for rolling UI upgrades. It denotes an
         # advisory, not evidence that the runtime adapts or the model can act.
         return {"tier": "adaptive", "detail": _MODEL_CAPABILITY_DETAIL}

@@ -8350,9 +8350,13 @@ class TestChatTemplateOverrideActivation:
         class _FakeProc:
             pid = 4321
 
+        def _fake_popen(cmd, **_kwargs):
+            calls.append(cmd)
+            return _FakeProc()
+
         monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
         monkeypatch.setattr(_mod.platform, "system", lambda: "Linux")
-        monkeypatch.setattr(subprocess, "Popen", lambda cmd, **_k: calls.append(cmd) or _FakeProc())
+        monkeypatch.setattr(subprocess, "Popen", _fake_popen)
 
         _launch_native_llama_server(env_path, tmp_path / "bin" / "llama-server", tmp_path / "log", tmp_path / "pid")
 
@@ -8371,9 +8375,13 @@ class TestChatTemplateOverrideActivation:
         class _FakeProc:
             pid = 4321
 
+        def _fake_popen(cmd, **_kwargs):
+            calls.append(cmd)
+            return _FakeProc()
+
         monkeypatch.setattr(_mod, "INSTALL_DIR", tmp_path)
         monkeypatch.setattr(_mod.platform, "system", lambda: "Linux")
-        monkeypatch.setattr(subprocess, "Popen", lambda cmd, **_k: calls.append(cmd) or _FakeProc())
+        monkeypatch.setattr(subprocess, "Popen", _fake_popen)
 
         _launch_native_llama_server(env_path, tmp_path / "bin" / "llama-server", tmp_path / "log", tmp_path / "pid")
 
@@ -8401,8 +8409,8 @@ class TestChatTemplateOverrideActivation:
         monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-agent-key")
         handler = _ResponseHandler(request_body={"model_id": "target-model",
                                                  "chat_template_override": "fixed-model-tools"})
-        handler._do_model_activate = lambda *args, **kwargs: _mod.AgentHandler._do_model_activate(
-            handler, *args, **kwargs)
+        setattr(handler, "_do_model_activate", lambda *args, **kwargs: _mod.AgentHandler._do_model_activate(
+            handler, *args, **kwargs))
 
         _mod.AgentHandler._handle_model_activate(handler)
 
@@ -8452,7 +8460,7 @@ class TestChatTemplateOverrideRequests:
     def _send(self, body):
         calls = []
         handler = _ResponseHandler(request_body=body)
-        handler._do_model_activate = lambda model_id, **kwargs: calls.append((model_id, kwargs))
+        setattr(handler, "_do_model_activate", lambda model_id, **kwargs: calls.append((model_id, kwargs)))
         _mod.AgentHandler._handle_model_activate(handler)
         return handler, calls
 
@@ -8588,11 +8596,15 @@ class TestAutomaticTemplateRetry:
 
     def test_a_fixed_template_that_answers_is_kept_and_recorded(self, tmp_path, monkeypatch):
         install_dir, env_path, entry, restarts = self._install(tmp_path, monkeypatch)
-        order = []
+        order: list[tuple[str, object]] = []
         self._runtime(monkeypatch, order=order)
         real_render = _mod._render_model_router_runtime_configs
-        monkeypatch.setattr(_mod, "_render_model_router_runtime_configs",
-                            lambda *a, **k: order.append(("consumers", None)) or real_render(*a, **k))
+
+        def _render_after_marking(*a, **k):
+            order.append(("consumers", None))
+            return real_render(*a, **k)
+
+        monkeypatch.setattr(_mod, "_render_model_router_runtime_configs", _render_after_marking)
 
         handler = self._activate()
 
@@ -8713,7 +8725,7 @@ class TestAutomaticTemplateRetry:
         _install_dir, _env_path, entry, restarts = self._install(tmp_path, monkeypatch)
         self._runtime(monkeypatch)
         assert self._activate().response_code == 200
-        order = []
+        order: list[tuple[str, object]] = []
         self._runtime(monkeypatch, order=order)
 
         handler = self._activate()

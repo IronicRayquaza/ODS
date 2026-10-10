@@ -6021,7 +6021,7 @@ class TestModelActivationOwnership:
             "id": "same-model", "gguf_file": "same-model.gguf",
             "app_compatibility": {"pixel_agent": {"status": "verified"}},
         }]}), encoding="utf-8")
-        payload = {}
+        payload: dict = {}
         _mod._project_switchboard_agent_viability(payload)
         assert payload["activeModelProfile"]["tools"] is False
         assert payload["activeAgentViable"] is True
@@ -6039,14 +6039,14 @@ class TestModelActivationOwnership:
         self, tmp_path, monkeypatch, last_model, summary,
     ):
         self._profiled_install(tmp_path, monkeypatch, mode="enabled", last_model=last_model, summary=summary)
-        payload = {}
+        payload: dict = {}
         _mod._project_switchboard_agent_viability(payload)
         assert payload["activeModelProfile"] == {"state": "not-profiled", "tools": None, "thinkingControl": None}
 
     def test_an_unreadable_profile_store_reads_as_not_profiled(self, tmp_path, monkeypatch):
         install_dir = self._profiled_install(tmp_path, monkeypatch, mode="enabled", summary=self.SUMMARY)
         (install_dir / "data" / "model-profiles.json").write_text("{not json", encoding="utf-8")
-        payload = {}
+        payload: dict = {}
         _mod._project_switchboard_agent_viability(payload)
         assert payload["activeModelProfile"]["state"] == "not-profiled"
 

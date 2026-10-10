@@ -3218,10 +3218,12 @@ def test_a_fixed_template_restarts_the_running_model_at_its_context(test_client,
     """WP5 manual action: always a real switch (never "already active"), the context kept."""
     models_router = _running_tower_model(monkeypatch, tmp_path, ctx=49152)
     calls = []
-    monkeypatch.setattr(
-        models_router, "_call_agent_model",
-        lambda path, body, timeout=30, **_kwargs: calls.append((path, body)) or {"status": "activated"},
-    )
+
+    def _call_agent(path, body, timeout=30, **_kwargs):
+        calls.append((path, body))
+        return {"status": "activated"}
+
+    monkeypatch.setattr(models_router, "_call_agent_model", _call_agent)
 
     resp = test_client.post("/api/models/qwen3.5-27b-q4/chat-template", headers=test_client.auth_headers,
                             json={"override": "qwen-tools-fix"})
@@ -3283,10 +3285,12 @@ def test_a_plain_run_never_asks_for_a_fixed_template(test_client, monkeypatch, t
     models_router = _running_tower_model(monkeypatch, tmp_path, ctx=32768)
     monkeypatch.setattr(models_router, "_already_active_model", lambda *_args: (False, None))
     calls = []
-    monkeypatch.setattr(
-        models_router, "_call_agent_model",
-        lambda path, body, timeout=30, **_kwargs: calls.append(body) or {"status": "activated"},
-    )
+
+    def _call_agent(path, body, timeout=30, **_kwargs):
+        calls.append(body)
+        return {"status": "activated"}
+
+    monkeypatch.setattr(models_router, "_call_agent_model", _call_agent)
 
     test_client.post("/api/models/qwen3.5-27b-q4/load", headers=test_client.auth_headers)
 

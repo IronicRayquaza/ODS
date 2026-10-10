@@ -4712,10 +4712,10 @@ class TestRemoteProviderLifecycle:
         monkeypatch.setattr(_mod.subprocess, "run", fake_run)
         runtime = {"model": "same-model", "contextLength": 32768, "maxTokens": 4096, "reasoning": False}
         assert _mod._reconcile_managed_pixel_contract({**runtime, "routeFingerprint": "a" * 64}) == "reconciled"
-        assert calls[-1][-2:] == ["a" * 64, "unknown"]
+        assert calls[-1][-3:] == ["a" * 64, "unknown", ""]
         assert 'target_route_fingerprint="$8"' in calls[-1][2]
         assert _mod._reconcile_managed_pixel_contract(runtime) == "reconciled"
-        assert calls[-1][-2:] == ["", "unknown"]
+        assert calls[-1][-3:] == ["", "unknown", ""]
         with pytest.raises(RuntimeError, match="route identity"):
             _mod._reconcile_managed_pixel_contract({**runtime, "routeFingerprint": "a" * 64 + "\n"})
         assert len(calls) == 2
@@ -5969,6 +5969,86 @@ class TestModelActivationOwnership:
         payload = {"status": "idle"}
         _mod._project_switchboard_agent_viability(payload)
         assert "activeRuntime" not in payload and "activeAgentViable" not in payload
+
+    def _profiled_install(self, tmp_path, monkeypatch, *, mode, last_model="same-model", summary=None):
+        install_dir = tmp_path / "ods"
+        install_dir.mkdir()
+        (install_dir / ".env").write_text(
+            "ODS_MODE=local\nGPU_BACKEND=cpu\nLLM_MODEL=same-model\nGGUF_FILE=same-model.gguf\n"
+            f"CTX_SIZE=65536\nODS_MODEL_PROFILES={mode}\n",
+            encoding="utf-8",
+        )
+        _mod._switchboard_state.record_verified_route(
+            install_dir / "data" / "model-state.json", catalog_id="same-model",
+            runtime_model_id="same-model.gguf", backend_kind="llama-server",
+            endpoint_id="llama-server-default", context_length=65536,
+            capabilities={"chat": True, "tools": True, "vision": False, "agentViable": True},
+            proof_identity="same-model.gguf",
+        )
+        if summary is not None:
+            store = _mod._model_profile_store
+            key = store.profile_key(
+                gguf_sha256=["a" * 64], projector_sha256=None, build_info="b11429-x", backend="cpu",
+                template_sha256="b" * 64, template_source="embedded", suite="3", host="host",
+            )
+            profile = store.recorded_profile(key, model_id=last_model, gguf_file="same-model.gguf",
+                                             result={"probes": {}, "summary": summary, "elapsedMs": 1},
+                                             product_version="test")
+            doc = store.with_last_activation(store.with_profile(store.empty(), profile),
+                                             last_model, profile["keyHash"])
+            store.atomic_write(install_dir / "data" / "model-profiles.json", doc)
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "_active_remote_provider_pixel_runtime", lambda **_: None)
+        return install_dir
+
+    SUMMARY = {"chat": True, "tools": False, "toolsStreamed": False, "vision": None, "tokensPerSecond": 50.0,
+               "thinking": {"control": "always", "separated": True, "works": True}}
+
+    def test_model_status_reports_the_active_profile_only_when_enabled(self, tmp_path, monkeypatch):
+        # Any-model WP4.3: Portal and Talk advisories read the active model's profile.
+        self._profiled_install(tmp_path, monkeypatch, mode="enabled", summary=self.SUMMARY)
+        payload = {"status": "idle"}
+        _mod._project_switchboard_agent_viability(payload)
+        assert payload["activeModelProfile"] == {"state": "measured", "tools": False, "thinkingControl": "always"}
+        # The route was recorded agent-viable before profiles were on (an upgrade):
+        # the failed tool check narrows it now, not at the next switch.
+        assert payload["activeAgentViable"] is False
+
+    def test_a_verified_catalog_model_stays_agent_viable_in_status(self, tmp_path, monkeypatch):
+        install_dir = self._profiled_install(tmp_path, monkeypatch, mode="enabled", summary=self.SUMMARY)
+        (install_dir / "config").mkdir()
+        (install_dir / "config" / "model-library.json").write_text(json.dumps({"models": [{
+            "id": "same-model", "gguf_file": "same-model.gguf",
+            "app_compatibility": {"pixel_agent": {"status": "verified"}},
+        }]}), encoding="utf-8")
+        payload: dict = {}
+        _mod._project_switchboard_agent_viability(payload)
+        assert payload["activeModelProfile"]["tools"] is False
+        assert payload["activeAgentViable"] is True
+
+    @pytest.mark.parametrize("mode", ["observe", "off"])
+    def test_model_status_is_unchanged_without_enabled_profiles(self, tmp_path, monkeypatch, mode):
+        self._profiled_install(tmp_path, monkeypatch, mode=mode, summary=self.SUMMARY)
+        payload = {"status": "idle"}
+        _mod._project_switchboard_agent_viability(payload)
+        assert "activeModelProfile" not in payload
+        assert payload["activeAgentViable"] is True
+
+    @pytest.mark.parametrize("last_model, summary", [("other-model", SUMMARY), ("same-model", None)])
+    def test_a_model_without_its_own_profile_is_reported_not_profiled(
+        self, tmp_path, monkeypatch, last_model, summary,
+    ):
+        self._profiled_install(tmp_path, monkeypatch, mode="enabled", last_model=last_model, summary=summary)
+        payload: dict = {}
+        _mod._project_switchboard_agent_viability(payload)
+        assert payload["activeModelProfile"] == {"state": "not-profiled", "tools": None, "thinkingControl": None}
+
+    def test_an_unreadable_profile_store_reads_as_not_profiled(self, tmp_path, monkeypatch):
+        install_dir = self._profiled_install(tmp_path, monkeypatch, mode="enabled", summary=self.SUMMARY)
+        (install_dir / "data" / "model-profiles.json").write_text("{not json", encoding="utf-8")
+        payload: dict = {}
+        _mod._project_switchboard_agent_viability(payload)
+        assert payload["activeModelProfile"]["state"] == "not-profiled"
 
     def test_non_activation_lock_owner_reports_unknown_target(self, monkeypatch):
         monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
@@ -10402,6 +10482,88 @@ class TestModelProfileRoutes:
 
         assert handler.response_code == 409
         assert handler.parse_response()["activeOperation"] == "model_download"
+
+
+class TestChatTemplateOffer:
+    """WP5: the profile answer names a fixed template only when one matches the model exactly."""
+
+    TEMPLATE = b"{{ messages }}"
+    EMBEDDED = "c" * 64
+
+    def _setup(self, tmp_path, monkeypatch, env_text="GGUF_FILE=running.gguf\n"):
+        install_dir = tmp_path / "install"
+        (install_dir / "data").mkdir(parents=True)
+        (install_dir / ".env").write_text(env_text, encoding="utf-8")
+        vendored = install_dir / "config" / "chat-templates" / "upstream-b9014"
+        vendored.mkdir(parents=True)
+        (vendored / "Fixed.jinja").write_bytes(self.TEMPLATE)
+        entry = {"id": "running-fix", "embeddedTemplateSha256": self.EMBEDDED,
+                 "file": "upstream-b9014/Fixed.jinja", "fileSha256": hashlib.sha256(self.TEMPLATE).hexdigest(),
+                 "builds": ["b11429"], "reason": "Its own template drops tool calls."}
+        (install_dir / "config" / "chat-templates" / "index.json").write_text(
+            json.dumps({"schemaVersion": 1, "overrides": [entry]}), encoding="utf-8")
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "test-key")
+        return install_dir
+
+    def _seed(self, install_dir, *, template_sha, source="embedded", build="b11429-x"):
+        store = _mod._model_profile_store
+        path = install_dir / "data" / "model-profiles.json"
+        key = store.profile_key(gguf_sha256=["a" * 64], projector_sha256=None, build_info=build, backend="nvidia",
+                                template_sha256=template_sha, template_source=source, suite="3",
+                                host="0123456789abcdef")
+        profile = store.recorded_profile(key, model_id="running", gguf_file="running.gguf",
+                                         result=TestModelProfileRoutes.RESULT, product_version="t")
+        doc = store.with_profile(store.load(path), profile)
+        store.atomic_write(path, store.with_last_activation(doc, "running", profile["keyHash"]))
+
+    def _get(self):
+        handler = _FakeHandler(b"")
+        handler.path = "/v1/model/profile?model=running"
+        _mod.AgentHandler._handle_model_profile(handler)
+        assert handler.response_code == 200
+        return handler.parse_response()
+
+    def test_an_exact_match_is_offered(self, tmp_path, monkeypatch):
+        install_dir = self._setup(tmp_path, monkeypatch)
+        self._seed(install_dir, template_sha=self.EMBEDDED)
+
+        body = self._get()
+
+        assert body["templateOverride"] == {"id": "running-fix", "reason": "Its own template drops tool calls.",
+                                            "active": False, "supported": True}
+
+    @pytest.mark.parametrize("template_sha, build", [("d" * 64, "b11429-x"), ("c" * 64, "b9014-y"), (None, "b11429-x")])
+    def test_no_exact_match_leaves_the_answer_as_before(self, tmp_path, monkeypatch, template_sha, build):
+        install_dir = self._setup(tmp_path, monkeypatch)
+        self._seed(install_dir, template_sha=template_sha, build=build)
+
+        assert set(self._get()) == {"mode", "modelId", "profile"}
+
+    def test_profiles_off_never_offers_one(self, tmp_path, monkeypatch):
+        install_dir = self._setup(tmp_path, monkeypatch, env_text="ODS_MODEL_PROFILES=off\n")
+        self._seed(install_dir, template_sha=self.EMBEDDED)
+
+        assert "templateOverride" not in self._get()
+
+    def test_a_running_fixed_template_is_reported_as_active(self, tmp_path, monkeypatch):
+        install_dir = self._setup(tmp_path, monkeypatch,
+                                  env_text="GGUF_FILE=running.gguf\nMODEL_CHAT_TEMPLATE_OVERRIDE=running-fix\n")
+        self._seed(install_dir, template_sha=self.EMBEDDED)
+        self._seed(install_dir, template_sha=hashlib.sha256(self.TEMPLATE).hexdigest(), source="override:running-fix")
+
+        body = self._get()
+
+        assert body["profile"]["key"]["templateSource"] == "override:running-fix"
+        assert body["templateOverride"]["active"] is True
+
+    def test_a_windows_runtime_learns_of_the_fix_but_cannot_use_it(self, tmp_path, monkeypatch):
+        install_dir = self._setup(tmp_path, monkeypatch, env_text=(
+            "GPU_BACKEND=amd\nAMD_INFERENCE_RUNTIME_MODE=windows-native-llama-server\nAMD_INFERENCE_LOCATION=host\n"))
+        self._seed(install_dir, template_sha=self.EMBEDDED)
+        monkeypatch.setattr(_mod.platform, "system", lambda: "Windows")
+
+        assert self._get()["templateOverride"]["supported"] is False
 
 
 class TestVisionProjectorFiles:

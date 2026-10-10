@@ -59,10 +59,12 @@ try:
     import model_profile as _model_profile
     from model_profile import probes as _model_profile_probes
     from model_profile import store as _model_profile_store
+    from model_profile import templates as _model_profile_templates
 except ImportError:  # pragma: no cover - import environment dependent
     _model_profile = None
     _model_profile_probes = None
     _model_profile_store = None
+    _model_profile_templates = None
 
 try:
     from model_switchboard import state as _switchboard_state
@@ -2534,6 +2536,61 @@ def _start_pixel_sharing_change(action, body, route):
         raise
 
 
+# (file mtime_ns, size) -> store document; one tuple, replaced whole, so
+# concurrent status handlers never pair one file's key with another's content.
+_ACTIVE_PROFILE_CACHE: list[tuple[tuple[int, int], dict | None]] = []
+
+
+def _model_profile_doc_cached() -> dict | None:
+    """The profile store, re-read only when the file changes (status is polled)."""
+    path = _model_profile_path()
+    try:
+        info = path.stat()
+    except FileNotFoundError:
+        return None
+    key = (info.st_mtime_ns, info.st_size)
+    cached = _ACTIVE_PROFILE_CACHE[0] if _ACTIVE_PROFILE_CACHE else None
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    try:
+        doc = _model_profile_store.load(path)
+    except (_model_profile_store.StoreError, OSError, UnicodeError):
+        logger.warning("Model profile store unreadable for status; reporting not profiled")
+        doc = None
+    _ACTIVE_PROFILE_CACHE[:] = [(key, doc)]
+    return doc
+
+
+def _stored_profile_traits(catalog_id: object) -> dict | None:
+    """Traits of the profile this model's last switch recorded or reused, if any.
+
+    A model switched to before profiling existed has none; "Check again"
+    replaces it without a switch.
+    """
+    if _model_profile_store is None or not isinstance(catalog_id, str) or not catalog_id:
+        return None
+    doc = _model_profile_doc_cached()
+    last = (doc or {}).get("lastActivation") or {}
+    if last.get("modelId") != catalog_id:
+        return None
+    profile = next((entry for entry in reversed(doc["profiles"])
+                    if entry.get("keyHash") == last.get("keyHash")), None)
+    if profile is None:
+        return None
+    return _summary_traits((profile.get("result") or {}).get("summary"))
+
+
+def _active_model_profile(env: dict, catalog_id: object) -> dict | None:
+    """What the active model's profile says, for the Portal and Talk advisories (enabled only)."""
+    if (_model_profiles_mode(env) != "enabled" or _model_profile_store is None
+            or not isinstance(catalog_id, str) or not catalog_id):
+        return None
+    traits = _stored_profile_traits(catalog_id)
+    if traits is None:
+        return {"state": "not-profiled", "tools": None, "thinkingControl": None}
+    return {"state": "measured", "tools": traits["tools"], "thinkingControl": traits["control"]}
+
+
 def _project_switchboard_agent_viability(payload: dict) -> None:
     """Project the verified active route's identity and Pixel viability.
 
@@ -2590,6 +2647,9 @@ def _project_switchboard_agent_viability(payload: dict) -> None:
             "model": local_model,
             "contextLength": local_context,
         }
+    active_profile = _active_model_profile(env, active.get("catalogId"))
+    if active_profile is not None:
+        payload["activeModelProfile"] = active_profile
     capabilities = active.get("capabilities")
     if not isinstance(capabilities, dict):
         return
@@ -2603,6 +2663,7 @@ def _project_switchboard_agent_viability(payload: dict) -> None:
     projected = agent_viable
     catalog_id = active.get("catalogId")
     context_length = active.get("contextLength")
+    catalog_model = None
     if isinstance(catalog_id, str) and isinstance(context_length, int):
         try:
             catalog_model = next(
@@ -2620,6 +2681,12 @@ def _project_switchboard_agent_viability(payload: dict) -> None:
                 catalog_model,
                 context_length,
             )
+    # With profiles enabled a failed tool check narrows it as well, at once
+    # (after an upgrade or "Check again") instead of at the next switch; a
+    # curated "verified" agent verdict keeps a model agent-viable (WP4.1).
+    if (active_profile is not None and active_profile.get("tools") is False
+            and not _catalog_agent_verified(catalog_model)):
+        projected = False
     payload["activeAgentViable"] = projected
 
 
@@ -2846,6 +2913,11 @@ def _publish_verified_initial_switchboard_route(
         "vision": bool(model.get("vision")),
         "agentViable": _model_agent_viable(model, context_length),
     }
+    if _model_profiles_mode(env) == "enabled":
+        # After an install or upgrade, re-publish what the model's last switch
+        # measured instead of the catalog booleans (WP4.1).
+        capabilities = _profiled_capabilities(
+            capabilities, _stored_profile_traits(model_id or llm_model_name or gguf_file), model)
     # A model transition can begin while the slow runtime proof is in flight.
     # Serialize the final write with lifecycle admission and recheck the
     # durable journal: a held transaction's before-state must stay immutable
@@ -3519,6 +3591,30 @@ def _pixel_model_reasoning_capable(model: str, env: dict[str, str]) -> bool:
     return configured not in {"", "off", "none", "false", "0"}
 
 
+def _profiled_pixel_reasoning(configured: bool, traits: dict | None) -> bool:
+    """Pixel's reasoning flag; a measured thinking control decides it (WP4.2, enabled only).
+
+    A model that cannot turn thinking off reasons whatever ODS asks, and one
+    without thinking never does; otherwise the configured runtime rule stands.
+    """
+    control = (traits or {}).get("control")
+    if control == "always":
+        return True
+    if control == "none":
+        return False
+    return configured
+
+
+def _profiled_pixel_image_input(configured: str, traits: dict | None) -> str:
+    """Pixel's image input from the vision probe when a projector was loaded (WP4.2)."""
+    vision = (traits or {}).get("vision")
+    if vision is True:
+        return "supported"
+    if vision is False:
+        return "unsupported"
+    return configured
+
+
 def _pixel_max_tokens_for_context(context_length: int) -> int:
     """Keep enough prompt room for Pixel's managed agent/tool contract."""
     if context_length < _MIN_MANAGED_PIXEL_CONTEXT:
@@ -3564,8 +3660,13 @@ def _reconcile_ods_managed_pixel_model(
     reasoning: bool = False,
     route_fingerprint: str | None = None,
     image_input: str | None = None,
+    thinking_control: str | None = None,
 ) -> str:
-    """Transactionally bind the managed Pixel gateway to an activated model."""
+    """Transactionally bind the managed Pixel gateway to an activated model.
+
+    ``thinking_control`` is the model's measured control. None keeps the
+    renderer's name rule and clears a control saved for an earlier model.
+    """
     identity = _ods_managed_pixel_identity()
     if identity is None:
         return "not_installed"
@@ -3573,6 +3674,8 @@ def _reconcile_ods_managed_pixel_model(
         raise RuntimeError("The promoted Pixel model identity is invalid")
     if image_input is not None and image_input not in ("supported", "unsupported", "unknown"):
         raise RuntimeError("The promoted Pixel image-input policy is invalid")
+    if thinking_control is not None and thinking_control not in ("enable_thinking", "always", "none"):
+        raise RuntimeError("The promoted Pixel thinking control is invalid")
     if not isinstance(context_length, int) or isinstance(context_length, bool) \
             or not 4096 <= context_length <= 10_000_000:
         raise RuntimeError("Pixel requires a model context between 4096 and 10000000 tokens")
@@ -3622,6 +3725,7 @@ target_max_tokens="$6"
 target_reasoning="$7"
 target_route_fingerprint="$8"
 target_image_input="$9"
+target_thinking_control="${10}"
 INTERACTIVE=false
 DRY_RUN=false
 log() { printf '%s\n' "$*" >&2; }
@@ -3640,7 +3744,8 @@ export INSTALL_DIR INTERACTIVE DRY_RUN ODS_SUDO_AVAILABLE
 . "$INSTALL_DIR/installers/lib/sudo.sh"
 . "$INSTALL_DIR/installers/lib/pixel-host-install.sh"
 ods_pixel_reconcile_promoted_model "$owner" "$home" "$target_model" ready \
-    "$target_context" "$target_max_tokens" "$target_reasoning" "$target_route_fingerprint" "" "$target_image_input"
+    "$target_context" "$target_max_tokens" "$target_reasoning" "$target_route_fingerprint" "" "$target_image_input" \
+    "$target_thinking_control"
 '''
     child_env = {
         "HOME": str(home),
@@ -3661,6 +3766,7 @@ ods_pixel_reconcile_promoted_model "$owner" "$home" "$target_model" ready \
                 "true" if reasoning else "false",
                 route_fingerprint or "",
                 image_input or "unknown",
+                thinking_control or "",
             ],
             env=child_env,
             capture_output=True,
@@ -5060,7 +5166,33 @@ def _managed_pixel_runtime_contract() -> dict[str, object] | None:
     return contract
 
 
-def _reconcile_managed_pixel_contract(contract: dict[str, object] | None) -> str:
+def _thinking_control_kwargs(control: str | None) -> dict:
+    """Pass a measured control only when there is one, so calls without one stay as today."""
+    return {"thinking_control": control} if control else {}
+
+
+def _managed_pixel_thinking_control() -> str | None:
+    """The measured thinking control saved in the ODS-managed Pixel answers, if any.
+
+    It lives only in the owner-private answers (a plugin-config key would
+    break rollback to older code), so a rollback that restores a previous
+    model reads it here first. Coordinator-managed installs never carry it.
+    """
+    if load_env(INSTALL_DIR / ".env").get("PIXEL_OPENWEBUI_KEY") or _ods_managed_pixel_identity() is None:
+        return None
+    snapshot = _snapshot_text_file(INSTALL_DIR / "data" / "pixel" / "onboarding.json")
+    if not snapshot.get("exists"):
+        return None
+    try:
+        value = json.loads(str(snapshot.get("text") or ""))
+    except json.JSONDecodeError:
+        return None
+    control = value.get("modelThinkingControl") if isinstance(value, dict) else None
+    return control if control in _THINKING_CONTROLS else None
+
+
+def _reconcile_managed_pixel_contract(contract: dict[str, object] | None,
+                                      *, thinking_control: str | None = None) -> str:
     if contract is None:
         return "not_installed"
     return _reconcile_ods_managed_pixel_model(
@@ -5070,6 +5202,7 @@ def _reconcile_managed_pixel_contract(contract: dict[str, object] | None) -> str
         reasoning=bool(contract["reasoning"]),
         route_fingerprint=contract.get("routeFingerprint"),
         image_input=contract.get("imageInput"),
+        **_thinking_control_kwargs(thinking_control),
     )
 
 
@@ -5145,6 +5278,8 @@ def _activate_remote_provider_route(
     activation_snapshot = _snapshot_text_file(activation_path)
     activation_public_snapshot = _snapshot_text_file(activation_public_path)
     pixel_before = transaction.previous if transaction is not None else _managed_pixel_runtime_contract()
+    # The local model's measured thinking control, restored if activation fails.
+    pixel_before_control = None if transaction is not None else _managed_pixel_thinking_control()
     container_state = _capture_container_state("ods-litellm")
     if not container_state.get("running"):
         raise RuntimeError("LiteLLM must be running before a remote provider can become active")
@@ -5241,7 +5376,7 @@ def _activate_remote_provider_route(
                 rollback_errors.append(f"LiteLLM: {rollback_exc}")
         if pixel_attempted and transaction is None:
             try:
-                _reconcile_managed_pixel_contract(pixel_before)
+                _reconcile_managed_pixel_contract(pixel_before, **_thinking_control_kwargs(pixel_before_control))
             except Exception as rollback_exc:
                 rollback_errors.append(f"Pixel: {rollback_exc}")
         if transaction is not None and rollback_errors:
@@ -12891,11 +13026,7 @@ class AgentHandler(BaseHTTPRequestHandler):
         if _model_profile_store is None:
             json_response(self, 200, {"mode": "off", "modelId": requested or None, "profile": None})
             return
-        try:
-            doc = _model_profile_store.load(_model_profile_path())
-        except _model_profile_store.StoreError as exc:
-            logger.warning("Model profile store unreadable: %s", exc)
-            doc = _model_profile_store.empty()
+        doc = _model_profile_doc()
         last = doc.get("lastActivation") or {}
         model_id = requested or str(last.get("modelId") or "")
         profile = None
@@ -12903,7 +13034,13 @@ class AgentHandler(BaseHTTPRequestHandler):
             profile = next((entry for entry in doc["profiles"] if entry["keyHash"] == last.get("keyHash")), None)
         if profile is None and model_id:
             profile = _model_profile_store.latest_for_model(doc, model_id)
-        json_response(self, 200, {"mode": mode, "modelId": model_id or None, "profile": profile})
+        payload = {"mode": mode, "modelId": model_id or None, "profile": profile}
+        # A fixed chat template (WP5) is named only when one matches this
+        # model exactly or runs with it; every other answer is unchanged.
+        offer = _chat_template_offer(env, doc, model_id, profile) if mode != "off" and model_id else None
+        if offer is not None:
+            payload["templateOverride"] = offer
+        json_response(self, 200, payload)
 
     def _handle_model_profile_recheck(self):
         """Measure the running model again, ignoring its stored profile."""
@@ -13713,6 +13850,22 @@ class AgentHandler(BaseHTTPRequestHandler):
                 json_response(self, 400, {"error": "tier is not supported"})
                 return
 
+        # The owner's "Try a fixed template" (WP5): run the model with the
+        # index entry that fixes exactly its measured template, or refuse.
+        requested_template = body.get("chat_template_override")
+        template_override = None
+        if requested_template is not None:
+            if (not isinstance(requested_template, str)
+                    or (_model_profile_templates is not None
+                        and not re.fullmatch(_model_profile_templates.ID_PATTERN, requested_template))):
+                json_response(self, 400, {"error": "chat_template_override must be the id of a fixed chat template"})
+                return
+            template_override, refusal = _chat_template_request(
+                load_env(INSTALL_DIR / ".env"), model_id, requested_template)
+            if refusal is not None:
+                json_response(self, 409, {**refusal, "requestedModelId": model_id})
+                return
+
         acquired, active_model_id = _begin_model_activation(model_id)
         if not acquired:
             with _model_lifecycle_state_lock:
@@ -13739,6 +13892,8 @@ class AgentHandler(BaseHTTPRequestHandler):
                 activation_options["requested_context_length"] = requested_context_length
             if requested_tier is not None:
                 activation_options["requested_tier"] = requested_tier
+            if template_override is not None:
+                activation_options["template_override"] = template_override
             self._do_model_activate(model_id, **activation_options)
         finally:
             _end_model_activation()
@@ -13749,8 +13904,13 @@ class AgentHandler(BaseHTTPRequestHandler):
         *,
         requested_context_length: int | None = None,
         requested_tier: str | None = None,
+        template_override: dict | None = None,
     ):
-        """Inner activate logic — called with _model_activate_lock held."""
+        """Inner activate logic — called with _model_activate_lock held.
+
+        ``template_override`` is a validated chat-template index entry (WP5):
+        the model runs with that fixed template instead of its own.
+        """
         env_path = INSTALL_DIR / ".env"
         if not env_path.exists():
             json_response(
@@ -13964,6 +14124,14 @@ class AgentHandler(BaseHTTPRequestHandler):
             json_response(self, 400, {"error": str(exc)})
             return
 
+        if template_override is not None:
+            # A fixed chat template (WP5) is refused before anything changes
+            # where it cannot be loaded, never silently dropped.
+            refusal = _chat_template_refusal(persisted_env, wsl_managed, template_override)
+            if refusal is not None:
+                json_response(self, 409, {**refusal, "requestedModelId": model_id})
+                return
+
         tier_context_limit: int | None = None
         if requested_tier is not None:
             try:
@@ -14062,6 +14230,9 @@ class AgentHandler(BaseHTTPRequestHandler):
         gpu_assignment_plan: dict | None = None
         previous_pixel_context: int | None = None
         previous_pixel_image_input = "unknown"
+        previous_pixel_contract: dict[str, object] | None = None
+        previous_pixel_thinking_control: str | None = None
+        profile_traits: dict | None = None
         router_target_published = False
         previous_router_active = {}
         wsl_changed_digest = None
@@ -14294,12 +14465,19 @@ class AgentHandler(BaseHTTPRequestHandler):
                         previous_model,
                         rollback_env,
                     )
+                    # With profiles enabled the previous model's reasoning
+                    # came from its profile; restore what was in effect.
+                    captured_reasoning = (previous_pixel_contract or {}).get("reasoning")
+                    if (_model_profiles_mode(rollback_env) == "enabled"
+                            and isinstance(captured_reasoning, bool)):
+                        previous_reasoning = captured_reasoning
                     restored_pixel = _reconcile_ods_managed_pixel_model(
                         previous_hermes_model,
                         previous_pixel_context,
                         max_tokens=_pixel_max_tokens_for_context(previous_pixel_context),
                         reasoning=previous_reasoning,
                         image_input=previous_pixel_image_input,
+                        **_thinking_control_kwargs(previous_pixel_thinking_control),
                     )
                     if restored_pixel != "reconciled":
                         raise RuntimeError(
@@ -14310,6 +14488,63 @@ class AgentHandler(BaseHTTPRequestHandler):
                 logger.exception("Failed to prove previous model route during rollback")
                 _record_model_activation_result('rollback_unconfirmed', 'rollback_unconfirmed')
                 return False, str(rollback_exc)
+
+        def restart_with_template(entry: dict | None) -> dict:
+            """Restart the staged model with ``entry`` or its own template (WP5.3).
+
+            The .env snapshot taken before the first write stays the rollback
+            point. Each wait starts from a clean diagnosis: a "final" left by
+            an earlier wait would end the next one before it probes.
+            """
+            nonlocal runtime_stage_started
+            updates, removals = _chat_template_env_changes(entry, container=gpu_backend != "apple")
+            _write_bound_env_text(env_path, _env_text_with_changes(
+                env_path.read_text(encoding="utf-8").splitlines(), updates, removals))
+            readiness_diagnosis.clear()
+            _set_model_activation_phase('loading')
+            runtime_stage_started = time.time()
+            return _switchboard_reconciler.run_runtime_activation(switchboard_adapter, load_env(env_path))
+
+        def retry_with_fixed_template(entry: dict, first: dict, profiled_seconds: float) -> tuple[dict, dict]:
+            """WP5.3 automatic retry (enabled only, D3): run the model once with the fixed
+            template that matches its own exactly, keep it when it answers the chat
+            check, else return to the model's own template. Both probe runs share
+            the one D2 budget. Returns the env and profile status of what stays loaded.
+            """
+            nonlocal switchboard_run, healthy
+            budget = _model_profile_probes.BUDGET_SECONDS - profiled_seconds
+            if budget < _TEMPLATE_RETRY_MIN_BUDGET_SECONDS:
+                logger.info("No time left in the profiling budget to try fixed chat template %s", entry["id"])
+                return load_env(env_path), {**first, "templateRetry": {
+                    "id": entry["id"], "outcome": "skipped", "reason": "budget"}}
+            logger.info("%s did not answer the chat check; trying fixed chat template %s", model_id, entry["id"])
+            outcome = {"id": entry["id"]}
+            retried_run = restart_with_template(entry)
+            if retried_run["ok"]:
+                switchboard_run = retried_run
+                retried_env = load_env(env_path)
+                probing_started = time.monotonic()
+                retried = _profile_model_advisory(retried_env, model, model_id=model_id, gguf_file=gguf_file,
+                                                  budget_seconds=budget)
+                budget -= time.monotonic() - probing_started
+                if (retried.get("summary") or {}).get("chat") is True:
+                    return retried_env, {**retried, "templateRetry": {**outcome, "outcome": "kept"}}
+                outcome["fixedTemplateChat"] = (retried.get("summary") or {}).get("chat")
+            else:
+                outcome["failure"] = str(retried_run.get("detail") or retried_run.get("phase") or "")[:200]
+            own_run = restart_with_template(None)
+            switchboard_run = own_run
+            if not own_run["ok"]:
+                healthy = False
+                raise RuntimeError(
+                    f"{gguf_file} did not restart with its own chat template after a fixed template was tried: "
+                    f"{own_run.get('detail') or own_run.get('phase')}")
+            own_env = load_env(env_path)
+            # Normally a cache hit that puts lastActivation back on the model's
+            # own profile; it never probes beyond the shared budget.
+            own = _profile_model_advisory(own_env, model, model_id=model_id, gguf_file=gguf_file,
+                                          budget_seconds=max(budget, 0.0))
+            return own_env, {**own, "templateRetry": {**outcome, "outcome": "reverted"}}
 
         try:
             # Read current env BEFORE modification — needed for gpu_backend guard
@@ -14580,21 +14815,15 @@ class AgentHandler(BaseHTTPRequestHandler):
                     updates["LLAMA_ARG_MMPROJ"] = f"/models/{projector_file.name}"
                 else:
                     remove_keys.add("LLAMA_ARG_MMPROJ")
-                new_lines = []
-                seen = set()
-                for line in lines:
-                    key = line.split("=", 1)[0] if "=" in line and not line.startswith("#") else None
-                    if key and key in updates:
-                        new_lines.append(_env_assignment(key, str(updates[key])))
-                        seen.add(key)
-                    elif key and key in remove_keys:
-                        continue
-                    else:
-                        new_lines.append(line)
-                for key, val in updates.items():
-                    if key not in seen:
-                        new_lines.append(_env_assignment(key, str(val)))
-                _write_bound_env_text(env_path, "\n".join(new_lines) + "\n")
+                # A fixed chat template (WP5) for an exact template match; any
+                # other model clears the previous one's. The container reads
+                # it from its read-only /chat-templates mount; native macOS
+                # takes it as an argument (_launch_native_llama_server).
+                template_updates, template_removals = _chat_template_env_changes(
+                    template_override, container=not host_native_llama and gpu_backend != "apple")
+                updates.update(template_updates)
+                remove_keys.update(template_removals)
+                _write_bound_env_text(env_path, _env_text_with_changes(lines, updates, remove_keys))
 
             # Update models.ini
             models_ini.parent.mkdir(parents=True, exist_ok=True)
@@ -14806,8 +15035,25 @@ class AgentHandler(BaseHTTPRequestHandler):
             if healthy:
                 # WP3: measure what the new model can do before any consumer
                 # is touched (first switch per file x build x host only).
+                profiling_started = time.monotonic()
                 model_profile_status = _profile_model_advisory(
                     env, model, model_id=model_id, gguf_file=gguf_file)
+                # WP5.3: a model that fails the chat check with its own
+                # template, which ODS fixes exactly, gets one retry with the
+                # fixed template (ODS_MODEL_PROFILES=enabled only).
+                retry_template = (
+                    _template_retry_entry(env, model_profile_status)
+                    if template_override is None and switchboard_adapter is not None
+                    and runtime_restart_strategy in _TEMPLATE_RETRY_STRATEGIES else None)
+                if retry_template is not None:
+                    env, model_profile_status = retry_with_fixed_template(
+                        retry_template, model_profile_status, time.monotonic() - profiling_started)
+                # WP4 (enabled only): the measured traits of what stays loaded
+                # replace the catalog booleans for every reader of the route.
+                profile_traits = _profile_traits(env, model_profile_status)
+                if switchboard_run is not None and profile_traits is not None:
+                    switchboard_run["capabilities"] = _profiled_capabilities(
+                        switchboard_run.get("capabilities"), profile_traits, model)
                 _set_model_activation_phase('verifying')
                 if host_native_llama:
                     _write_host_native_litellm_config(env, gguf_file, llm_model_name)
@@ -14986,6 +15232,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                 if pixel_transaction is None:
                     previous_pixel_contract = _managed_pixel_runtime_contract()
                     previous_pixel_image_input = (previous_pixel_contract or {}).get("imageInput", "unknown")
+                    previous_pixel_thinking_control = _managed_pixel_thinking_control()
                 pixel_reconcile_attempted = True
                 if pixel_transaction is not None and (
                     final_runtime_proof.get('contextVerified') is not True
@@ -14996,14 +15243,17 @@ class AgentHandler(BaseHTTPRequestHandler):
                     'model': pixel_runtime_identity,
                     'contextLength': int(context_length),
                     'maxTokens': _pixel_max_tokens_for_context(int(context_length)),
-                    'reasoning': _pixel_model_reasoning_capable(str(llm_model_name), env),
-                    'imageInput': _pixel_model_image_input(model_id),
+                    'reasoning': _profiled_pixel_reasoning(
+                        _pixel_model_reasoning_capable(str(llm_model_name), env), profile_traits),
+                    'imageInput': _profiled_pixel_image_input(
+                        _pixel_model_image_input(model_id), profile_traits),
                 }
                 pixel_status = (pixel_transaction.apply(pixel_target) if pixel_transaction is not None
                     else _reconcile_ods_managed_pixel_model(
                         pixel_runtime_identity, int(context_length),
                         max_tokens=pixel_target['maxTokens'], reasoning=pixel_target['reasoning'],
-                        image_input=pixel_target['imageInput']))
+                        image_input=pixel_target['imageInput'],
+                        **_thinking_control_kwargs((profile_traits or {}).get('control'))))
                 if pixel_status == "not_installed":
                     pixel_reconcile_attempted = False
                 consumers = {
@@ -15135,6 +15385,8 @@ class AgentHandler(BaseHTTPRequestHandler):
                         "gpu_assignment_changed": bool(gpu_assignment_plan),
                         "consumers": consumers,
                         "profile": model_profile_status,
+                        **({"chatTemplateOverride": template_override["id"]}
+                           if template_override is not None else {}),
                     },
                 )
             else:
@@ -15578,12 +15830,217 @@ def _model_profile_digests(model: dict, gguf_file: str) -> list[str]:
     return digests or [f"file:{gguf_file}"]
 
 
-def _profile_model(env: dict, model: dict, *, model_id: str, gguf_file: str, force: bool = False) -> dict:
+# Fixed chat templates (WP5). An activation for an exact template match sets
+# both keys; every other activation removes them (the WP0.1 rule). The
+# override id is the record every runtime reads (the profile key, the native
+# macOS launch); the file path is what the llama-server container loads from
+# its read-only /chat-templates mount.
+_CHAT_TEMPLATE_OVERRIDE_KEY = "MODEL_CHAT_TEMPLATE_OVERRIDE"
+_CHAT_TEMPLATE_FILE_KEY = "LLAMA_ARG_CHAT_TEMPLATE_FILE"
+_CHAT_TEMPLATE_CONTAINER_DIR = "/chat-templates"
+
+
+def _env_text_with_changes(lines: list[str], updates: dict, remove_keys: set) -> str:
+    """``.env`` text from ``lines``: ``updates`` set in place (appended when new), ``remove_keys`` dropped."""
+    new_lines = []
+    seen = set()
+    for line in lines:
+        key = line.split("=", 1)[0] if "=" in line and not line.startswith("#") else None
+        if key and key in updates:
+            new_lines.append(_env_assignment(key, str(updates[key])))
+            seen.add(key)
+        elif key and key in remove_keys:
+            continue
+        else:
+            new_lines.append(line)
+    for key, val in updates.items():
+        if key not in seen:
+            new_lines.append(_env_assignment(key, str(val)))
+    return "\n".join(new_lines) + "\n"
+
+
+def _chat_template_root() -> Path:
+    return INSTALL_DIR / "config" / "chat-templates"
+
+
+def _chat_template_overrides() -> list[dict]:
+    """The curated override index; none when it is missing or malformed (logged)."""
+    if _model_profile_templates is None:
+        return []
+    try:
+        return _model_profile_templates.load_index(_chat_template_root())
+    except (OSError, UnicodeError, _model_profile_templates.TemplateIndexError) as exc:
+        logger.warning("Chat template index unavailable; no fixed template is offered: %s", exc)
+        return []
+
+
+def _active_chat_template_override(env: dict) -> str | None:
+    """The fixed template id the configured model runs with, if any."""
+    return str(env.get(_CHAT_TEMPLATE_OVERRIDE_KEY) or "").strip() or None
+
+
+def _chat_template_env_changes(entry: dict | None, *, container: bool) -> tuple[dict, set]:
+    """The .env updates and removals that run the next model with ``entry``, or with its own template."""
+    if entry is None:
+        return {}, {_CHAT_TEMPLATE_OVERRIDE_KEY, _CHAT_TEMPLATE_FILE_KEY}
+    updates = {_CHAT_TEMPLATE_OVERRIDE_KEY: entry["id"]}
+    if container:
+        updates[_CHAT_TEMPLATE_FILE_KEY] = f"{_CHAT_TEMPLATE_CONTAINER_DIR}/{entry['file']}"
+        return updates, set()
+    return updates, {_CHAT_TEMPLATE_FILE_KEY}
+
+
+def _chat_template_unsupported(env: dict, wsl_managed: dict) -> bool:
+    """Windows runtimes (the WSL Portal's llama-server.exe and the legacy Docker
+    Desktop launch) have no fixed-template input yet; they refuse an override."""
+    return (wsl_managed.get("managed") is True or _runtime_uses_router_transport(env)
+            or _is_windows_host_llama_server(env))
+
+
+def _chat_template_refusal(env: dict, wsl_managed: dict, entry: dict) -> dict | None:
+    """Why the next model cannot run with the fixed template ``entry``, or None.
+
+    Checked before an activation changes anything: the runtime must be able
+    to load a template file, and the vendored file must still have the
+    SHA-256 its index entry records.
+    """
+    if _chat_template_unsupported(env, wsl_managed):
+        return {"error": "The Windows model runtime on this machine cannot use a fixed chat template yet. "
+                         "Nothing was changed.",
+                "code": "chat_template_override_unsupported"}
+    if _model_profile_templates is None:
+        return {"error": "This installation is missing its chat template support files. Nothing was changed; "
+                         "run the installer again to restore them.",
+                "code": "chat_template_override_unavailable"}
+    try:
+        _model_profile_templates.template_path(_chat_template_root(), entry)
+    except (OSError, _model_profile_templates.TemplateIndexError) as exc:
+        return {"error": f"The fixed chat template cannot be used: {exc}. Nothing was changed; "
+                         "run the installer again to restore the template files.",
+                "code": "chat_template_override_unavailable"}
+    return None
+
+
+def _model_profile_doc() -> dict:
+    """The profile store, or an empty one when it cannot be read (logged)."""
+    try:
+        return _model_profile_store.load(_model_profile_path())
+    except _model_profile_store.StoreError as exc:
+        logger.warning("Model profile store unreadable: %s", exc)
+        return _model_profile_store.empty()
+
+
+def _chat_template_match(doc: dict, model_id: str, entries: list[dict]) -> dict | None:
+    """The index entry for exactly the template this model was last measured with, if any.
+
+    The evidence is the model's newest profile made with its own template:
+    its /props template hash and llama.cpp build must match an entry exactly
+    (PLAN D3: exact-hash matches only).
+    """
+    for profile in reversed(doc["profiles"]):
+        if profile["modelId"] == model_id and profile["key"]["templateSource"] == "embedded":
+            return _model_profile_templates.match(
+                entries, profile["key"]["templateSha256"], profile["key"]["buildInfo"])
+    return None
+
+
+def _chat_template_request(env: dict, model_id: str, override_id: str) -> tuple[dict | None, dict | None]:
+    """``(index entry, None)`` when the owner may run ``model_id`` with ``override_id``, else ``(None, refusal)``."""
+    if _model_profiles_mode(env) == "off":
+        return None, {"error": "Model profiles are turned off on this machine, so ODS cannot check which chat "
+                               "template this model needs. Nothing was changed.",
+                      "code": "profiles_off"}
+    if _model_profile_templates is None or _model_profile_store is None:
+        return None, {"error": "This installation is missing its chat template support files. Nothing was "
+                               "changed; run the installer again to restore them.",
+                      "code": "chat_template_override_unavailable"}
+    entries = _chat_template_overrides()
+    entry = _model_profile_templates.entry_by_id(entries, override_id)
+    if entry is None:
+        return None, {"error": f"ODS has no fixed chat template called {override_id}. Nothing was changed.",
+                      "code": "chat_template_override_unknown"}
+    matched = _chat_template_match(_model_profile_doc(), model_id, entries)
+    if matched is None or matched["id"] != entry["id"]:
+        return None, {"error": "This fixed chat template is not for this model: ODS uses one only when the "
+                               "model's own template is exactly the one it fixes. Nothing was changed.",
+                      "code": "chat_template_override_not_matched"}
+    return entry, None
+
+
+def _chat_template_offer(env: dict, doc: dict, model_id: str, profile: dict | None) -> dict | None:
+    """What the Models page may show about a fixed template for ``model_id`` (only when there is one)."""
+    if _model_profile_templates is None:
+        return None
+    entries = _chat_template_overrides()
+    active_id = _active_chat_template_override(env)
+    shown_source = ((profile or {}).get("key") or {}).get("templateSource")
+    last = doc.get("lastActivation") or {}
+    if active_id and shown_source == f"override:{active_id}" and last.get("modelId") == model_id:
+        entry = _model_profile_templates.entry_by_id(entries, active_id) or {}
+        return {"id": active_id, "reason": entry.get("reason", ""), "active": True, "supported": True}
+    entry = _chat_template_match(doc, model_id, entries)
+    if entry is None:
+        return None
+    return {"id": entry["id"], "reason": entry["reason"], "active": False,
+            "supported": not _chat_template_unsupported(env, {})}
+
+
+# The automatic retry (WP5.3) restarts the runtime the activation itself
+# staged; the Windows runtimes have no template input (see above).
+_TEMPLATE_RETRY_STRATEGIES = frozenset({"compose-llama", "container-llama", "macos-native-llama"})
+# A retry starts only with time for at least the chat probe (P1) left in the
+# one profiling budget (PLAN D2) that both variants share.
+_TEMPLATE_RETRY_MIN_BUDGET_SECONDS = 30.0
+
+
+def _template_retry_entry(env: dict, status: dict) -> dict | None:
+    """The fixed template to retry a first switch with, or None (PLAN D3, WP5.3).
+
+    Only with ODS_MODEL_PROFILES=enabled, only when the profile just used
+    shows the model failing the chat check (P1) with its own template, and
+    only when the index fixes exactly that template on this llama.cpp build.
+    """
+    if (_model_profiles_mode(env) != "enabled" or _model_profile_templates is None
+            or status.get("status") not in {"recorded", "cached"}
+            or (status.get("summary") or {}).get("chat") is not False):
+        return None
+    doc = _model_profile_doc()
+    profile = next((entry for entry in doc["profiles"] if entry["keyHash"] == status.get("keyHash")), None)
+    if profile is None or profile["key"]["templateSource"] != "embedded":
+        return None
+    entry = _model_profile_templates.match(
+        _chat_template_overrides(), profile["key"]["templateSha256"], profile["key"]["buildInfo"])
+    if entry is None:
+        return None
+    try:
+        _model_profile_templates.template_path(_chat_template_root(), entry)
+    except (OSError, _model_profile_templates.TemplateIndexError) as exc:
+        logger.warning("Fixed chat template %s cannot be tried: %s", entry["id"], exc)
+        return None
+    return entry
+
+
+def _native_chat_template_file(env: dict) -> Path | None:
+    """The fixed template a native launch passes as --chat-template-file, proven by its SHA-256."""
+    override_id = _active_chat_template_override(env)
+    if override_id is None:
+        return None
+    if _model_profile_templates is None:
+        raise RuntimeError("Fixed chat templates need the model_profile package; re-run the installer")
+    entry = _model_profile_templates.entry_by_id(_chat_template_overrides(), override_id)
+    if entry is None:
+        raise RuntimeError(f"The fixed chat template {override_id} is not in this installation's template index")
+    return _model_profile_templates.template_path(_chat_template_root(), entry)
+
+
+def _profile_model(env: dict, model: dict, *, model_id: str, gguf_file: str, force: bool = False,
+                   budget_seconds: float | None = None) -> dict:
     """Measure the loaded model once per GGUF x llama.cpp build x host (PLAN WP3).
 
     A stored profile with the same key is reused unless ``force``. Inside an
     activation this runs after the runtime proof and before any consumer is
     touched (D1), under one total budget (D2), shown as the "profiling" phase.
+    ``budget_seconds`` is what is left of that budget for a template retry.
     """
     if _model_profiles_mode(env) == "off" or _model_profile_probes is None or _model_profile_store is None:
         return {"status": "off"}
@@ -15595,13 +16052,16 @@ def _profile_model(env: dict, model: dict, *, model_id: str, gguf_file: str, for
         return {"status": "unavailable", "reason": f"props-http-{status}"}
     facts = _model_profile_probes.static_facts(props)
     projector_sha = str(model.get("mmproj_sha256") or "").strip().lower() if isinstance(model, dict) else ""
+    # A fixed template (WP5) gets its own profile: /props then reports that
+    # template, and the key records which index entry supplied it.
+    template_override = _active_chat_template_override(env)
     key = _model_profile_store.profile_key(
         gguf_sha256=_model_profile_digests(model, gguf_file),
         projector_sha256=projector_sha if projector_sha and facts["vision"] else None,
         build_info=facts["buildInfo"],
         backend=_model_profile_backend(env),
         template_sha256=facts["templateSha256"],
-        template_source="embedded",
+        template_source=f"override:{template_override}" if template_override else "embedded",
         suite=_model_profile.SUITE_VERSION,
         host=_model_profile_store.host_id(),
     )
@@ -15619,6 +16079,7 @@ def _profile_model(env: dict, model: dict, *, model_id: str, gguf_file: str, for
             lambda probe_path, probe_payload, probe_timeout: _runtime_exchange(
                 env, probe_path, payload=probe_payload, timeout=probe_timeout),
             props,
+            budget_seconds=_model_profile_probes.BUDGET_SECONDS if budget_seconds is None else budget_seconds,
         )
         profile = _model_profile_store.recorded_profile(
             key, model_id=model_id, gguf_file=gguf_file, result=result, product_version=ODS_VERSION)
@@ -15631,17 +16092,84 @@ def _profile_model(env: dict, model: dict, *, model_id: str, gguf_file: str, for
             "summary": profile["result"]["summary"]}
 
 
-def _profile_model_advisory(env: dict, model: dict, *, model_id: str, gguf_file: str, force: bool = False) -> dict:
+def _profile_model_advisory(env: dict, model: dict, *, model_id: str, gguf_file: str, force: bool = False,
+                            budget_seconds: float | None = None) -> dict:
     """``_profile_model`` that can never fail a switch (PLAN D4, the no-lockout rule).
 
     These are the I/O and response-shape failures a probe run can meet; each
     is logged with its trace and reported as the profile's status instead.
     """
     try:
-        return _profile_model(env, model, model_id=model_id, gguf_file=gguf_file, force=force)
+        return _profile_model(env, model, model_id=model_id, gguf_file=gguf_file, force=force,
+                              budget_seconds=budget_seconds)
     except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError) as exc:
         logger.exception("Model profile for %s did not complete", model_id)
         return {"status": "error", "reason": type(exc).__name__}
+
+
+_THINKING_CONTROLS = frozenset({"enable_thinking", "always", "none"})
+
+
+def _summary_traits(summary: object) -> dict:
+    """The measured answers consumers read from a profile summary (WP4).
+
+    ``None`` means not known. The static template rule calls any template that
+    mentions ``<think>`` "always"; when the thinking probe found no working
+    reasoning, the model is treated as having none.
+    """
+    summary = summary if isinstance(summary, dict) else {}
+    thinking = summary.get("thinking") if isinstance(summary.get("thinking"), dict) else {}
+    control = thinking.get("control") if thinking.get("control") in _THINKING_CONTROLS else None
+    if control == "always" and thinking.get("works") is False:
+        control = "none"
+    tools, vision = summary.get("tools"), summary.get("vision")
+    return {
+        "tools": tools if isinstance(tools, bool) else None,
+        "vision": vision if isinstance(vision, bool) else None,
+        "control": control,
+    }
+
+
+def _profile_traits(env: dict, profile_status: object) -> dict | None:
+    """This switch's measured traits, or None: consumers then keep today's values.
+
+    Only ``ODS_MODEL_PROFILES=enabled`` lets a profile change what consumers
+    are told (PLAN D5), and only a profile this switch recorded or reused.
+    """
+    if _model_profiles_mode(env) != "enabled" or not isinstance(profile_status, dict):
+        return None
+    if profile_status.get("status") not in {"recorded", "cached"}:
+        return None
+    return _summary_traits(profile_status.get("summary"))
+
+
+def _catalog_agent_verified(model: object) -> bool:
+    """Whether the curated catalog records this model as verified for agents."""
+    compatibility = model.get("app_compatibility") if isinstance(model, dict) else None
+    if not isinstance(compatibility, dict):
+        return False
+    return any(
+        isinstance(compatibility.get(key), dict) and compatibility[key].get("status") == "verified"
+        for key in ("agent_viability", "pixel_agent")
+    )
+
+
+def _profiled_capabilities(capabilities: object, traits: dict | None, model: dict) -> object:
+    """Switchboard capabilities with the measured profile applied (WP4.1).
+
+    An unknown tools result changes nothing. A catalog ``verified`` agent
+    verdict keeps a curated model agent-viable through one failed probe run,
+    so a flaky probe cannot break a curated default (batch C decision 1).
+    """
+    if traits is None or traits["tools"] is None or not isinstance(capabilities, dict):
+        return capabilities
+    return {
+        **capabilities,
+        "tools": traits["tools"],
+        "vision": traits["vision"] is True,
+        "agentViable": capabilities.get("agentViable") is True
+        and (traits["tools"] or _catalog_agent_verified(model)),
+    }
 
 
 def _runtime_health(env: dict) -> str:
@@ -19392,6 +19920,12 @@ def _launch_native_llama_server(env_path: Path, llama_bin: Path, llama_log: Path
         imported_projector = _model_projector_file(_library_record_for_gguf(gguf_file), model_path.parent)
         if imported_projector is not None:
             args.extend(["--mmproj", str(imported_projector)])
+    # A fixed chat template the activation chose for an exact template match
+    # (WP5), checked against its SHA-256 before every launch. The LaunchAgent
+    # plist keeps these arguments across restarts.
+    template_file = _native_chat_template_file(env)
+    if template_file is not None:
+        args.extend(["--chat-template-file", str(template_file)])
     # On macOS the default runtime gets its reasoning flags from the tuning
     # helper below (--reasoning on b9014, where --reasoning-format none put an
     # empty think block into every reply). Everything else passes the format.

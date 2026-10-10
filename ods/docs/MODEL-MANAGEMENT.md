@@ -238,9 +238,10 @@ still depends on the selected model and available context, but the route is not
 blocked. A requested context below 4K is rejected before activation writes
 files or restarts services. ODS gives Pixel an output ceiling of one quarter
 of the committed context, capped at 8192 tokens. Compaction keeps a
-context-scaled recent tail and uses extra headroom
-for 8K-31K profiles so recovery occurs before a dense tool transcript exhausts
-the model window.
+context-scaled recent tail and reserves room for that output ceiling. At 8K
+that leaves about 4.9K tokens for Portal's prompt and tools, which many tasks
+exceed; Portal then reports a context overflow. Load such a model with 16K or
+more where it supports it.
 
 ### What a model can do (model profiles)
 
@@ -262,8 +263,47 @@ The result appears under the running model on the Models page, with
 local model, and results are stored in `data/model-profiles.json`. A failed or
 unfinished check never blocks a switch.
 
-In this release profiles are advisory (`ODS_MODEL_PROFILES=observe` in `.env`,
-the default): apps keep working exactly as before. `off` skips the check.
+The tool check uses one small tool. Passing it shows that the model's tool
+calls work with this machine's llama.cpp; it does not promise that the model
+finishes every multi-step Portal task. Small models can still end some tasks
+without an answer.
+
+By default profiles are advisory (`ODS_MODEL_PROFILES=observe` in `.env`):
+apps keep working exactly as before. `off` skips the check.
+
+With `ODS_MODEL_PROFILES=enabled`, the apps also use what the check measured,
+from the next switch:
+
+- The model route records whether the model can call tools and read images.
+  A model that failed the tool check is not offered to agents as agent-ready,
+  unless the curated catalog has verified it for agents.
+- Portal shows one advisory above the conversation when the model is served
+  below 16K tokens of context, failed the tool check, has not been checked yet,
+  or always thinks before it answers. Chat always stays available.
+- ODS Talk notes when the model failed the tool check; Talk stays available.
+- Portal's agent is told whether the model reasons and reads images from the
+  check, instead of from the model's name and the catalog. Where Pixel is
+  managed without the Portal coordinator, its rendered config also follows
+  the measured way of turning thinking off.
+
+Turning `enabled` on, or **Check again**, updates the advisories and the
+agent-ready status at once; the route record and Portal's agent settings
+follow on the next switch.
+
+#### Fixed chat templates
+
+A few models carry a chat template that does not work well with llama.cpp,
+for example one that loses tool calls. ODS ships fixed templates from
+llama.cpp for templates it knows to be broken (`config/chat-templates/`,
+reviewed like code and checked by SHA-256). When the check shows that the
+running model's own template is exactly one of them, the Models page offers
+**Try a fixed template**: ODS restarts the model with the fixed template and
+checks it again. A later switch clears it. With `ODS_MODEL_PROFILES=enabled`,
+ODS tries the fixed template by itself when the model does not answer the
+first check: it keeps the fixed template if the model then answers, and
+otherwise returns to the model's own template, all within the same two-minute
+check. Templates are never downloaded while ODS runs. The Windows model
+runtimes cannot use a fixed template yet.
 
 ### Choosing the runtime context
 

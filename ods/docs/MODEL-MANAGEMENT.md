@@ -263,6 +263,11 @@ The result appears under the running model on the Models page, with
 local model, and results are stored in `data/model-profiles.json`. A failed or
 unfinished check never blocks a switch.
 
+The tool check uses one small tool. Passing it shows that the model's tool
+calls work with this machine's llama.cpp; it does not promise that the model
+finishes every multi-step Portal task. Small models can still end some tasks
+without an answer.
+
 By default profiles are advisory (`ODS_MODEL_PROFILES=observe` in `.env`):
 apps keep working exactly as before. `off` skips the check.
 

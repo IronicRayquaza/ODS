@@ -164,14 +164,22 @@ function Get-ODSPortalRuntimeOwnedLaunch($Task) {
     if ($shell.Count -ne 1 -or $action.Arguments -cne (Get-ODSPortalLauncherArguments) -or $action.WorkingDirectory -ine $runtimeDir) {
         throw 'The Portal model runtime task does not use the managed durable launcher; no process was stopped.'
     }
-    $plan = Read-ODSNativeLlamaJson (Join-Path $runtimeDir 'runtime.json')
+    $taskName = if ($Task.TaskName) { $Task.TaskName } else { Get-ODSPortalRuntimeTaskName }
+    $planPath = Join-Path $runtimeDir 'runtime.json'
+    # Uninstall keeps the task registered; deleting ODS files afterwards
+    # leaves it without the plan that proves which process it started.
+    if (-not (Test-Path -LiteralPath $planPath -PathType Leaf)) {
+        throw ("The Portal model runtime task $taskName has no saved runtime plan ($planPath), so ODS cannot prove " +
+            "which process it started; no process was stopped. If you deleted ODS files, remove the task from normal " +
+            "PowerShell, then rerun setup: Unregister-ScheduledTask -TaskPath '\' -TaskName '$taskName' -Confirm:`$false")
+    }
+    $plan = Read-ODSNativeLlamaJson $planPath
     if (-not [IO.Path]::IsPathRooted([string]$plan.ExecutablePath) -or
         [IO.Path]::GetFileName([string]$plan.ExecutablePath) -ine 'llama-server.exe' -or
         $plan.ModelsDir -ine (Get-ODSPortalModelsDir) -or
         ($plan.Port -isnot [int] -and $plan.Port -isnot [long])) {
         throw 'The saved Portal runtime plan does not match the managed llama-server; no process was stopped.'
     }
-    $taskName = if ($Task.TaskName) { $Task.TaskName } else { Get-ODSPortalRuntimeTaskName }
     return [pscustomobject]@{ TaskName = $taskName; Action = $action; ActionExe = $shell[0].Source
         ExecutablePath = [string]$plan.ExecutablePath; Port = [int]$plan.Port; Plan = $plan }
 }

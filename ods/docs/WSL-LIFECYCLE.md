@@ -105,7 +105,7 @@ For an already-managed installation missing its Windows sign-in task, repair
 registration without rerunning setup or starting WSL:
 
 ```powershell
-powershell -File .\installers\wsl-lifecycle.ps1 -Action enable-startup `
+powershell -ExecutionPolicy Bypass -File .\installers\wsl-lifecycle.ps1 -Action enable-startup `
   -Distro Ubuntu-24.04 -InstallRoot /home/owner/ods `
   -DockerDesktopPath 'C:\Program Files\Docker\Docker\Docker Desktop.exe'
 ```

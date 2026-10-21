@@ -224,7 +224,8 @@ function ConvertTo-ODSDotenvValue {
 # gated downloads (routers/models.py), the Intel Arc image override
 # (docker-compose.arc.yml), Open WebUI's speech settings (tts/README.md) and
 # whether apps use measured model profiles (ODS_MODEL_PROFILES,
-# docs/MODEL-MANAGEMENT.md).
+# docs/MODEL-MANAGEMENT.md) and the opt-out from the dashboard's GitHub
+# release check (DISABLE_UPDATE_CHECK, FAQ.md).
 # Same list as ODS_OWNER_ENV_KEYS in installers/lib/extension-env-carry.sh.
 # Installer-managed keys must not be listed: an old value would override the
 # installer's new choice.
@@ -238,6 +239,7 @@ $script:ODS_OWNER_ENV_KEYS = @(
     "AUDIO_TTS_OPENAI_API_BASE_URL"
     "AUDIO_TTS_OPENAI_API_KEY"
     "ODS_MODEL_PROFILES"
+    "DISABLE_UPDATE_CHECK"
 )
 
 function Get-ODSCarriedEnvLines {

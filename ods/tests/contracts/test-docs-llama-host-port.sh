@@ -6,7 +6,7 @@
 # docker-compose.base.yml publishes llama-server as
 # 127.0.0.1:${OLLAMA_PORT:-11434}:8080. Port 8080 exists only inside the
 # container (and on native macOS / Windows AMD hosts), so a host-side
-# `curl http://localhost:8080` or SDK base URL from these docs is refused.
+# curl to localhost port 8080, or an SDK base URL on that port, is refused.
 
 set -euo pipefail
 

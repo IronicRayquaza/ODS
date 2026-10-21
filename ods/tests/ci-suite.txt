@@ -3,6 +3,8 @@
 # .mjs with node --test, a .py file with test functions with pytest, other .py with python3.
 # Add new tests here, to an existing workflow step, or to ci-not-run.txt with a reason;
 # .github/scripts/list-unwired-tests.py --check fails CI for a test in none of them.
+
+tests/test-installer-dry-run-jq.sh
 tests/contracts/test-amd-llamacpp-contracts.sh
 tests/contracts/test-host-native-llm-contracts.sh
 tests/contracts/test-host-native-llm-cpu-fallback.sh
@@ -47,6 +49,7 @@ tests/test-cli-preset-restore-user-extensions.sh
 tests/test-cli-prompts-noninteractive.sh
 tests/test-cli-status-docker-error.sh
 tests/test-cli-status-gpu-backend.sh
+tests/test-cli-status-json-state.sh
 tests/test-cli-status-optional-webui.sh
 tests/test-cli-stt-env.py
 tests/test-cli-update-verification.sh
@@ -55,6 +58,7 @@ tests/test-compose-failure-evidence.sh
 tests/test-compose-image-discovery.sh
 tests/test-custom-menu-agent-flags.sh
 tests/test-dashboard-approval-terminal-proxy.py
+tests/test-dashboard-extensions-lock.sh
 tests/test-dashboard-image-upload.py
 tests/test-disk-check-install-dir.sh
 tests/test-disk-space-preflight.sh
@@ -180,6 +184,7 @@ tests/test-preflight.sh
 tests/test-preset-compatibility.sh
 tests/test-preset-diff.sh
 tests/test-preset-import-export.sh
+tests/test-preset-import-transaction.sh
 tests/test-preview-inspection.mjs
 tests/test-resolve-compose-nondict-service.sh
 tests/test-resolve-compose-symlinked-install.sh
@@ -290,3 +295,4 @@ tests/test-update-backup-publication.py
 tests/test-update-changelog-fallback.py
 tests/test-gpu-reassign-preflight.sh
 tests/test_uninstall_validate_install_dir.py
+tests/test-preset-completion.sh

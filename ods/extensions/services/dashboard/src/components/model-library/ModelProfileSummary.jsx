@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState} from 'react'
+import {useCallback, useEffect, useRef, useState} from 'react'
 import {Loader2, RefreshCw, Wrench} from 'lucide-react'
 import HelpLink from '../HelpLink'
 
@@ -7,6 +7,9 @@ const THINKING_TEXT = {
   always: 'Always thinks before it answers',
   none: 'Answers without a thinking step',
 }
+
+// The API allows 180 seconds for the host probe; include response transit.
+const RECHECK_TIMEOUT_MS = 195000
 
 async function readJson(response) {
   try { return await response.json() } catch { return null }
@@ -23,10 +26,20 @@ function chips(summary, templateOverride) {
   if (templateOverride?.active) list.push({tone: 'neutral', text: 'Uses a fixed chat template'})
   if (summary.chat === true) list.push({tone: 'ok', text: 'Answers chat'})
   if (summary.chat === false) list.push({tone: 'warn', text: 'Did not answer the chat check'})
-  if (summary.tools === true) list.push({tone: 'ok', text: 'Calls tools (Pixel and agents)'})
-  if (summary.tools === false) list.push({tone: 'warn', text: 'No working tool calls: chat only for agents'})
+  if (summary.tools === true) list.push({tone: 'ok', text: 'Tool-call check passed'})
+  if (summary.tools === false) list.push({tone: 'warn', text: 'Tool-call check did not pass'})
+  list.push(summary.toolsStreamed === true
+    ? {tone: 'ok', text: 'Streaming tool check passed'}
+    : summary.toolsStreamed === false
+      ? {tone: 'warn', text: 'Streaming tool check did not pass'}
+      : {tone: 'neutral', text: 'Streaming tool check not verified'})
   const thinking = THINKING_TEXT[summary.thinking?.control]
-  if (thinking) list.push({tone: 'neutral', text: thinking})
+  if (thinking) {
+    const works = summary.thinking?.works
+    list.push(works === true
+      ? {tone: 'neutral', text: thinking}
+      : {tone: works === false ? 'warn' : 'neutral', text: works === false ? 'Thinking check did not pass' : 'Thinking not verified'})
+  }
   if (summary.vision === true) list.push({tone: 'ok', text: 'Sees images'})
   if (summary.vision === false) list.push({tone: 'warn', text: 'Image input did not work'})
   if (typeof summary.tokensPerSecond === 'number') list.push({tone: 'neutral', text: `About ${Math.round(summary.tokensPerSecond)} tokens/s`})
@@ -40,43 +53,120 @@ const TONES = {
 }
 
 /** Advisory: what the running model was measured to do on this machine. */
-export default function ModelProfileSummary({modelId}) {
+export default function ModelProfileSummary({modelId, lifecycleActive = false}) {
+  return <ProfileForModel key={modelId} modelId={modelId} lifecycleActive={lifecycleActive}/>
+}
+
+function ProfileForModel({modelId, lifecycleActive}) {
   const [data, setData] = useState(null)
   const [failed, setFailed] = useState(false)
   const [rechecking, setRechecking] = useState(false)
   const [applying, setApplying] = useState(false)
   const [notice, setNotice] = useState('')
+  const readScope = useRef({active: false, serial: 0, controller: null})
+  const recheckRequest = useRef(null)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async ({preserveOnError = false} = {}) => {
+    const scope = readScope.current
+    if (!scope.active) return
+    scope.controller?.abort()
+    const controller = new AbortController()
+    scope.controller = controller
+    const serial = ++scope.serial
+    const current = () => scope.active && scope.serial === serial
+    let timer
     try {
-      const response = await fetch(`/api/models/${encodeURIComponent(modelId)}/profile`, {cache: 'no-store'})
-      const body = await readJson(response)
-      if (!response.ok || !body || typeof body.mode !== 'string') throw new Error('unavailable')
+      const body = await Promise.race([
+        (async () => {
+          const response = await fetch(`/api/models/${encodeURIComponent(modelId)}/profile`, {cache: 'no-store', signal: controller.signal})
+          const value = await readJson(response)
+          if (!response.ok || !value || typeof value.mode !== 'string' || value.modelId !== modelId
+            || (value.profile?.modelId && value.profile.modelId !== modelId)) throw new Error('unavailable')
+          return value
+        })(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => { controller.abort(); reject(new Error('unavailable')) }, 15000)
+        }),
+      ])
+      if (!current()) return
       setData(body)
       setFailed(false)
+      return true
     } catch {
-      setFailed(true)
+      // Lifecycle transitions can cancel or supersede this read. Only a
+      // failed current read reports failure to the recheck action.
+      if (!current()) return
+      if (!preserveOnError) setFailed(true)
+      return false
+    } finally {
+      clearTimeout(timer)
+      if (scope.controller === controller) scope.controller = null
     }
   }, [modelId])
 
   useEffect(() => {
-    if (modelId) load()
-  }, [modelId, load])
+    const scope = readScope.current
+    scope.active = Boolean(modelId) && !lifecycleActive
+    // First activation records its profile before the lifecycle settles.
+    // Re-read that result, never start a new probe battery automatically.
+    if (scope.active) load()
+    return () => {
+      scope.active = false
+      scope.serial++
+      scope.controller?.abort()
+    }
+  }, [modelId, lifecycleActive, load])
+
+  useEffect(() => () => {
+    const request = recheckRequest.current
+    recheckRequest.current = null
+    clearTimeout(request?.timer)
+    request?.controller.abort()
+  }, [])
 
   const recheck = async () => {
+    if (recheckRequest.current) return
+    const request = {controller: new AbortController(), timer: null}
+    recheckRequest.current = request
     setRechecking(true)
     setNotice('')
     try {
-      const response = await fetch(`/api/models/${encodeURIComponent(modelId)}/profile/recheck`, {method: 'POST'})
-      const body = await readJson(response)
+      const {response, body} = await Promise.race([
+        (async () => {
+          const response = await fetch(`/api/models/${encodeURIComponent(modelId)}/profile/recheck`, {
+            method: 'POST', signal: request.controller.signal,
+          })
+          return {response, body: await readJson(response)}
+        })(),
+        new Promise((_, reject) => {
+          request.timer = setTimeout(() => {
+            request.controller.abort()
+            reject(new Error('Recheck response unavailable'))
+          }, RECHECK_TIMEOUT_MS)
+        }),
+      ])
+      if (recheckRequest.current !== request) return
       if (!response.ok) {
         setNotice(errorText(body, 'The check could not run. Try again in a minute.'))
+      } else if (!body) {
+        throw new Error('Recheck response unavailable')
       } else if (body?.status === 'error') {
         setNotice('The check did not finish. Chat still works; try again later.')
       }
-      await load()
+    } catch {
+      if (recheckRequest.current === request) {
+        setNotice('The check did not return a result. The host may still be checking. Check the model status before trying again.')
+      }
     } finally {
-      setRechecking(false)
+      clearTimeout(request.timer)
+      if (recheckRequest.current === request) {
+        const refreshed = await load({preserveOnError: true})
+        if (recheckRequest.current === request) {
+          if (refreshed === false) setNotice(previous => previous || 'The saved check could not refresh. Previous results are still shown; reload the page to read the latest result.')
+          recheckRequest.current = null
+          setRechecking(false)
+        }
+      }
     }
   }
 
@@ -102,7 +192,7 @@ export default function ModelProfileSummary({modelId}) {
     }
   }
 
-  if (!modelId || failed || !data || data.mode === 'off') return null
+  if (!modelId || lifecycleActive || failed || !data || data.mode === 'off') return null
   const recheckButton = (
     <button
       type="button"
@@ -120,7 +210,7 @@ export default function ModelProfileSummary({modelId}) {
     // Portal advisory sends the owner here to press Check again.
     return (
       <div className="mt-2 space-y-1.5 text-[11px] text-theme-text-muted">
-        <p>Not checked yet: ODS checks what a model can do the first time it runs on this machine.</p>
+        <p>No saved capability check is available for this model on this machine. Choose Check again to run one.</p>
         {recheckButton}
         {notice && <p role="status" className="text-amber-200">{notice}</p>}
       </div>

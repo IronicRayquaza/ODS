@@ -140,11 +140,15 @@ function Remove-ODSPortalShortcut {
     .SYNOPSIS
         Delete each recorded ODS shortcut that is still what setup wrote. An
         edited, replaced or missing shortcut, or a record for any other file,
-        is left alone. Returns the removed paths and writes nothing else: the
-        WSL lifecycle controller's output is JSON.
+        is left alone. A shortcut that cannot be deleted (for example, a real
+        ODS.lnk held open with FileShare.Read) is reported in the returned
+        cleanupFailures list and the remaining shortcuts are still processed.
+        Returns an object with removed paths and cleanupFailures; writes
+        nothing else: the WSL lifecycle controller's output is JSON.
     #>
     param([object[]]$Records)
     $removed = @()
+    $cleanupFailures = @()
     $shell = $null
     try {
         foreach ($record in $Records) {
@@ -152,20 +156,30 @@ function Remove-ODSPortalShortcut {
             $name = Split-Path -Leaf $path
             if (-not [IO.Path]::IsPathRooted($path) -or $name -cnotin @('ODS.lnk', 'ODS Portal.url') -or
                 -not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
-            if ($name -ceq 'ODS.lnk') {
-                if (-not $shell) { $shell = New-Object -ComObject WScript.Shell }
-                $link = $shell.CreateShortcut($path)
-                $unchanged = ([string]$link.TargetPath -ceq [string]$record.target) -and ([string]$link.Arguments -ceq [string]$record.arguments)
-            } else {
-                $unchanged = (Get-ODSInternetShortcutUrl $path) -ceq [string]$record.url
-            }
-            if ($unchanged) {
-                Remove-Item -LiteralPath $path -Force
-                $removed += $path
+            try {
+                if ($name -ceq 'ODS.lnk') {
+                    if (-not $shell) { $shell = New-Object -ComObject WScript.Shell }
+                    $link = $shell.CreateShortcut($path)
+                    $unchanged = ([string]$link.TargetPath -ceq [string]$record.target) -and ([string]$link.Arguments -ceq [string]$record.arguments)
+                } else {
+                    $unchanged = (Get-ODSInternetShortcutUrl $path) -ceq [string]$record.url
+                }
+                if ($unchanged) {
+                    Remove-Item -LiteralPath $path -Force -ErrorAction Stop
+                    $removed += $path
+                }
+            } catch [IO.IOException], [UnauthorizedAccessException] {
+                # Optional shortcut cleanup must not abort verified runtime
+                # retirement. Keep the custody record so a later run can retry.
+                $cleanupFailures += [ordered]@{
+                    path = $path
+                    error = ([string]$_.Exception.Message).Substring(0, [Math]::Min(512, ([string]$_.Exception.Message).Length))
+                    hresult = ('0x{0:X8}' -f $_.Exception.HResult)
+                }
             }
         }
     } finally {
         if ($shell) { $null = [Runtime.InteropServices.Marshal]::ReleaseComObject($shell) }
     }
-    return $removed
+    return [pscustomobject]@{ removed = $removed; cleanupFailures = $cleanupFailures }
 }

@@ -551,13 +551,35 @@ function Get-ODSWslLifetimeForRetirement($Identity) {
 function Remove-ODSWslPortalShortcuts($Identity) {
     # Setup records the Desktop and Start-menu shortcuts it made (windows.ps1);
     # uninstall retirement removes those that are still as setup wrote them.
+    # A shortcut that cannot be deleted (for example, a real ODS.lnk held open
+    # with FileShare.Read) is reported as a cleanup failure and the custody
+    # record is preserved so a later run can retry. Ownership, ACL, manifest
+    # and JSON validation failures still throw.
     $record=Join-Path $Identity.directory 'shortcuts.json'
     $library=Join-Path $PSScriptRoot 'windows/lib/app-shortcut.ps1'
-    if (-not (Test-Path -LiteralPath $record) -or -not (Test-Path -LiteralPath $library -PathType Leaf)) { return @() }
+    if (-not (Test-Path -LiteralPath $record) -or -not (Test-Path -LiteralPath $library -PathType Leaf)) {
+        return [pscustomobject]@{ removed = @(); cleanupFailures = @() }
+    }
     . $library
-    $removed=@(Remove-ODSPortalShortcut @((Read-ODSWslJson $record).shortcuts))
-    Remove-Item -LiteralPath $record -Force
-    $removed
+    $result=Remove-ODSPortalShortcut @((Read-ODSWslJson $record).shortcuts)
+    $cleanupFailures=@($result.cleanupFailures)
+    if ($cleanupFailures.Count -eq 0) {
+        # The record is optional cleanup once every shortcut it named was removed
+        # or intentionally preserved. A held-open or otherwise undeletable record must not abort
+        # verified runtime retirement, but it must be reported so the caller
+        # can warn and a later run can retry. Validation failures above still
+        # throw; only this post-validation removal is best-effort.
+        try {
+            Remove-Item -LiteralPath $record -Force -ErrorAction Stop
+        } catch [IO.IOException], [UnauthorizedAccessException] {
+            $cleanupFailures += [ordered]@{
+                path = $record
+                error = ([string]$_.Exception.Message).Substring(0, [Math]::Min(512, ([string]$_.Exception.Message).Length))
+                hresult = ('0x{0:X8}' -f $_.Exception.HResult)
+            }
+        }
+    }
+    [pscustomobject]@{ removed = @($result.removed); cleanupFailures = $cleanupFailures }
 }
 
 function Disable-ODSWslStartup($Identity,[switch]$ValidateOnly,[switch]$RetireRelay) {
@@ -565,6 +587,7 @@ function Disable-ODSWslStartup($Identity,[switch]$ValidateOnly,[switch]$RetireRe
     $relayTask=$null
     $lifetimeTask=$null
     $shortcuts=@()
+    $shortcutCleanupFailures=@()
     if ($RetireRelay) {
         $relayTask=Get-ScheduledTask -TaskName ($Identity.taskName + '-Relay') -ErrorAction SilentlyContinue
         $lifetimeTask=Get-ScheduledTask -TaskName $Identity.taskName -ErrorAction SilentlyContinue
@@ -605,9 +628,11 @@ function Disable-ODSWslStartup($Identity,[switch]$ValidateOnly,[switch]$RetireRe
             $lifetimeTask=Get-ODSWslLifetimeForRetirement $Identity
             Stop-ODSWslAgentRelay $Identity
             if ($lifetimeTask) { $null=Stop-ODSWslLifetime $Identity }
-            $shortcuts=@(Remove-ODSWslPortalShortcuts $Identity)
+            $shortcutResult=Remove-ODSWslPortalShortcuts $Identity
+            $shortcuts=@($shortcutResult.removed)
+            $shortcutCleanupFailures=@($shortcutResult.cleanupFailures)
         }
-        [pscustomobject]@{scope='wsl-startup';state='disabled';identity=$Identity;relayRetirement=$(if ($RetireRelay) { 'stopped' } else { 'not-requested' });shortcuts=$shortcuts}
+        [pscustomobject]@{scope='wsl-startup';state='disabled';identity=$Identity;relayRetirement=$(if ($RetireRelay) { 'stopped' } else { 'not-requested' });shortcuts=$shortcuts;shortcutCleanupFailures=$shortcutCleanupFailures}
     } finally { if ($lock) { $lock.Dispose() } }
 }
 

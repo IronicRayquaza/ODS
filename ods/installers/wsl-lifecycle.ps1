@@ -548,10 +548,23 @@ function Get-ODSWslLifetimeForRetirement($Identity) {
     $task
 }
 
+function Remove-ODSWslPortalShortcuts($Identity) {
+    # Setup records the Desktop and Start-menu shortcuts it made (windows.ps1);
+    # uninstall retirement removes those that are still as setup wrote them.
+    $record=Join-Path $Identity.directory 'shortcuts.json'
+    $library=Join-Path $PSScriptRoot 'windows/lib/app-shortcut.ps1'
+    if (-not (Test-Path -LiteralPath $record) -or -not (Test-Path -LiteralPath $library -PathType Leaf)) { return @() }
+    . $library
+    $removed=@(Remove-ODSPortalShortcut @((Read-ODSWslJson $record).shortcuts))
+    Remove-Item -LiteralPath $record -Force
+    $removed
+}
+
 function Disable-ODSWslStartup($Identity,[switch]$ValidateOnly,[switch]$RetireRelay) {
     $task=Get-ScheduledTask -TaskName ($Identity.taskName + '-Startup') -ErrorAction SilentlyContinue
     $relayTask=$null
     $lifetimeTask=$null
+    $shortcuts=@()
     if ($RetireRelay) {
         $relayTask=Get-ScheduledTask -TaskName ($Identity.taskName + '-Relay') -ErrorAction SilentlyContinue
         $lifetimeTask=Get-ScheduledTask -TaskName $Identity.taskName -ErrorAction SilentlyContinue
@@ -592,8 +605,9 @@ function Disable-ODSWslStartup($Identity,[switch]$ValidateOnly,[switch]$RetireRe
             $lifetimeTask=Get-ODSWslLifetimeForRetirement $Identity
             Stop-ODSWslAgentRelay $Identity
             if ($lifetimeTask) { $null=Stop-ODSWslLifetime $Identity }
+            $shortcuts=@(Remove-ODSWslPortalShortcuts $Identity)
         }
-        [pscustomobject]@{scope='wsl-startup';state='disabled';identity=$Identity;relayRetirement=$(if ($RetireRelay) { 'stopped' } else { 'not-requested' })}
+        [pscustomobject]@{scope='wsl-startup';state='disabled';identity=$Identity;relayRetirement=$(if ($RetireRelay) { 'stopped' } else { 'not-requested' });shortcuts=$shortcuts}
     } finally { if ($lock) { $lock.Dispose() } }
 }
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import AsyncIterator, Literal, Optional
 
 import httpx
@@ -31,8 +32,14 @@ _PROBE_TIMEOUT = httpx.Timeout(5.0)
 # Prompt processing on a CPU can be silent for minutes; only a stall between
 # bytes ends the stream, never a total deadline.
 _STREAM_TIMEOUT = httpx.Timeout(connect=5.0, read=600.0, write=30.0, pool=5.0)
+# This app and the model's task both start at sign-in, and the model's
+# launcher checks its files before llama-server even listens. Until then a
+# silent model is starting, not broken.
+_STARTED_AT = time.monotonic()
+_START_GRACE_SECONDS = 180
 
 _MESSAGES = {
+    "model_starting": "The model is starting. This can take a few minutes after you sign in.",
     "model_loading": "The model is still loading. Try again in a moment.",
     "model_stopped": "The local model is stopped. Start ODS from the Start menu to chat again.",
     "model_failed": "The local model could not start. Open ODS setup to repair it.",
@@ -82,6 +89,8 @@ def _offline_state(llm: native_llm.NativeLlm) -> str:
         return "model_stopped"
     if ready and ready.get("Error"):
         return "model_failed"
+    if time.monotonic() - _STARTED_AT < _START_GRACE_SECONDS:
+        return "model_starting"
     return "model_unavailable"
 
 

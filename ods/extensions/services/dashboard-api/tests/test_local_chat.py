@@ -6,6 +6,7 @@ router uses and records every request it receives.
 
 import json
 import math
+import time
 
 import httpx
 import pytest
@@ -68,6 +69,8 @@ def setup(tmp_path, monkeypatch):
     llm = NativeLlm("http://127.0.0.1:18080", tmp_path)
     llm.key_file.write_text(SECRET, encoding="utf-8")
     monkeypatch.setattr(native_llm, "configured", lambda: llm)
+    # Long past sign-in unless a test says otherwise.
+    monkeypatch.setattr(local_chat, "_STARTED_AT", time.monotonic() - 3600)
     state = {}
 
     def install(fake):
@@ -166,6 +169,26 @@ def test_a_stopped_or_failed_runtime_is_explained(setup):
     (runtime / "intent.json").write_text('{"State":"running"}', encoding="utf-8")
     (runtime / "ready.json").write_text('{"Error":"Vulkan device lost","Code":"device_lost"}', encoding="utf-8")
     assert client.get("/api/local-chat/status", headers=AUTH).json()["state"] == "model_failed"
+
+
+def test_a_silent_model_right_after_sign_in_is_starting_not_broken(setup, monkeypatch):
+    install, runtime = setup
+    client, _ = install(FakeLlama(offline=True))
+    monkeypatch.setattr(local_chat, "_STARTED_AT", time.monotonic() - 20)
+    status = client.get("/api/local-chat/status", headers=AUTH).json()
+    assert status == {"state": "model_starting", "message": local_chat._MESSAGES["model_starting"]}
+    response = client.post("/api/local-chat/stream", headers=AUTH, json={"messages": [{"role": "user", "content": "hi"}]})
+    assert response.status_code == 503 and response.json()["error"]["code"] == "model_starting"
+    # A recorded stop or failure is still said at once.
+    (runtime / "ready.json").write_text('{"Error":"Vulkan device lost"}', encoding="utf-8")
+    assert client.get("/api/local-chat/status", headers=AUTH).json()["state"] == "model_failed"
+    (runtime / "intent.json").write_text('{"State":"stopped"}', encoding="utf-8")
+    assert client.get("/api/local-chat/status", headers=AUTH).json()["state"] == "model_stopped"
+    # After the start window, silence means the model is not answering.
+    (runtime / "ready.json").unlink()
+    (runtime / "intent.json").write_text('{"State":"running"}', encoding="utf-8")
+    monkeypatch.setattr(local_chat, "_STARTED_AT", time.monotonic() - local_chat._START_GRACE_SECONDS - 1)
+    assert client.get("/api/local-chat/status", headers=AUTH).json()["state"] == "model_unavailable"
 
 
 def test_ready_status_reports_model_and_context(setup):

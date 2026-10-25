@@ -259,3 +259,6 @@ try {
     if (Test-Path -LiteralPath $fixture) { Remove-Item -LiteralPath $fixture -Recurse -Force }
 }
 Microsoft.PowerShell.Utility\Write-Host "All $script:checks Windows Desktop runtime checks passed."
+# The 32-bit check leaves $LASTEXITCODE at 1 (setup refusing, as expected);
+# every check above throws on failure, so reaching here is a pass.
+exit 0

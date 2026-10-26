@@ -144,7 +144,10 @@ class QualifiedArgumentTests(unittest.TestCase):
         # --reasoning left at auto) logged "thinking = 1" and returned a reasoning
         # trace as content; with --reasoning off it still put "<think>\n\n</think>\n\n"
         # in every content. --reasoning off with the default format matched b8210.
-        for value, expected in (("", "off"), ("off", "off"), ('"on"', "on"), ("auto", "auto")):
+        # Modes are case-insensitive, as the host agent reads them; llama-server
+        # only accepts lowercase.
+        for value, expected in (("", "off"), ("off", "off"), ('"on"', "on"), ("auto", "auto"),
+                                ("OFF", "off"), ('"On"', "on"), ("AUTO", "auto")):
             with self.subTest(value=value):
                 result, _ = run_with_help(HELP["b9014"], EMPTY, defaults=True, spec_default="none",
                                           reasoning=value, reasoning_format="none")
@@ -345,6 +348,13 @@ for arg in ${MACOS_NATIVE_CHECKPOINT_ARGS[@]+"${MACOS_NATIVE_CHECKPOINT_ARGS[@]}
                 argv = self.run_bash(script)
                 self.assertEqual(argv[argv.index("--model") + 1], str(self.install / "data/models/Qwen3.5-9B-Q4_K_M.gguf"))
                 self.assert_argv(argv, release)
+        # An uppercase mode used to become --reasoning-format OFF, which
+        # llama-server rejects at startup.
+        (self.install / ".env").write_text(self.ENV.replace("LLAMA_REASONING=off", "LLAMA_REASONING=OFF"))
+        for release in ("b8210", "b9014"):
+            with self.subTest(release=release, reasoning="OFF"):
+                self.use_runtime(release)
+                self.assert_argv(self.run_bash(script), release)
         (self.install / ".env").write_text(self.ENV + "LLAMA_SPEC_TYPE=none\n")
         self.assert_argv(self.run_bash(script), "b9014", spec=False)
 
@@ -366,6 +376,11 @@ for arg in ${MACOS_NATIVE_CHECKPOINT_ARGS[@]+"${MACOS_NATIVE_CHECKPOINT_ARGS[@]}
                 argv = self.run_bash(script)
                 self.assertEqual(argv[argv.index("--model") + 1], str(self.install / "data/models/model.gguf"))
                 self.assert_argv(argv, release)
+        (self.install / ".env").write_text(self.ENV.replace("LLAMA_REASONING=off", "LLAMA_REASONING=Off"))
+        for release in ("b8210", "b9014"):
+            with self.subTest(release=release, reasoning="Off"):
+                self.use_runtime(release)
+                self.assert_argv(self.run_bash(script), release)
 
     def test_bootstrap_full_model_swap(self):
         source = (ROOT / "scripts/bootstrap-upgrade.sh").read_text(encoding="utf-8")

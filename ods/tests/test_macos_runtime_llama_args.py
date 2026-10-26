@@ -401,6 +401,51 @@ for arg in ${MACOS_NATIVE_CHECKPOINT_ARGS[@]+"${MACOS_NATIVE_CHECKPOINT_ARGS[@]}
         (self.install / ".env").write_text("LLAMA_ARG_SPEC_DRAFT_N_MAX=0\n")
         self.assertEqual(self.run_bash(script), ["--reasoning-format", "none"])
 
+    def test_bootstrap_reasoning_case_survives_fallback_and_rollback(self):
+        source = (ROOT / "scripts/bootstrap-upgrade.sh").read_text(encoding="utf-8")
+        block = section(source, "            # Read reasoning mode from .env", "            # Capture old model path")
+        rollback = section(source, '                if [[ -n "${_old_model_path:-}"',
+                           '                    _rollback_pid=')
+        rollback = rollback[rollback.index('                    bash "'):]
+        script = (
+            "set -uo pipefail\n"
+            'ENV_FILE="$INSTALL/.env"; INSTALL_DIR="$INSTALL"; LLAMA_SERVER_BIN="$RUNTIME"\n'
+            + self.STUBS +
+            "log() { echo \"$*\" >&2; }\n"
+            'read_env_value() { grep -E "^$1=" "$ENV_FILE" | head -1 | cut -d= -f2-; }\n'
+            + block
+        )
+        forward = '\nfor arg in ${_llama_tuning_args[@]+"${_llama_tuning_args[@]}"}; do printf "%s\\0" "$arg"; done\n'
+        rollback_setup = (
+            '\nLLAMA_SERVER_PID_FILE="$INSTALL/data/llama.pid"\n'
+            '_old_model_path="$INSTALL/data/models/old.gguf"; _bind=127.0.0.1\n'
+            '_native_port=9999; _ctx_size=4096; _gpu_layers=0\n'
+        )
+        for raw, mode, fmt in (("OFF", "off", "none"), ("Off", "off", "none"),
+                               ("ON", "on", "deepseek"), ("AUTO", "auto", "auto"),
+                               ("deepseek", "deepseek", "deepseek"),
+                               ("DeepSeek", "DeepSeek", "DeepSeek")):
+            for release in ("b8210", "b9014"):
+                with self.subTest(reasoning=raw, release=release):
+                    self.use_runtime(release)
+                    (self.install / ".env").write_text(f"LLAMA_REASONING={raw}\n")
+                    argv = self.run_bash(script + forward)
+                    if release == "b9014" and mode in {"off", "on", "auto"}:
+                        self.assertEqual(argv[argv.index("--reasoning") + 1], mode)
+                        self.assertNotIn("--reasoning-format", argv)
+                    else:
+                        self.assertEqual(argv[argv.index("--reasoning-format") + 1], fmt)
+                        self.assertNotIn("--reasoning", argv)
+                    # Exercise the real rollback launch through the existing
+                    # service stub; forward argv alone cannot prove this path.
+                    argv = self.run_bash(script + rollback_setup + rollback)
+                    self.assertEqual(argv[argv.index("--reasoning-format") + 1], fmt)
+                    self.assertNotIn("--reasoning", argv)
+                    # Refused tuning keeps the mapped format when qualification
+                    # falls back, rather than forwarding the raw mode spelling.
+                    (self.install / ".env").write_text(f"LLAMA_REASONING={raw}\nLLAMA_ARG_SPEC_DRAFT_N_MAX=0\n")
+                    self.assertEqual(self.run_bash(script + forward), ["--reasoning-format", fmt])
+
 
 class LauncherContractTests(unittest.TestCase):
     def test_pinned_release_is_checksummed_and_has_ngram_mod(self):

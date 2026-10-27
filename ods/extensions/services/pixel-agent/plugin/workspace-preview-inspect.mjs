@@ -36,6 +36,21 @@ export const MAX_PAGE_ERRORS = 1000;
 const MAX_PAGE_ERROR_MESSAGES = 3, MAX_PAGE_ERROR_CHARS = 200;
 const roles = new Set(['button','link','checkbox','radio','textbox','combobox','heading','tab','switch']);
 const exact = (v,keys) => v && typeof v==='object' && !Array.isArray(v) && Object.keys(v).sort().join(',')===[...keys].sort().join(',');
+// The capsule describes rendered [hidden] elements by computed shape only;
+// its tag list matches DIAGNOSTIC in host/preview_inspection_capsule.py.
+const HIDDEN_SHAPE_TAGS = new Set(['a','article','aside','button','canvas','dialog','div','fieldset','figure','footer','form','header','iframe','img','input','label','li','main','menu','nav','ol','p','section','select','span','table','textarea','ul','video','element']);
+const HIDDEN_SHAPE_POSITIONS = new Set(['static','relative','absolute','fixed','sticky']);
+const hiddenShapeValid = shape => exact(shape,['tag','position','zIndex','viewportPercent']) &&
+  HIDDEN_SHAPE_TAGS.has(shape.tag) && HIDDEN_SHAPE_POSITIONS.has(shape.position) &&
+  (shape.zIndex===null || Number.isSafeInteger(shape.zIndex) && Math.abs(shape.zIndex)<=2147483647) &&
+  Number.isInteger(shape.viewportPercent) && shape.viewportPercent>=0 && shape.viewportPercent<=100;
+function diagnosticsValid(diagnostics) {
+  const counts=['renderedHiddenAttributeCount','hiddenUntilFoundCount'], shapes=diagnostics?.renderedHidden;
+  return exact(diagnostics,[...counts,...(shapes===undefined?[]:['renderedHidden'])]) &&
+    counts.every(key=>Number.isSafeInteger(diagnostics[key]) && diagnostics[key]>=0 && diagnostics[key]<=100000) &&
+    (shapes===undefined || Array.isArray(shapes) && shapes.length>=1 && shapes.length<=3 &&
+      shapes.length<=diagnostics.renderedHiddenAttributeCount && shapes.every(hiddenShapeValid));
+}
 const printable = (v,max) => typeof v==='string' && Array.from(v).length>0 && Array.from(v).length<=max && Buffer.byteLength(v)<=max*4 && !/[\p{C}\u2028\u2029]/u.test(v);
 const optionValue = v => v === '' || printable(v,256);
 const selectionPlan = request => request.steps.some(s=>s.action==='select-option');
@@ -143,6 +158,22 @@ function unchangedPaintNote(result) {
   }
   return '';
 }
+// The capsule counts elements that carry the hidden attribute yet are visibly
+// rendered, because an author style such as display: flex overrides it. A
+// generated memory game shipped its win overlay that way: it covered the board
+// from load, every click landed on it, and the agent blamed the inspector
+// (Workstation06, 2026-10-27).
+function renderedHiddenNote(result) {
+  const count = result.diagnostics?.renderedHiddenAttributeCount ?? 0;
+  if (count < 1) return '';
+  const shapes = (result.diagnostics.renderedHidden ?? []).map(shape =>
+    `${shape.tag === 'element' ? 'an element' : `a <${shape.tag}>`}${shape.position === 'static' ? '' : ` with position: ${shape.position}`}` +
+    `${shape.zIndex === null ? '' : `, z-index ${shape.zIndex},`} covering ${shape.viewportPercent}% of the view`);
+  const which = shapes.length === 0 ? '' : count === 1 ? ` It is ${shapes[0]}.` : ` They include ${shapes.join('; ')}.`;
+  return ` Note: ${count === 1 ? 'one element carries the hidden attribute but is' : `${count} elements carry the hidden attribute but are`} rendered anyway, ` +
+    `because an author style such as display: flex overrides hidden.${which} An overlay, dialog or panel meant to stay hidden then shows, and can cover the page and take its clicks. ` +
+    'Keep the display value for its shown state only, or add [hidden] { display: none !important; }.';
+}
 // A passed paint step whose box is almost all one color: a cleared canvas with a
 // few specks (dust, a cursor) shows two colors and passes, yet looks blank to a
 // player. Informational, never a failure: menus and dark scenes can be mostly
@@ -188,6 +219,14 @@ function transitionCoverageFeedback(request, result) {
   if (paintFailure?.errorCode === 'uniform_paint') return `Step ${paintFailure.index+1} (assert-painted) captured one color only (${paintFailure.paint.dominant.hex}) in the element's on-screen box after the listed actions, throughout the observation window: a blank, black or single-color render. Read the render path in the source (canvas size, drawing calls, the animation loop, asset paths and script errors) and the actions before this step. Correct a mistaken plan on the same published snapshot, or fix the rendering, republish and inspect the new snapshot. If the element is meant to be one solid color, use assert-visible for it instead. This inspector's Chromium has no GPU and may not render WebGL: when the element draws with WebGL, keep the page unchanged for that limitation and report rendering as unverified. Do not add placeholder paint only to pass this check. Rendering remains unverified.`;
   // not_in_viewport means no sample captured anything, for any of three reasons.
   if (paintFailure) return `Step ${paintFailure.index+1} (assert-painted) captured nothing. Either less than 8x8 CSS pixels of the element's content box, inside any rounded corners, lay within the ${request.viewport.width}x${request.viewport.height} viewport; or the element is too thin for its length to keep a captured pixel inside it once its longer side is downscaled to 256 pixels, such as a long narrow bar; or it stopped being one visible match while the paint was sampled, for example a splash canvas that hides or replaces itself. Target the rendered drawing element itself, such as the game canvas, that stays visible after the listed actions, with a viewport large enough to show it as loaded (the inspector does not scroll), and retry the same published snapshot. Rendering remains unverified.`;
+  // click_failed: the target was found, but Playwright could not click it within
+  // 2 seconds. Without a reason the agent called the inspector unable to click.
+  const clickFailure = result.steps?.find(step => step.action === 'click' && step.errorCode === 'click_failed');
+  if (clickFailure) return 'Requested behavior remains unverified; a failed inspection does not establish a visibility transition. ' +
+    `Step ${clickFailure.index+1} (click) found its target but could not click it within 2 seconds, so later steps did not run. ` +
+    'The inspector clicks the way a person does, at the center of a visible, enabled element that has stopped moving. ' +
+    "Most often another element covers that point, such as an overlay, modal or backdrop, and it takes a person's click as well: that is a page defect to fix, not an inspector limit. " +
+    'Otherwise the target is disabled, or animates without pause. Read the source for which it is, fix the page, republish, and inspect the new snapshot.';
   if (result.status !== 'passed') return 'Requested behavior remains unverified; a failed inspection does not establish a visibility transition.';
   if (downloadPlan(request)) return 'Chromium captured the declared snapshot file bytes inside the isolated capsule after the listed click. No file was exported to the user computer. This does not validate PDF quality, ZIP members, or future downloads beyond the bounded observation window.';
   const paintPass = paintPlan(request) ? ' ' + PAINT_PASS : '';
@@ -401,7 +440,7 @@ export function validateWorkspacePreviewInspectionReceipt(value, request) {
   // pageErrors, renderedColors and controls are optional: absent when none
   // was observed or captured, or when an older capsule produced the receipt.
   // Present, each must be exactly bounded.
-  if(!exact(value,['schemaVersion','kind','status','siteId','sha256','planSha256','viewport','steps','diagnostics','blockedRequests',...(value.pageErrors===undefined?[]:['pageErrors']),...(value.renderedColors===undefined?[]:['renderedColors']),...(value.controls===undefined?[]:['controls']),'scope']) || (value.pageErrors!==undefined&&!pageErrorsValid(value.pageErrors)) || (value.renderedColors!==undefined&&!renderedColorsValid(value.renderedColors)) || (value.controls!==undefined&&!controlsValid(value.controls)) || canonical(value.viewport)!==canonical(request.viewport)||!Array.isArray(value.steps)||value.steps.length<1||value.steps.length>request.steps.length||!exact(value.diagnostics,['renderedHiddenAttributeCount','hiddenUntilFoundCount'])||Object.values(value.diagnostics).some(v=>!Number.isSafeInteger(v)||v<0||v>100000)||!Array.isArray(value.blockedRequests)||value.blockedRequests.length>32||value.blockedRequests.some(v=>!['navigation','network','popup','download','websocket'].includes(v))) throw Error('invalid inspection receipt');
+  if(!exact(value,['schemaVersion','kind','status','siteId','sha256','planSha256','viewport','steps','diagnostics','blockedRequests',...(value.pageErrors===undefined?[]:['pageErrors']),...(value.renderedColors===undefined?[]:['renderedColors']),...(value.controls===undefined?[]:['controls']),'scope']) || (value.pageErrors!==undefined&&!pageErrorsValid(value.pageErrors)) || (value.renderedColors!==undefined&&!renderedColorsValid(value.renderedColors)) || (value.controls!==undefined&&!controlsValid(value.controls)) || canonical(value.viewport)!==canonical(request.viewport)||!Array.isArray(value.steps)||value.steps.length<1||value.steps.length>request.steps.length||!diagnosticsValid(value.diagnostics)||!Array.isArray(value.blockedRequests)||value.blockedRequests.length>32||value.blockedRequests.some(v=>!['navigation','network','popup','download','websocket'].includes(v))) throw Error('invalid inspection receipt');
   value.steps.forEach((step,i)=>{
     const textStep=step.action==='assert-text', selectStep=step.action==='select-option', fillStep=step.action==='fill', downloadStep=step.action==='download', pressStep=step.action==='press', paintStep=step.action==='assert-painted', textKeys=textStep?['expectedText']:(selectStep||fillStep)?['value']:downloadStep?downloadKeys:pressStep?pressKeys(request.steps[i]):[];
     if(textStep && step.expectedText!==request.steps[i].expectedText) throw Error('invalid text binding');
@@ -531,7 +570,7 @@ export function createWorkspacePreviewInspectTool({request,transport='unix',tran
         const summary=pageErrors
           ? `Preview inspection ${result.status==='passed'?'steps passed, but':'failed, and'} ${pageErrorFeedback(pageErrors)}`
           : requirement ? transitionIncompleteFeedback(normalized, requirement)
-            : `Preview inspection ${result.status}. ${transitionCoverageFeedback(normalized, result)}${unchangedPaintNote(result)}${nearlyOneColorNote(result)}`;
+            : `Preview inspection ${result.status}. ${transitionCoverageFeedback(normalized, result)}${unchangedPaintNote(result)}${nearlyOneColorNote(result)}${renderedHiddenNote(result)}`;
         // The palette is stated once, as its fixed line; the evidence copy omits
         // it and the load-time control names (used only for locator feedback).
         const {renderedColors,controls,...rest}=result;

@@ -1,3 +1,4 @@
+import {ownerLaneText, ownerForbidsTools} from './owner-tool-policy.mjs';
 import {validDeliveredArtifact, normalizeWorkspaceArtifact, WORKSPACE_ARTIFACT_DELIVERY_GUIDANCE} from './workspace-artifact.mjs';
 // Pixel per-run tool-loop guard.
 //
@@ -281,6 +282,9 @@ export const REQUESTED_UNITTEST_FINAL_RETRY_REASON =
 export const REQUESTED_PARSED_JSON_REQUIRED_REASON =
   "The owner explicitly required parsed JSON verification, so that raw-text comparison test was not written. Write the same test file with `json.loads(result.stdout)` and compare the resulting Python object and numeric values; do not compare JSON whitespace or a literal expression such as `10/3` inside a string.";
 
+// Owner-facing next step after a blocked recursive deletion ended a build request.
+export const RECURSIVE_DELETE_BUILD_NEXT_STEP =
+  "To continue, ask Portal again and say whether it should build in a new folder or may replace the existing one.";
 export const RECURSIVE_DELETE_REQUIRES_OWNER_REASON =
   "Pixel stopped tool use for this turn because a recursive deletion was not authorized. The entire blocked command did not run, but earlier actions may have completed. Do not retry through another command, tool, or agent. " +
   "Write the final answer now with no tools, in the reply language, using only evidence already returned. Explain the useful findings, distinguish missing tools from untested capabilities, and identify unfinished work. " +
@@ -4975,6 +4979,29 @@ function ownerRequestsFileHandoff(lane) {
   });
 }
 
+// An explicit artifact-tool request is a file handoff even when the owner
+// says "re-publish" instead of "download". Keep the verb, object and tool in
+// one direct request; publishing a site or quoting an example does not count.
+function ownerRequestsArtifactPublication(lane) {
+  const clauses=lane.split(/[!?;\n]+|\.(?=\s|$)/).map(value=>value.trim());
+  const named=String.raw`["'\x60]?(?:[A-Za-z0-9_.-]+[/\\])*[A-Za-z0-9_.-]+\.(?:md|txt|csv|tsv|json|pdf|zip|rar|docx|xlsx|pptx)["'\x60]?`;
+  const object=`(?:(?:the|this|that|my|our|a|an)\\s+)?(?:project|files?|documents?|archives?|bundle|${named})`;
+  const request=new RegExp(`^(?:please\\s+)?(?:(?:can|could|would|will)\\s+you\\s+(?:please\\s+)?)?`+
+    `(?:re-?publish|publish)\\s+(${object})\\s+(?:with|using|via)\\s+(?:the\\s+)?`+
+    `(?:(?:sourcePath\\s+)?(?:workspace\\s+)?artifact(?:\\s+publication)?|pixel_ods_workspace_artifact)\\s+tool`+
+    `(?:\\s*,?\\s+and\\s+(?:give|provide|return)\\s+(?:me\\s+)?(?:a\\s+)?(?:concise\\s+)?final\\s+(?:response|answer))?\\s*$`,'i');
+  const withdrawal=new RegExp(`^(?:actually,?\\s+)?(?:please\\s+)?(?:do\\s+not|don['’]t|never|must\\s+not|should\\s+not)\\s+`+
+    `(?:re-?publish|publish|send|attach|deliver)\\s+(anything|it|them|${object})(?:\\s+(?:with|using|via)\\s+.*)?\\s*$`,'i');
+  const normalize=value=>value.toLowerCase().replace(/^(?:the|this|that|my|our|a|an)\s+/,'').replace(/["'`]/g,'');
+  const refused=clauses.map(clause=>withdrawal.exec(clause)?.[1]).filter(Boolean).map(normalize);
+  return clauses.some(clause=>{
+    const match=request.exec(clause);
+    if(!match)return false;
+    const target=normalize(match[1]);
+    return !refused.some(value=>['anything','it','them','files','documents','archives'].includes(value)||value===target);
+  });
+}
+
 // This selects prompt guidance only; it grants no tool or publication authority.
 export function userMessageRequestsWorkspaceDocumentDelivery(messages, prompt = undefined) {
   const text = currentOwnerIntentText(messages, prompt);
@@ -5015,40 +5042,14 @@ export function userMessageRequestsWorkspaceDocumentDelivery(messages, prompt = 
   // a publication request. Preserve the existing download/attachment phrases
   // and deliver verb without combining a schedule with a file mention.
   if (ownerRequestsFileHandoff(lane)) return true;
+  if (ownerRequestsArtifactPublication(lane)) return true;
   return /\b(?:download(?:able)?|attach(?:ment)?|deliver)\b/i.test(positive) &&
     (/\.(?:md|markdown|txt|csv|tsv|json|pdf|zip|rar|docx|xlsx|pptx)\b/i.test(positive) ||
       (/\b(?:documents?|files?|archives?|projects?|source\s+(?:code|filenames?))\b/i.test(positive) &&
         !/\b(?:images?|photos?|audio|video|websites?|webpages?|html)\b|\.(?:png|jpe?g|gif|svg|mp3|mp4|wav|webm|html?)\b/i.test(positive)));
 }
 
-function ownerLaneText(text, {preserveCommands = false} = {}) {
-  // Classify only current owner prose. Embedded examples cannot opt a workspace
-  // turn into extension work; identifiers quoted as operands remain usable.
-  return String(text ?? '')
-    .replace(/```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)/g, ' ')
-    .replace(/^\s*>[^\n]*/gm, ' ')
-    .replace(/"[^"\n]*"|`[^`\n]*`|(?<!\w)'[^'\n]*'(?!\w)|“[^”\n]*”/g,
-      value => preserveCommands && value.startsWith('`') ? value :
-        /\s/.test(value.slice(1, -1)) ? ' ' : value);
-}
 
-function ownerForbidsTools(text) {
-  const instruction = ownerLaneText(text);
-  const ban = /\b(?:(?:do\s+not|don['’]t|never|must\s+not|should\s+not)\s+(?:use|call|invoke|run)|without\s+(?:using|calling|invoking|running))\s+(?:any\s+tools?|(?:the\s+)?tools)\b/gi;
-  for (const match of instruction.matchAll(ban)) {
-    const prefix = instruction.slice(0, match.index);
-    if (!/^without\b/i.test(match[0]) &&
-        !/(?:^|[.!?;,\n]\s*|\b(?:and|but|so|then)\s+)(?:please\s+|you\s+)?$/i.test(prefix)) continue;
-    const qualifier = instruction.slice(match.index + match[0].length);
-    // A ban on a named subset of tools still permits other tools. The
-    // blanket boundary applies only to an unqualified no-tools directive.
-    if (/^\s+(?:that|which|except|besides|unless|other\s+than)\b/i.test(qualifier) ||
-        /^\s+to\s+(?:change|edit|write|modify|delete|create|remove|mutate)\b/i.test(qualifier) ||
-        /^\s+for\s+(?:file|writing|editing|modifying|changing|mutation)\b/i.test(qualifier)) continue;
-    return true;
-  }
-  return false;
-}
 
 // Must match CURRENT_IMAGE_NOTE in host/chat_image_transport.mjs, which the
 // trusted ingress appends after an image turn's pixels and delivery guidance.
@@ -5071,6 +5072,20 @@ function namesAttachedPicture(params, ids) {
 // boundary only; it grants no tool or execution authority. Explanations,
 // quoted commands, code fences, ordinary math, no-tools directives and
 // negations are excluded. A request to write AND execute code is preserved.
+// An explicit choice of Python for a computation also requests execution,
+// even when the owner never says "run". Examples and explanations are not
+// requests to execute. This records an obligation, not additional authority.
+function ownerRequestsPythonCompute(text) {
+  if (!text || ownerForbidsTools(text)) return false;
+  const lane = ownerLaneText(text);
+  if (/\b(?:do\s+not|don['’]t|never|must\s+not|should\s+not|without)\s+(?:(?:actually|really)\s+)?(?:execute|executing|run|running|interpret|interpreting|use|using|call|calling|invoke|invoking|calculate|compute|evaluate|check|verify)\b/i.test(lane)) return false;
+  return lane.split(/[!?;\n]+|\.(?=\s|$)/).some(raw => {
+    const clause = raw.trim().replace(/^(?:please|can\s+you|could\s+you|would\s+you)\s+/i, '');
+    return /^use\s+(?:(?:the|your)\s+)?python(?:\s+(?:tool|interpreter|execution\s+tool|exec\s+tool))?\s+to\s+(?:calculate|compute|evaluate|check|verify)\b/i.test(clause) ||
+      /^(?:calculate|compute|evaluate|check|verify)\b[^.!?;\n]{0,200}\b(?:using|with)\s+(?:(?:the|your)\s+)?python\b/i.test(clause);
+  });
+}
+
 function ownerRequestsCodeExecution(text) {
   if (!text || ownerForbidsTools(text)) return false;
   const lane = ownerLaneText(text);
@@ -8243,7 +8258,7 @@ export function createToolLoopGuard({
     if (!state) {
       pruneRuns();
       state = {
-        completionAssurance: createCompletionAssurance({englishOnly: englishOnly(responseLanguage)}),
+        completionAssurance: createCompletionAssurance({englishOnly: englishOnly(responseLanguage), now}),
         extensionCompletionGate: undefined,
         workspaceLaneRequested: false,
         workspaceExtensionIsolated: false,
@@ -8401,6 +8416,8 @@ export function createToolLoopGuard({
         // owner request to execute code.
         executionReceiptObserved: false,
         executionRequested: false,
+        explicitPythonComputeRequested: false,
+        explicitPythonComputeRetried: false,
         // Phantom-process bookkeeping: allowed exec calls whose receipt has
         // not been observed yet, and whether any exec went to the background.
         execCallsInFlight: new Set(),
@@ -10729,7 +10746,47 @@ export function createToolLoopGuard({
       state.artifactSurfaceReason = state.artifactOwnerInteractive ? undefined :
         state.artifactIdentityConflict ? 'run-identity-conflict' : state.artifactNoninteractiveObserved ? 'noninteractive-turn' :
         artifactContext.trigger == null ? 'trigger-unavailable' : 'owner-session-required';
-      state.completionAssurance.begin(currentOwnerIntentText(event?.messages, event?.prompt), event);
+      // agent_end closes an embedded attempt, not necessarily the outer
+      // request. A fresh native prompt hook can start its next attempt.
+      // Reopen only this owner's still-current request; retain all stop flags,
+      // budgets and receipts. Replaying a previous hook cannot revive it.
+      const promptBuildEvents = state.promptBuildEvents ??= new WeakSet();
+      const freshPromptBuild = event && typeof event === 'object' && !promptBuildEvents.has(event);
+      if (event && typeof event === 'object') promptBuildEvents.add(event);
+      if (freshPromptBuild && typeof event.prompt === 'string' && event.prompt.trim()
+          && state.runEnded && state.artifactOwnerInteractive && !state.managedTeamWorker
+          && !state.clientCancelled && !state.odsAborted && !state.recursiveDeleteDenied
+          && !state.progressBudget.exhausted
+          && state.currentSessionId === context.sessionId && state.currentSessionKey === context.sessionKey
+          && sessionRuns.get(context.sessionId) === runId) {
+        state.runEnded = false;
+        // A broker response reserved by the ended attempt must not attach to
+        // its successor. Each admitted call has its own private scope object.
+        state.artifactReservations = new WeakSet();
+      }
+      // Page receipts cross turns only within this trusted owner chat. The
+      // assurance object freezes the first owner intent and receipt selection.
+      let priorSourceReceipts;
+      if (!teamRole && state.artifactOwnerInteractive && !state.managedTeamWorker &&
+          !state.clientCancelled && !state.odsAborted && !state.recursiveDeleteDenied &&
+          artifactContext.agentId === agentId && artifactContext.sessionId && artifactContext.sessionKey) {
+        priorSourceReceipts = [];
+        for (const [otherRunId, other] of runs) {
+          if (otherRunId === runId || !other.artifactOwnerInteractive || other.managedTeamWorker ||
+              other.artifactIdentityConflict || other.artifactNoninteractiveObserved ||
+              other.clientCancelled || other.odsAborted || other.recursiveDeleteDenied ||
+              other.artifactOwnerContext?.agentId !== agentId ||
+              other.currentSessionId !== artifactContext.sessionId ||
+              other.currentSessionKey !== artifactContext.sessionKey) continue;
+          priorSourceReceipts.push(...other.completionAssurance.currentRunSourceReceipts());
+        }
+        priorSourceReceipts.sort((a, b) => b.timestamp - a.timestamp);
+      }
+      if (teamRole || state.managedTeamWorker || state.artifactIdentityConflict ||
+          state.artifactNoninteractiveObserved || state.clientCancelled || state.odsAborted ||
+          state.recursiveDeleteDenied) state.completionAssurance.discardPriorSources();
+      state.completionAssurance.begin(currentOwnerIntentText(event?.messages, event?.prompt), event,
+        priorSourceReceipts);
       const ownerIntent=currentOwnerIntentText(event?.messages,event?.prompt);
       if (ownerIntent && state.ownerNoTools === undefined) state.ownerNoTools=ownerForbidsTools(ownerIntent);
       const pictureIds=attachedPictureIds(currentUserText(event?.messages,event?.prompt));
@@ -10892,7 +10949,10 @@ export function createToolLoopGuard({
         state.workspaceMutationRequested =
           state.workspacePreviewRequired ||
           userMessageRequestsWorkspaceMutation(event?.messages, event?.prompt);
-        state.executionRequested = ownerRequestsCodeExecution(laneText);
+        // Later native attempts carry a harness instruction, not a new owner
+        // request. Keep the computation obligation bound to the first request.
+        state.explicitPythonComputeRequested = ownerRequestsPythonCompute(state.ownerRequestText);
+        state.executionRequested = ownerRequestsCodeExecution(laneText) || state.explicitPythonComputeRequested;
         state.workspaceTaskPath = userMessageWorkspaceContinuationPath(
           event?.messages,
           event?.prompt
@@ -13635,6 +13695,11 @@ export function createToolLoopGuard({
     recordExampleOutcome({...context, runId}, examples.end(runId));
     const state = runs.get(runId);
     if (!state) return;
+    const endEvents = state.agentEndEvents ??= new WeakSet();
+    if (event && typeof event === 'object') {
+      if (endEvents.has(event)) return;
+      endEvents.add(event);
+    }
     state.runEnded = true;
     state.runDeadlineReached = !state.clientCancelled && !state.odsAborted && !state.progressBudget.exhausted &&
       !state.recursiveDeleteDenied && runDeadlineReached(state.runDeadline, event, now());
@@ -13714,6 +13779,13 @@ export function createToolLoopGuard({
     // Before the reply, so the owner's notice can travel with it.
     recordExampleOutcome({...context, runId}, examples.check(runId));
     const state = runs.get(runId);
+    // A final hook cannot carry accepted history across an identity change.
+    if (state && (state.artifactIdentityConflict || state.artifactNoninteractiveObserved ||
+        (context.trigger && context.trigger !== 'user') ||
+        [context, event].some(value =>
+          (value?.sessionId && value.sessionId !== state.artifactOwnerContext?.sessionId) ||
+          (value?.sessionKey && value.sessionKey !== state.artifactOwnerContext?.sessionKey) ||
+          (value?.runId && value.runId !== runId)))) state.completionAssurance.discardPriorSources();
     // The agent's latest final reply. A failed preview delivery keeps it ahead
     // of the host facts (preview-explanation.mjs). The pinned harness refuses a
     // revision after side effects, so this text is usually what is sent; a
@@ -13782,6 +13854,26 @@ export function createToolLoopGuard({
             WORKSPACE_ARTIFACT_DELIVERY_GUIDANCE + ' Do not repeat already completed creation or checks. ' +
             'Do not substitute a raw path, Markdown link or image for publication.',
           idempotencyKey:'pixel-ods-workspace-document-delivery', maxAttempts:1}};
+      }
+      // A prose-only answer can omit the Python execution the owner requested.
+      // Let the model correct that once before any effectful tool attempt.
+      // Existing continuations take precedence, and the normal tool admission
+      // and terminal execution-receipt checks still decide what may run/pass.
+      if (state?.explicitPythonComputeRequested && !state.explicitPythonComputeRetried &&
+          !state.executionReceiptObserved && !state.toolExecutionAttempted &&
+          !state.ownerNoTools && !state.extensionCompletionGate?.active &&
+          !state.odsAborted && !state.codingExhausted && !state.runDeadlineReached &&
+          !state.progressBudget.exhaustedLanes.length &&
+          !state.pendingExecSessions.size && !state.execCallsInFlight.size && !state.backgroundExecStarted &&
+          (!event?.runId || event.runId === runId) &&
+          (!event?.sessionId || event.sessionId === state.currentSessionId) &&
+          (!event?.sessionKey || event.sessionKey === state.currentSessionKey) &&
+          !workspaceArtifactUnavailableReason({...context, runId})) {
+        state.explicitPythonComputeRetried = true;
+        return {action:'revise', reason:'The requested Python computation has no execution receipt.', retry:{
+          instruction:'The owner asked you to use Python for a computation. Use the exec tool to run Python, ' +
+            'then report the command and its observed output. Do not substitute an estimated or inferred answer.',
+          idempotencyKey:'pixel-ods-explicit-python-compute', maxAttempts:1}};
       }
       const decision = state?.extensionCompletionGate?.active && !extensionStopped
         ? state.extensionCompletionGate.finalize()
@@ -13921,14 +14013,17 @@ export function createToolLoopGuard({
         }
         return bounded;
       });
-      const excerpts = !finalAnswer && observed.length
+      // Excerpts carry the facts a diagnostic request gathered before the block.
+      // For a build they are folder listings, not an answer: give the next step.
+      const excerpts = !finalAnswer && observed.length && !previewRelevant
         ? 'Earlier received results (data excerpts; the exit code does not verify every substep):' +
           '\n\n```json\n' + quoteEvidence(observed) + '\n```'
         : '';
+      const nextStep = previewRelevant ? RECURSIVE_DELETE_BUILD_NEXT_STEP : '';
       return {
         status: "failed",
         text: [refusal, finalAnswer, excerpts,
-          checkText, previewText].filter(Boolean).join('\n\n'),
+          checkText, previewText, nextStep].filter(Boolean).join('\n\n'),
         ...(preview ? { preview: { schemaVersion: 1, kind: "ods-pixel-workspace-preview", ...preview } } : {}),
       };
     }
@@ -14498,11 +14593,12 @@ export function createToolLoopGuard({
       if (workspaceArtifactUnavailableReason(scope)) return false;
       const state=runs.get(scope.runId);
       state.artifactAttempts=(state.artifactAttempts ?? 0)+1;
+      (state.artifactReservations ??= new WeakSet()).add(scope);
       return true;
     },
     acceptWorkspaceArtifact(scope,receipt) {
       const state=artifactScopeState(scope);
-      if (!state || !state.artifactAttempts || !validDeliveredArtifact(receipt)) return false;
+      if (!state || !state.artifactReservations?.has(scope) || !validDeliveredArtifact(receipt)) return false;
       const artifacts=state.workspaceArtifacts ??= [];
       if (artifacts.some(item=>item.siteId === receipt.siteId && item.file.path === receipt.file.path)) return true;
       if (artifacts.length >= 4) return false;

@@ -6834,6 +6834,10 @@ def _precreate_compose_data_dirs(service_id: str, ext_dir: Path, compose_path: P
             except ValueError:
                 logger.warning("Skipping out-of-tree volume path in %s: %s", service_id, vol_str)
                 continue
+            # A file the extension ships (Whisper's docker-entrypoint.sh) is not
+            # a data directory; mkdir on it logged "File exists" on every start.
+            if dir_path.exists() and not dir_path.is_dir():
+                continue
             try:
                 dir_path.mkdir(parents=True, exist_ok=True)
                 # Native Windows Python has no os.getuid (or POSIX owners);
@@ -6897,6 +6901,15 @@ def _repair_rootless_data_ownership(service_id: str) -> None:
         command = [
             bash, "-c", 'source "$1"; ods_prepare_service_state_ownership "$2" "$3"',
             "ods-service-state", str(helper), str(INSTALL_DIR), service_id,
+        ]
+    elif service_id == "comfyui":
+        # Phase 11 prepares ComfyUI's UID 1000 bind sources only when it is
+        # enabled at install. A Dashboard add-back on rootful Docker under
+        # another owner UID crash-looped on mkdir /models/text_encoders
+        # (Workstation06, 2026-10-26). The backend picks the image's layout.
+        command = [
+            bash, "-c", 'source "$1"; ods_prepare_comfyui_data_ownership "$2" "$3"',
+            "ods-comfyui-data", str(helper), str(INSTALL_DIR), GPU_BACKEND,
         ]
     try:
         result = subprocess.run(
@@ -8116,11 +8129,14 @@ def _docker_service_health_snapshot() -> dict:
                 service_id = declared_containers.get(container_name, service_id)
                 if not service_id and container_name.startswith("ods-"):
                     service_id = container_name.removeprefix("ods-")
+                restarts = item.get("RestartCount")
                 containers.append({
                     "service_id": str(service_id or ""),
                     "container_name": container_name,
                     "state": str(state.get("Status") or "unknown"),
                     "health": str(health.get("Status") or "none"),
+                    # Restart-policy restarts; tells a crash loop from a start.
+                    "restart_count": restarts if type(restarts) is int and restarts >= 0 else 0,
                 })
         payload = {
             "schema_version": "ods.host-service-health.v1",
@@ -8369,6 +8385,26 @@ def _valid_gguf_filename(value: object) -> bool:
     )
 
 
+def _configured_model_identity(env: dict) -> dict:
+    """The configured model's name, GGUF file and context from .env, each bounded.
+
+    For the Dashboard API when it cannot read the owner's private .env. A
+    value that does not validate is reported as None, never echoed.
+    """
+    context = None
+    for key in ("CTX_SIZE", "MAX_CONTEXT"):
+        value = str(env.get(key) or "")
+        if re.fullmatch(r"[1-9][0-9]{0,8}", value):
+            context = int(value)
+            break
+    llm_model, gguf_file = env.get("LLM_MODEL"), env.get("GGUF_FILE")
+    return {
+        "llmModel": llm_model if _valid_pixel_model_name(llm_model) else None,
+        "ggufFile": gguf_file if _valid_gguf_filename(gguf_file) else None,
+        "contextSize": context,
+    }
+
+
 def _local_gguf_filename_from_id(model_id: str) -> str | None:
     """Map a Dashboard/local model id to a safe GGUF filename candidate."""
     token = str(model_id or "").strip()
@@ -8419,6 +8455,22 @@ def _resolve_local_gguf_filename(model_id: str, models_dir: Path) -> str | None:
     return None
 
 
+def _clear_disabled_progress(service_id: str) -> None:
+    """Remove a just-disabled service's progress record.
+
+    A recent ``started`` record outranks a disabled selection on the Extensions
+    page. The host writes these records as the install owner, so where that
+    owner is not UID 1000 the Dashboard cannot remove them, and its disable
+    failed with HTTP 500 after the service had stopped (Workstation06,
+    2026-10-27). The selection is already committed; a leftover record is
+    logged rather than reported as a failed disable.
+    """
+    try:
+        (DATA_DIR / "extension-progress" / f"{service_id}.json").unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("Could not clear the progress record of disabled %s: %s", service_id, exc)
+
+
 def _read_progress_status(service_id: str) -> str | None:
     """Return the ``status`` field of the progress file, or None if absent/unreadable.
 
@@ -8435,6 +8487,19 @@ def _read_progress_status(service_id: str) -> str | None:
         return None
     status = data.get("status")
     return status if isinstance(status, str) else None
+
+
+def _start_records_outcome(service_id: str) -> bool:
+    """Whether a synchronous start replaces the service's progress record.
+
+    No record, ``prepared`` (this enable's images are ready), ``started`` and
+    the Dashboard's own ``pulling`` receipt for this start are replaced. An
+    unreadable record or another operation's phase is left as it is; a
+    running install or image preparation holds the service lock.
+    """
+    if not (DATA_DIR / "extension-progress" / f"{service_id}.json").exists():
+        return True
+    return _read_progress_status(service_id) in {"prepared", "started", "pulling"}
 
 
 def _run_post_install_hook(service_id: str, ext_dir: Path) -> tuple[bool, str]:
@@ -9577,33 +9642,42 @@ def _image_prepare_context(service_ids: list[str]) -> tuple[list[str], dict[str,
 
 
 def _services_missing_images(flags: list[str], service_ids: list[str],
-                             env: dict[str, str]) -> list[str]:
+                             env: dict[str, str]) -> tuple[list[str], list[str]]:
     """The services among ``service_ids`` whose Compose image is not on this host.
 
-    Locally built images are left to their own build step. The resolved
-    configuration carries credential values, so it is parsed and never logged.
+    Returns ``(to_pull, to_build)``. A locally built service is checked under
+    the name ``up`` gives its image: its ``image``, else Compose's
+    ``<project>-<service>``. The resolved configuration carries credential
+    values, so it is parsed and never logged.
     """
     command = ["docker", "compose", *flags, "config", "--format", "json"]
     result = subprocess.run(command, cwd=str(INSTALL_DIR), env=env,
                             capture_output=True, text=True, timeout=60)
     if result.returncode:
         raise RuntimeError("Could not resolve the Compose configuration for these services")
-    services = json.loads(result.stdout).get("services")
+    config = json.loads(result.stdout)
+    services = config.get("services")
     if not isinstance(services, dict):
         raise RuntimeError("Invalid Compose configuration")
-    missing = []
+    pulls, builds = [], []
     for service_id in service_ids:
         definition = services.get(service_id)
         if not isinstance(definition, dict):
             raise RuntimeError(f"The Compose stack does not define {service_id}")
+        built = bool(definition.get("build"))
         image = definition.get("image")
-        if definition.get("build") or not isinstance(image, str) or not image:
+        if built and not image:
+            project = config.get("name")
+            if not isinstance(project, str) or not project:
+                raise RuntimeError("Invalid Compose configuration")
+            image = f"{project}-{service_id}"
+        if not isinstance(image, str) or not image:
             continue
         inspected = subprocess.run(["docker", "image", "inspect", image],
                                    capture_output=True, text=True, timeout=30)
         if inspected.returncode:
-            missing.append(service_id)
-    return missing
+            (builds if built else pulls).append(service_id)
+    return pulls, builds
 
 
 def _missing_model_files(service_ids: list[str]) -> list:
@@ -9641,6 +9715,53 @@ def _fetch_model_files(progress_id: str, files: list) -> tuple[bool, str]:
     return True, ""
 
 
+def _follow_image_command(command: list[str], progress_id: str, label: str, detail,
+                          subject: str, *, env: dict[str, str] | None = None) -> tuple[int, str, list[str]]:
+    """Run a Compose image command with live progress under ``progress_id``.
+
+    ``detail(line)`` reads each output line and returns the progress detail to
+    show after the elapsed time, or None to keep the last one. The command is
+    stopped only when it prints nothing for IMAGE_PULL_STALL_SECONDS or
+    IMAGE_PULL_MAX_SECONDS pass. Returns ``(returncode, failure, tail)``:
+    ``failure`` says why the command was stopped, ``tail`` is its last output.
+    """
+    proc = subprocess.Popen(command, cwd=str(INSTALL_DIR), env=env, text=True, errors="replace",
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    tail: collections.deque = collections.deque(maxlen=40)
+    seen = {"last": time.monotonic(), "detail": detail("") or ""}
+
+    def _read_output() -> None:
+        for line in proc.stdout:
+            tail.append(line.rstrip())
+            seen["last"] = time.monotonic()
+            seen["detail"] = detail(line) or seen["detail"]
+
+    reader = threading.Thread(target=_read_output, daemon=True)
+    reader.start()
+    started = reported = time.monotonic()
+    _write_progress(progress_id, "pulling", label)
+    failure = ""
+    while proc.poll() is None:
+        time.sleep(1)
+        now = time.monotonic()
+        if now - seen["last"] > IMAGE_PULL_STALL_SECONDS:
+            failure = f"{subject} made no progress for {IMAGE_PULL_STALL_SECONDS // 60} minutes."
+        elif now - started > IMAGE_PULL_MAX_SECONDS:
+            failure = f"{subject} did not finish within {IMAGE_PULL_MAX_SECONDS // 3600} hours."
+        if failure:
+            proc.kill()
+            break
+        if now - reported >= _IMAGE_PULL_PROGRESS_SECONDS:
+            reported = now
+            minutes, seconds = divmod(int(now - started), 60)
+            elapsed = f"{label} {minutes}:{seconds:02d} elapsed"
+            _write_progress(progress_id, "pulling",
+                            f"{elapsed}, {seen['detail']}" if seen["detail"] else elapsed)
+    proc.wait()
+    reader.join(timeout=5)
+    return proc.returncode, failure, list(tail)
+
+
 def _pull_compose_images(flags: list[str], service_ids: list[str], progress_id: str,
                          *, env: dict[str, str] | None = None) -> tuple[bool, str]:
     """Download the images of ``service_ids`` with live progress under ``progress_id``.
@@ -9650,45 +9771,54 @@ def _pull_compose_images(flags: list[str], service_ids: list[str], progress_id: 
     reports nothing for IMAGE_PULL_STALL_SECONDS or IMAGE_PULL_MAX_SECONDS pass.
     """
     command = ["docker", "compose", "--progress", "plain", *flags, "pull", *service_ids]
-    proc = subprocess.Popen(command, cwd=str(INSTALL_DIR), env=env, text=True, errors="replace",
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    tail: collections.deque = collections.deque(maxlen=40)
-    seen = {"last": time.monotonic(), "layers": 0}
+    layers = [0]
 
-    def _read_output() -> None:
-        for line in proc.stdout:
-            tail.append(line.rstrip())
-            seen["last"] = time.monotonic()
-            if "Pull complete" in line or "Already exists" in line:
-                seen["layers"] += 1
+    def detail(line: str) -> str:
+        if "Pull complete" in line or "Already exists" in line:
+            layers[0] += 1
+        return f"{layers[0]} layers done"
 
-    reader = threading.Thread(target=_read_output, daemon=True)
-    reader.start()
-    started = reported = time.monotonic()
-    _write_progress(progress_id, "pulling", "Downloading images...")
-    failure = ""
-    while proc.poll() is None:
-        time.sleep(1)
-        now = time.monotonic()
-        if now - seen["last"] > IMAGE_PULL_STALL_SECONDS:
-            failure = f"Image download made no progress for {IMAGE_PULL_STALL_SECONDS // 60} minutes."
-        elif now - started > IMAGE_PULL_MAX_SECONDS:
-            failure = f"Image download did not finish within {IMAGE_PULL_MAX_SECONDS // 3600} hours."
-        if failure:
-            proc.kill()
-            break
-        if now - reported >= _IMAGE_PULL_PROGRESS_SECONDS:
-            reported = now
-            minutes, seconds = divmod(int(now - started), 60)
-            _write_progress(progress_id, "pulling",
-                            f"Downloading images... {minutes}:{seconds:02d} elapsed, "
-                            f"{seen['layers']} layers done")
-    proc.wait()
-    reader.join(timeout=5)
+    returncode, failure, tail = _follow_image_command(
+        command, progress_id, "Downloading images...", detail, "Image download", env=env)
     if failure:
         return False, failure
-    if proc.returncode:
-        return False, "Image download failed:\n" + "\n".join(list(tail)[-12:])
+    if returncode:
+        return False, "Image download failed:\n" + "\n".join(tail[-12:])
+    return True, ""
+
+
+# Compose's plain build progress (Compose 5.2): "#14 [comfyui 10/15] RUN ..."
+# starts a Dockerfile step, "#20 [comfyui] exporting to image" saves the image.
+_BUILD_STEP_RE = re.compile(r"#\d+ \[(?:[^\]]* )?\s*(\d+)/(\d+)\]")
+_BUILD_EXPORT_RE = re.compile(r"#\d+ (?:\[[^\]]*\] )?exporting to ")
+
+
+def _build_compose_images(flags: list[str], service_ids: list[str], progress_id: str,
+                          *, env: dict[str, str] | None = None) -> tuple[bool, str]:
+    """Build the local images of ``service_ids`` with live progress under ``progress_id``.
+
+    Compose builds from the same files ``up`` uses, so ``up`` then only
+    creates the container. A first ComfyUI build for NVIDIA installs its
+    Python stack and saves a 7 GB image: ten minutes on Workstation06
+    (2026-10-26), all of the 600 s start allowance, so its first ``up`` timed
+    out. Returns ``(ok, error)``; the build is stopped only when BuildKit
+    prints nothing for IMAGE_PULL_STALL_SECONDS or IMAGE_PULL_MAX_SECONDS pass.
+    """
+    command = ["docker", "compose", "--progress", "plain", *flags, "build", *service_ids]
+
+    def detail(line: str) -> str | None:
+        if _BUILD_EXPORT_RE.match(line):
+            return "saving the image"
+        step = _BUILD_STEP_RE.match(line)
+        return f"step {step[1]} of {step[2]}" if step else None
+
+    returncode, failure, tail = _follow_image_command(
+        command, progress_id, "Building images...", detail, "Image build", env=env)
+    if failure:
+        return False, failure
+    if returncode:
+        return False, _install_build_diagnostic(
+            subprocess.CompletedProcess(command, returncode, "\n".join(tail), ""), {})
     return True, ""
 
 
@@ -12561,7 +12691,15 @@ class AgentHandler(BaseHTTPRequestHandler):
             _start_enable_retry(self, service_id, lock)
             return
 
+        # The start's outcome is recorded here, on the owner's side: the
+        # Dashboard API runs as UID 1000 and cannot write the record when the
+        # install owner is another user (Workstation06: nvuser, UID 1001).
+        records = action == "start" and _start_records_outcome(service_id)
+        # Kept when an unexpected error escapes; that error is then raised.
+        ok, err, status = False, "The start stopped unexpectedly; see the host agent log.", 500
         try:
+            if records:
+                _write_progress(service_id, "starting", "Starting container...")
             ok, err = docker_compose_action(service_id, action)
             status = 503 if "timed out" in err else 500
         except RuntimeError as exc:
@@ -12569,7 +12707,15 @@ class AgentHandler(BaseHTTPRequestHandler):
         except subprocess.CalledProcessError as exc:
             ok, err, status = False, f"Compose resolution failed: {exc.stderr[:300]}", 500
         finally:
-            lock.release()
+            try:
+                # A one-shot CLI start records its own verified outcome.
+                if records and _read_progress_status(service_id) == "starting":
+                    if ok:
+                        _write_progress(service_id, "started", "Service started")
+                    else:
+                        _write_progress(service_id, "error", "Start failed", error=err)
+            finally:
+                lock.release()
         if ok:
             json_response(self, 200, {"status": "ok", "service_id": service_id, "action": action})
             return
@@ -12637,6 +12783,8 @@ class AgentHandler(BaseHTTPRequestHandler):
         if outcome == "already_disabled":
             json_response(self, 409, {"error": f"Extension already disabled: {service_ids[0]}"})
             return
+        if outcome == "disabled":
+            _clear_disabled_progress(service_ids[0])
         json_response(self, 200, {"status": "ok", "service_ids": service_ids, "action": outcome})
 
     def _handle_extension_sync_config(self):
@@ -13465,11 +13613,13 @@ class AgentHandler(BaseHTTPRequestHandler):
         """Download the images and models a planned enable needs before anything is selected.
 
         Takes service ids only: bundled extensions and Open WebUI, whose images
-        Compose resolves from their shipped files and pinned digests. Their
-        default model packs (model-packs.json) follow the images. Answers 200
-        when everything is already here, otherwise 202 and downloads in the
-        background, reporting progress under ``progress_id`` until it records
-        ``prepared`` or ``error``. Each service allows one operation.
+        Compose resolves from their shipped files and pinned digests. Images a
+        service builds from its shipped Dockerfile are built here too, so the
+        start that follows only creates containers. Their default model packs
+        (model-packs.json) follow the images. Answers 200 when everything is
+        already here, otherwise 202 and works in the background, reporting
+        progress under ``progress_id`` until it records ``prepared`` or
+        ``error``. Each service allows one operation.
         """
         if not check_auth(self):
             return
@@ -13504,32 +13654,40 @@ class AgentHandler(BaseHTTPRequestHandler):
 
         try:
             flags, env = _image_prepare_context(service_ids)
-            missing = _services_missing_images(flags, service_ids, env)
+            pulls, builds = _services_missing_images(flags, service_ids, env)
             model_files = _missing_model_files(service_ids)
         except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as exc:
             _release()
             logger.warning("Image preparation could not resolve %s: %s", progress_id, type(exc).__name__)
             json_response(self, 503, {"error": str(exc)[:300]})
             return
-        if not missing and not model_files:
+        if not pulls and not builds and not model_files:
             _release()
             json_response(self, 200, {"status": "ready", "service_ids": service_ids})
             return
 
         def _download() -> None:
             try:
-                if missing:
-                    pulled, error = _pull_compose_images(flags, missing, progress_id, env=env)
+                if pulls:
+                    pulled, error = _pull_compose_images(flags, pulls, progress_id, env=env)
                     if not pulled:
                         _write_progress(progress_id, "error", "Image download failed", error=error)
+                        return
+                if builds:
+                    built, error = _build_compose_images(flags, builds, progress_id, env=env)
+                    if not built:
+                        _write_progress(progress_id, "error", "Image build failed", error=error)
                         return
                 if model_files:
                     fetched, error = _fetch_model_files(progress_id, model_files)
                     if not fetched:
                         _write_progress(progress_id, "error", "Model download failed", error=error)
                         return
-                _write_progress(progress_id, "prepared",
-                                "Images and models downloaded" if model_files else "Images downloaded")
+                if builds:
+                    label = "Images built and models downloaded" if model_files else "Images built"
+                else:
+                    label = "Images and models downloaded" if model_files else "Images downloaded"
+                _write_progress(progress_id, "prepared", label)
             except (OSError, ValueError, subprocess.SubprocessError) as exc:
                 logger.exception("Image preparation failed for %s", progress_id)
                 _write_progress(progress_id, "error", "Image download failed", error=str(exc)[:500])
@@ -13541,8 +13699,8 @@ class AgentHandler(BaseHTTPRequestHandler):
         except Exception:
             _release()
             raise
-        json_response(self, 202, {"status": "accepted", "service_ids": service_ids, "pulling": missing,
-                                  "models": [item.target.name for item in model_files]})
+        json_response(self, 202, {"status": "accepted", "service_ids": service_ids, "pulling": pulls,
+                                  "building": builds, "models": [item.target.name for item in model_files]})
 
 
     # ── Model management handlers ──
@@ -13657,16 +13815,22 @@ class AgentHandler(BaseHTTPRequestHandler):
             json_response(self, 500, {"error": f"Failed to list models: {exc}"})
 
     def _handle_model_config(self):
-        """Expose the two bounded mode identities, never private .env values."""
+        """Expose bounded configuration identities, never private .env values.
+
+        The Dashboard API asks here when the install owner's private .env is
+        not readable by its UID: the persisted mode, and the configured
+        model's name, GGUF file and context, each validated.
+        """
         if not check_auth(self):
             return
         try:
-            mode = _normalize_ods_mode(load_env(INSTALL_DIR / ".env").get("ODS_MODE"))
+            env = load_env(INSTALL_DIR / ".env")
         except (OSError, UnicodeError):
-            mode = "unknown"
+            env = None
         json_response(self, 200, {
-            "configuredMode": mode,
+            "configuredMode": _normalize_ods_mode(env.get("ODS_MODE")) if env is not None else "unknown",
             "effectiveMode": _normalize_ods_mode(STARTUP_ODS_MODE),
+            "configuredModel": _configured_model_identity(env) if env is not None else None,
         }, no_store=True)
 
     def _handle_model_status(self):
@@ -14136,10 +14300,14 @@ class AgentHandler(BaseHTTPRequestHandler):
                             else f"{part_file_name} (part {part_idx}/{len(download_plan)})"
                         )
                         _write_model_status(status_path, "verifying", verify_label, final_size, final_size)
+                        # An inconclusive inspection must leave downloaded bytes
+                        # available for a verified retry, just like existing files.
+                        # Definitive size/checksum failures still return False.
                         valid, reason = _verify_model_artifact(
                             final_target,
                             artifact,
                             _model_download_cancel,
+                            raise_on_error=True,
                         )
                         if _model_download_cancel.is_set():
                             _finish_cancelled_download()
@@ -15910,6 +16078,9 @@ class AgentHandler(BaseHTTPRequestHandler):
                         "verifiedAt": str(final_runtime_proof.get("verifiedAt") or _iso_now()),
                         **({'modelTransactionId':pixel_transaction.id} if pixel_transaction is not None else {}),
                     },
+                    # Non-secret completion proof read by dashboard-api, whose
+                    # container UID can differ from the installing host user.
+                    mode=0o644,
                 )
                 committed = True  # system state is committed before the response write
                 if pixel_transaction is not None:

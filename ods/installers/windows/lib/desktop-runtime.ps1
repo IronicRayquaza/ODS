@@ -3,13 +3,15 @@
 # ============================================================================
 # Part of: installers/windows/lib/
 # Purpose: What windows-desktop.ps1 installs and runs, kept apart from the
-#          steps that do it: folder layout, the CPU llama.cpp options, the
+#          steps that do it: folder layout, the model route (an AMD GPU over
+#          Vulkan, or the CPU) and its llama.cpp options, the
 #          dashboard-api environment, which app files ship, and the
 #          Microsoft Visual C++ runtime that llama.cpp's Windows build needs
 #          but does not include.
 # Expects: wsl-portal-amd.ps1 (New-ODSPortalRuntimeOptions,
 #          Get-ODSPortalPortOwner, Test-ODSPortalPortBindable,
-#          Get-ODSPortalUserSid), native-llama-runtime.ps1
+#          Get-ODSPortalUserSid, and through it detection.ps1 and
+#          tier-map.ps1), native-llama-runtime.ps1
 #          (Assert-ODSNativeLlamaOptions), desktop-model.ps1
 #          (Assert-ODSDesktopModelPin, Read-ODSDesktopModelStamp,
 #          Test-ODSDesktopModelStamp), desktop-python.ps1
@@ -18,7 +20,8 @@
 # Provides: Get-ODSDesktopPaths, Test-ODSDesktopVcRuntime,
 #           Install-ODSDesktopVcRuntime, Get-ODSDesktopModelPin,
 #           Get-ODSDesktopModelDownloadBytes,
-#           Resolve-ODSDesktopContextSize, New-ODSDesktopLlamaOptions,
+#           Resolve-ODSDesktopContextSize, Get-ODSDesktopRecommendation,
+#           Get-ODSDesktopEngineRoute, New-ODSDesktopLlamaOptions,
 #           Assert-ODSDesktopRuntimeTakeover, New-ODSDesktopApiEnvironment,
 #           ConvertTo-ODSDesktopEnvText, ConvertFrom-ODSDesktopEnvText,
 #           Get-ODSDesktopAppFiles, Publish-ODSDesktopFolder,
@@ -33,7 +36,13 @@
 
 $script:ODSDesktopApiTaskPrefix = 'ODSDesktopApi-'
 $script:ODSDesktopApiPortCandidates = @(3101, 13101, 23101)
-$script:ODSDesktopRuntimeTaskDescription = 'ODS Desktop: llama.cpp model server on the CPU (127.0.0.1, API key). Starts at sign-in.'
+# The model runtime's scheduled task description, by route.
+$script:ODSDesktopRuntimeTaskDescriptions = @{
+    cpu = 'ODS Desktop: llama.cpp model server on the CPU (127.0.0.1, API key). Starts at sign-in.'
+    gpu = 'ODS Desktop: llama.cpp model server on the AMD GPU (127.0.0.1, API key). Starts at sign-in.'
+}
+# What main's catalog selector is told on the CPU route.
+$script:ODSDesktopCpuGpuInfo = @{ Backend = 'none'; VramMB = 0; Name = 'CPU'; MemoryType = 'none' }
 # llama.cpp's MSVC build links the 2015-2022 runtime. Binaries from MSVC 17.10
 # and later need its 14.40 DLLs: older ones crash in std::mutex.
 $script:ODSDesktopVcRuntimeMinimum = [version]'14.40'
@@ -190,12 +199,92 @@ function Resolve-ODSDesktopContextSize([int]$CatalogContext, [int]$Cap = $script
     return [int]$size
 }
 
-function New-ODSDesktopLlamaOptions($Runtime, $Qualification) {
-    # main's options with the explicit CPU route: --device none and no GPU
+function Resolve-ODSDesktopCatalogModel($Gpu, [int]$RamGB, [string]$SourceRoot) {
+    # main's tier and catalog selector; $null when the tier is too small.
+    $tier = [string](ConvertTo-TierFromGpu -GpuInfo $Gpu -SystemRamGB $RamGB)
+    if ($tier -eq '0') { return $null }
+    if (-not $env:MODEL_PROFILE) { $env:MODEL_PROFILE = 'qwen' }
+    return (Resolve-CatalogModelRecommendation -TierConfig (Resolve-TierConfig -Tier $tier) -Tier $tier -GpuInfo $Gpu `
+        -SystemRamGB $RamGB -SourceRoot $SourceRoot)
+}
+
+function Get-ODSDesktopGpuModel($Gpu, [int]$RamGB, [string]$SourceRoot) {
+    <#
+    .SYNOPSIS
+        The catalog model for the GPU route, or $null for the CPU route.
+    .DESCRIPTION
+        Get-ODSPortalAmdPlan's rule: main qualifies llama.cpp natively on
+        Windows x64 only on an AMD GPU over Vulkan. Other GPUs, and an AMD GPU
+        with no catalog fit for its reported memory, keep the CPU route, and
+        setup says so; no GPU capacity is ever inferred from an adapter name.
+    #>
+    if ($Gpu.Backend -ne 'amd') {
+        if ($Gpu.Backend -and $Gpu.Backend -ne 'none') {
+            Write-Host "         $($Gpu.Name): ODS Desktop uses the GPU on AMD Radeon only for now, so the model runs on the CPU."
+        }
+        return $null
+    }
+    try {
+        $config = Resolve-ODSDesktopCatalogModel $Gpu $RamGB $SourceRoot
+    } catch {
+        # Low reported VRAM can be a reserved UMA framebuffer or an older card.
+        if ($_.Exception.Message -notlike 'No catalog model fits the detected memory*' -or $Gpu.VramMB -ge 4096) { throw }
+        $config = $null
+    }
+    if (-not $config) {
+        Write-Host "         $($Gpu.Name) has no verified model fit with its reported graphics memory, so the model runs on the CPU."
+    }
+    return $config
+}
+
+function Get-ODSDesktopRecommendation {
+    <#
+    .SYNOPSIS
+        The model route ('gpu' or 'cpu') and main's catalog model for it.
+    .PARAMETER Gpu
+        Get-GpuInfo's answer, or $null for the CPU route (no usable Vulkan
+        device after all).
+    #>
+    param([Parameter(Mandatory = $true)][string]$SourceRoot, [long]$ContextSetting = 0, $Gpu = $null)
+    $ramGB = Get-SystemRamGB
+    $config = $null
+    if ($Gpu) { $config = Get-ODSDesktopGpuModel $Gpu $ramGB $SourceRoot }
+    $route = if ($config) { 'gpu' } else { 'cpu' }
+    if ($route -eq 'cpu') {
+        $config = Resolve-ODSDesktopCatalogModel $script:ODSDesktopCpuGpuInfo $ramGB $SourceRoot
+        if (-not $config) { throw "This PC has $ramGB GB of memory; ODS Desktop needs at least 8 GB to run a local model." }
+    }
+    # The GPU route takes the catalog's context for the GPU's memory.
+    $cap = if ($route -eq 'gpu') { [int]$config.MaxContext } else { $script:ODSDesktopCpuContextCap }
+    $context = Resolve-ODSDesktopContextSize ([int]$config.MaxContext) $cap
+    if ($ContextSetting -gt 0) { $context = Resolve-ODSDesktopContextSize ([int]$ContextSetting) ([int]$ContextSetting) }
+    return [pscustomobject]@{ Route = $route; Gpu = $(if ($route -eq 'gpu') { $Gpu } else { $null }); Config = $config
+        Plan = [pscustomobject]@{ GgufFile = [string]$config.GgufFile; ContextSize = $context } }
+}
+
+function Get-ODSDesktopEngineRoute($Recommendation, $Qualification) {
+    # The GPU route needs the qualified Vulkan device; without one the model
+    # runs on the CPU, announced with driver guidance, never silently.
+    if ($Recommendation.Route -ne 'gpu') { return 'cpu' }
+    if ($Qualification.Device) { return 'gpu' }
+    $seen = @($Qualification.Devices | ForEach-Object { "$($_.Name) $($_.Description)" }) -join '; '
+    $found = if ($seen) { " (it lists: $seen)" } else { '' }
+    Write-Host ("         llama.cpp found no usable Vulkan device for $($Recommendation.Gpu.Name)$found. Update the AMD Adrenalin " +
+        'driver from amd.com/support and restart Windows. Until then the model runs on the CPU (slower); run setup again afterwards to use the GPU.')
+    return 'cpu'
+}
+
+function New-ODSDesktopLlamaOptions($Runtime, $Qualification, [string]$Route) {
+    # main's Vulkan options: the qualified device with the layers llama.cpp
+    # fits ('auto'), or the explicit CPU route: --device none and no GPU
     # layers, never llama.cpp's silent fallback.
     $options = New-ODSPortalRuntimeOptions $Runtime $Qualification
-    $options.Device = 'none'
-    $options.NGpuLayers = '0'
+    if ($Route -ceq 'cpu') {
+        $options.Device = 'none'
+        $options.NGpuLayers = '0'
+    } elseif ($Route -cne 'gpu' -or -not $Qualification.Device) {
+        throw "Unknown Desktop model route '$Route', or the GPU route without a qualified Vulkan device."
+    }
     Assert-ODSNativeLlamaOptions ([pscustomobject]$options)
     return $options
 }

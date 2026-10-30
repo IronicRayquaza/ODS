@@ -14,15 +14,17 @@ This is an opt-in preview. `.\install.ps1` and the
 - **Local chat** in the ODS window: answers stream as they are written,
   follow-up questions keep their context, chats are saved in the window and
   can be saved as Markdown or JSON.
-- **The model the ODS catalog picks for your PC's memory**, run by the pinned
-  llama.cpp build on the CPU.
+- **The model the ODS catalog picks for your PC**, run by the pinned
+  llama.cpp build: on an AMD Radeon GPU over Vulkan when llama.cpp qualifies
+  it, otherwise on the CPU. Setup says which, and why.
 - **A Start menu and desktop icon** that opens ODS in its own Microsoft Edge
   app window (or your default browser when Edge is missing). Right after you
   sign in it shows "ODS is starting" for a few seconds, then opens by itself.
 - **An Apps & Features entry** to remove it, which asks before deleting your data.
 
 Not in the preview yet: extensions, switching models from the dashboard
-(rerun setup instead), GPU acceleration, voice, agents and remote access.
+(rerun setup instead), NVIDIA and Intel GPUs (they use the CPU for now), voice,
+agents and remote access.
 
 ## Requirements
 
@@ -30,6 +32,7 @@ Not in the preview yet: extensions, switching models from the dashboard
 |---|---|
 | Windows | Windows 10 version 1803 or later, or Windows 11, on an Intel or AMD (x64) processor |
 | Memory | 8 GB minimum; 16 GB recommended |
+| GPU (optional) | An AMD Radeon GPU with a current Adrenalin driver runs the model over Vulkan; without one, the CPU does |
 | Disk | About 6 GB free on the drive that holds your user profile |
 | Account | A normal (non-Administrator) PowerShell window |
 | Internet | For the first setup only (llama.cpp, Python, the model) |
@@ -125,6 +128,12 @@ Logs: `%LOCALAPPDATA%\ODS\desktop\logs` (the app) and
 - **CPU threads:** llama.cpp picks its own thread count. On PCs with many
   cores it can use more threads than is fastest; a `--threads` option needs a
   change to the shared llama.cpp launcher and is discussed in RFC #7968.
-- **Context:** the CPU route uses up to 16K tokens. Older parts of a long chat
+- **GPU:** only AMD Radeon GPUs, the route ODS already qualifies natively on
+  Windows. On a PC with an NVIDIA driver the NVIDIA GPU is detected first and
+  the model runs on the CPU. When llama.cpp lists no usable Vulkan device
+  (an old driver), setup says so and uses the CPU; update the driver and run
+  setup again. A rerun keeps the model and context you already have.
+- **Context:** the CPU route uses up to 16K tokens; the GPU route the
+  catalog's context for the GPU's memory. Older parts of a long chat
   stay saved and on screen; the model sees the most recent part, and the chat
   says so.

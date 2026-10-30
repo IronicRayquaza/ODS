@@ -133,7 +133,7 @@ function Assert-ODSDesktopDiskSpace($Selection, $Recommendation) {
     }
 }
 
-function Install-ODSDesktopModelEngine($Existing, [string]$OwnerPath) {
+function Install-ODSDesktopModelEngine($Existing, [string]$OwnerPath, $Recommendation) {
     Assert-ODSDesktopRuntimeTakeover $Existing $OwnerPath
     $pin = Get-ODSNativeLlamaPin -SourceRoot $SourceRoot
     $runtime = $null
@@ -145,31 +145,23 @@ function Install-ODSDesktopModelEngine($Existing, [string]$OwnerPath) {
         Write-Host "         Downloading llama.cpp $($pin.ReleaseTag) from github.com/ggml-org (about $([math]::Ceiling($pin.Size / 1MB)) MB, SHA-256 pinned)."
         $runtime = Install-ODSNativeLlamaRuntime -Pin $pin
     }
-    $qualification = Test-ODSNativeLlamaQualification -ExecutablePath $runtime.ExecutablePath -ExpectedBuild $pin.Build
+    $adapter = if ($Recommendation.Gpu) { [string]$Recommendation.Gpu.Name } else { '' }
+    $qualification = Test-ODSNativeLlamaQualification -ExecutablePath $runtime.ExecutablePath -ExpectedBuild $pin.Build -AdapterName $adapter
     if ($qualification.PolicyHint) { Write-Host "         $($qualification.PolicyHint)" }
-    Write-Host "         llama.cpp $($pin.ReleaseTag) runs on this PC (CPU)."
-    return [pscustomobject]@{ Runtime = $runtime; Qualification = $qualification }
-}
-
-function Get-ODSDesktopRecommendation([long]$ContextSetting) {
-    # main's catalog selector for a PC without a GPU route, so Desktop gets
-    # the model Linux and Windows give the same CPU and memory.
-    $gpu = @{ Backend = 'none'; VramMB = 0; Name = 'CPU'; MemoryType = 'none' }
-    $ramGB = Get-SystemRamGB
-    $tier = [string](ConvertTo-TierFromGpu -GpuInfo $gpu -SystemRamGB $ramGB)
-    if ($tier -eq '0') { throw "This PC has $ramGB GB of memory; ODS Desktop needs at least 8 GB to run a local model." }
-    if (-not $env:MODEL_PROFILE) { $env:MODEL_PROFILE = 'qwen' }
-    $config = Resolve-CatalogModelRecommendation -TierConfig (Resolve-TierConfig -Tier $tier) -Tier $tier -GpuInfo $gpu `
-        -SystemRamGB $ramGB -SourceRoot $SourceRoot
-    $context = Resolve-ODSDesktopContextSize ([int]$config.MaxContext)
-    if ($ContextSetting -gt 0) { $context = Resolve-ODSDesktopContextSize ([int]$ContextSetting) ([int]$ContextSetting) }
-    return [pscustomobject]@{ Config = $config; Plan = [pscustomobject]@{ GgufFile = [string]$config.GgufFile; ContextSize = $context } }
+    $route = Get-ODSDesktopEngineRoute $Recommendation $qualification
+    if ($route -eq 'gpu') {
+        Write-Host "         llama.cpp $($pin.ReleaseTag) runs on $($qualification.Device.Name): $($qualification.Device.Description) ($($qualification.Device.TotalMiB) MiB, Vulkan)."
+    } else {
+        Write-Host "         llama.cpp $($pin.ReleaseTag) runs on this PC (CPU)."
+    }
+    return [pscustomobject]@{ Runtime = $runtime; Qualification = $qualification; Route = $route }
 }
 
 function Start-ODSDesktopModel($Existing, $Engine, $Selection, $Paths) {
     if ($Existing.Kind -eq 'llama-server') { $port = [int]$Existing.Selection.Port; $keep = $true }
     else { $port = Select-ODSPortalRuntimePort; $keep = $false }
-    $options = New-ODSDesktopLlamaOptions $Engine.Runtime $Engine.Qualification
+    $options = New-ODSDesktopLlamaOptions $Engine.Runtime $Engine.Qualification $Engine.Route
+    if ($Engine.Route -eq 'gpu') { Write-ODSPortalFitWarning $Engine.Qualification.Device (Join-Path (Get-ODSPortalModelsDir) $Selection.GgufFile) }
     $plan = [ordered]@{ ExecutablePath = $Engine.Runtime.ExecutablePath; Port = $port; ModelsDir = (Get-ODSPortalModelsDir)
         ContextSize = $Selection.ContextSize; GgufFile = $Selection.GgufFile }
     $null = New-Item -ItemType Directory -Force -Path $Paths.Root
@@ -177,7 +169,7 @@ function Start-ODSDesktopModel($Existing, $Engine, $Selection, $Paths) {
     Write-ODSPrivateEnvFile -Path $Paths.RuntimeOwner -Content ($owner | ConvertTo-Json -Compress)
     Write-Host "         Loading $($Selection.GgufFile) on 127.0.0.1:$port ($($Selection.ContextSize) tokens of context)..."
     $null = Invoke-ODSPortalRuntimeCutover -Existing $Existing -Plan $plan -Options $options -ApiKey (Get-ODSPortalApiKey) `
-        -KeepPort $keep -TaskDescription $script:ODSDesktopRuntimeTaskDescription
+        -KeepPort $keep -TaskDescription $script:ODSDesktopRuntimeTaskDescriptions[$Engine.Route]
     $previous = if ($Existing.Kind -eq 'llama-server') { Split-Path -Parent $Existing.Launch.ExecutablePath } else { '' }
     Remove-ODSNativeLlamaOldRuntimes -KeepDirectory $Engine.Runtime.Directory -PreviousDirectory $previous
     return $port
@@ -290,7 +282,7 @@ function Install-ODSDesktop {
     $explicit = @{}
     if ($Port) { $explicit.Port = [long]$Port }
     $settings = Resolve-ODSDesktopSettings -Explicit $explicit -Previous (Read-ODSDesktopSettings $paths.Settings) -Defaults $defaults
-    $recommendation = Get-ODSDesktopRecommendation ([long]$settings.ContextSize)
+    $recommendation = Get-ODSDesktopRecommendation -SourceRoot $SourceRoot -ContextSetting ([long]$settings.ContextSize) -Gpu (Get-GpuInfo)
     # Read-only here; stage 3 refuses a runtime Desktop may not take over.
     $existing = Get-ODSPortalExistingRuntime
     $selection = Resolve-ODSPortalRuntimeSelection $existing $recommendation.Plan
@@ -307,7 +299,13 @@ function Install-ODSDesktop {
     Write-Host '         Present.'
 
     Write-ODSDesktopStage 3 'MODEL ENGINE' 'llama.cpp, the engine that runs the AI model on this PC.'
-    $engine = Install-ODSDesktopModelEngine $existing $paths.RuntimeOwner
+    $engine = Install-ODSDesktopModelEngine $existing $paths.RuntimeOwner $recommendation
+    if ($engine.Route -ne $recommendation.Route) {
+        # No usable Vulkan device after all: the CPU route's model, and its space.
+        $recommendation = Get-ODSDesktopRecommendation -SourceRoot $SourceRoot -ContextSetting ([long]$settings.ContextSize)
+        $selection = Resolve-ODSPortalRuntimeSelection $existing $recommendation.Plan
+        Assert-ODSDesktopDiskSpace $selection $recommendation
+    }
 
     Write-ODSDesktopStage 4 'AI MODEL' 'Chosen for this PC from the ODS model catalog.'
     if (-not $selection.Carried) {

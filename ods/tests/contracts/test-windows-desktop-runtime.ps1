@@ -1,5 +1,5 @@
-# Windows Desktop runtime plan: the Visual C++ prerequisite, the CPU model
-# options, who may own the model runtime, the dashboard-api environment, the
+# Windows Desktop runtime plan: the Visual C++ prerequisite, the model route
+# (AMD GPU over Vulkan or the CPU) and its options, who may own the model runtime, the dashboard-api environment, the
 # shipped app files, whole-folder publishing, ports, shortcuts and the printed
 # commands. Downloads, Windows prompts and elevation are fixtures; only
 # temporary files are written. Runs under Windows PowerShell 5.1 and 7.
@@ -98,14 +98,64 @@ try {
     $catalogSize = [pscustomobject]@{ ModelSizeMB = 2741; GgufSha256 = ('AB' * 32) }
     Check ((Get-ODSDesktopModelDownloadBytes ([pscustomobject]@{ GgufFile = 'Qwen3.5-4B-Q4_K_M.gguf'; Carried = $false }) $catalogSize $store) -eq 2741MB) 'a real catalog model over 2 GB is sized without overflowing'
 
-    # --- CPU options through main's builder ------------------------------------
+    # --- Model route: an AMD GPU over Vulkan, everything else the CPU ----------
+    # main's real catalog with fixture hardware; setup's messages are captured.
+    & {
+        function Write-Host { param([Parameter(ValueFromRemainingArguments = $true)]$Text) $script:output += ,([string]($Text -join ' ')) }
+        function Get-SystemRamGB { return $script:ramGB }
+        $env:MODEL_PROFILE = ''
+        $script:ramGB = 32
+        $script:output = @()
+        $nvidia = @{ Backend = 'nvidia'; Name = 'NVIDIA GeForce RTX 4070'; VramMB = 12282; Count = 1; MemoryType = 'discrete' }
+        $result = Get-ODSDesktopRecommendation -SourceRoot $root -Gpu $nvidia
+        Check ($result.Route -ceq 'cpu' -and $null -eq $result.Gpu -and $result.Plan.ContextSize -le 16384) 'an NVIDIA GPU keeps the CPU route and its 16K context'
+        Check (($script:output -join ' ') -match 'RTX 4070: ODS Desktop uses the GPU on AMD Radeon only') 'the CPU route on an NVIDIA PC says why'
+        $script:output = @()
+        $result = Get-ODSDesktopRecommendation -SourceRoot $root -Gpu @{ Backend = 'none'; Name = 'None'; VramMB = 0; MemoryType = 'none' }
+        Check ($result.Route -ceq 'cpu' -and $script:output.Count -eq 0) 'a PC without a GPU takes the CPU route quietly'
+        $radeon = @{ Backend = 'amd'; Name = 'AMD Radeon RX 9070 XT'; VramMB = 16304; Count = 1; MemoryType = 'discrete' }
+        $script:ramGB = 47
+        $result = Get-ODSDesktopRecommendation -SourceRoot $root -Gpu $radeon
+        Check ($result.Route -ceq 'gpu' -and $result.Gpu.Name -ceq 'AMD Radeon RX 9070 XT') 'a 16 GB AMD GPU takes the Vulkan route'
+        Check ($result.Plan.ContextSize -eq [int]$result.Config.MaxContext -and $result.Plan.GgufFile -ceq [string]$result.Config.GgufFile) 'the GPU route takes the catalog''s model and context, not the CPU cap'
+        $cpu = Get-ODSDesktopRecommendation -SourceRoot $root
+        Check ($cpu.Route -ceq 'cpu' -and $cpu.Plan.ContextSize -le 16384) 'no GPU argument is the CPU route (no usable Vulkan device after all)'
+        Check ((Get-ODSDesktopRecommendation -SourceRoot $root -ContextSetting 8192 -Gpu $radeon).Plan.ContextSize -eq 8192) 'the owner''s context setting wins on the GPU route'
+        $script:ramGB = 16
+        $script:output = @()
+        $igpu = @{ Backend = 'amd'; Name = 'AMD Radeon(TM) Graphics'; VramMB = 512; Count = 1; MemoryType = 'discrete' }
+        $result = Get-ODSDesktopRecommendation -SourceRoot $root -Gpu $igpu
+        Check ($result.Route -ceq 'cpu' -and ($script:output -join ' ') -match 'no verified model fit') 'a 512 MB AMD iGPU takes the CPU route and says so; no GPU memory is assumed'
+        $script:ramGB = 4
+        Check ((Get-Failure { Get-ODSDesktopRecommendation -SourceRoot $root -Gpu $nvidia }) -match '4 GB of memory.*at least 8 GB') 'a PC with too little memory for the CPU route is refused'
+
+        # Qualification decides: without the AMD Vulkan device, the CPU route.
+        $gpuPick = [pscustomobject]@{ Route = 'gpu'; Gpu = $radeon }
+        $vulkan0 = [pscustomobject]@{ Name = 'Vulkan0'; Description = 'AMD Radeon RX 9070 XT'; TotalMiB = 16304; FreeMiB = 15800 }
+        Check ((Get-ODSDesktopEngineRoute $gpuPick ([pscustomobject]@{ Device = $vulkan0; Devices = @($vulkan0) })) -ceq 'gpu') 'a qualified Vulkan device keeps the GPU route'
+        $script:output = @()
+        $software = [pscustomobject]@{ Name = 'Vulkan0'; Description = 'llvmpipe (LLVM 15.0.7, 256 bits)'; TotalMiB = 8192; FreeMiB = 8192 }
+        $route = Get-ODSDesktopEngineRoute $gpuPick ([pscustomobject]@{ Device = $null; Devices = @($software) })
+        Check ($route -ceq 'cpu' -and ($script:output -join ' ') -match 'no usable Vulkan device for AMD Radeon RX 9070 XT \(it lists: Vulkan0 llvmpipe.*Adrenalin.*runs on the CPU') 'no usable Vulkan device is announced with driver guidance, then the CPU route'
+        Check ((Get-ODSDesktopEngineRoute ([pscustomobject]@{ Route = 'cpu'; Gpu = $null }) ([pscustomobject]@{ Device = $vulkan0 })) -ceq 'cpu') 'the CPU route never switches to a GPU it did not plan for'
+    }
+
+    # --- llama.cpp options through main's builder, by route ---------------------
     $runtime = [pscustomobject]@{ ExecutablePath = 'C:\ODS\llama.cpp\b9014-win-vulkan-x64\llama-server.exe'; ReleaseTag = 'b9014'; ZipSha256 = ('c' * 64) }
-    $options = New-ODSDesktopLlamaOptions $runtime ([pscustomobject]@{ Device = $null })
+    $options = New-ODSDesktopLlamaOptions $runtime ([pscustomobject]@{ Device = $null }) 'cpu'
     Check ($options.Device -ceq 'none' -and $options.NGpuLayers -ceq '0' -and -not $options.Contains('Backend')) 'Desktop runs the Vulkan build on the explicit CPU route'
     $plan = [pscustomobject]@{ ExecutablePath = $runtime.ExecutablePath; Port = 18080; ModelsDir = 'C:\ODS\models'; ContextSize = 16384; GgufFile = 'Qwen3.5-4B-Q4_K_M.gguf' }
     $arguments = ' ' + ((New-ODSNativeLlamaLaunchArguments $plan ([pscustomobject]$options)) -join ' ') + ' '
     Check ($arguments.Contains(' --device none ') -and $arguments.Contains(' --n-gpu-layers 0 ') -and $arguments.Contains(' --host 127.0.0.1 ') -and
         $arguments.Contains(' --api-key-file ')) 'the launch arguments are loopback, keyed and CPU-only'
+    $qualified = [pscustomobject]@{ Device = [pscustomobject]@{ Name = 'Vulkan1'; Description = 'AMD Radeon RX 9070 XT'; TotalMiB = 16304 } }
+    $options = New-ODSDesktopLlamaOptions $runtime $qualified 'gpu'
+    Check ($options.Device -ceq 'Vulkan1' -and $options.NGpuLayers -ceq 'auto' -and -not $options.Contains('Backend')) 'the GPU route is main''s AMD Vulkan options: the qualified device, layers by llama.cpp'
+    $arguments = ' ' + ((New-ODSNativeLlamaLaunchArguments $plan ([pscustomobject]$options)) -join ' ') + ' '
+    Check ($arguments.Contains(' --device Vulkan1 ') -and $arguments.Contains(' --n-gpu-layers auto ') -and $arguments.Contains(' --host 127.0.0.1 ')) 'the GPU launch names its Vulkan device, so llama.cpp never falls back silently'
+    Check ((Get-Failure { New-ODSDesktopLlamaOptions $runtime ([pscustomobject]@{ Device = $null }) 'gpu' }) -match 'without a qualified Vulkan device') 'the GPU route without a qualified device is refused'
+    Check ((Get-Failure { New-ODSDesktopLlamaOptions $runtime $qualified 'cuda' }) -match "Unknown Desktop model route 'cuda'") 'an unknown route is refused'
+    Check ($script:ODSDesktopRuntimeTaskDescriptions['gpu'] -match 'AMD GPU' -and $script:ODSDesktopRuntimeTaskDescriptions['cpu'] -match 'on the CPU') 'the sign-in task says where the model runs'
 
     # --- Who may own the model runtime -----------------------------------------
     $owner = Join-Path $fixture 'runtime-owner.json'

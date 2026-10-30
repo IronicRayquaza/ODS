@@ -74,7 +74,7 @@ containers; it does not run full installs.
 | Docker Desktop + WSL2   | Supported | Primary path; GPU via Docker Desktop WSL2 backend. |
 | NVIDIA GPU              | Supported | When WSL2 GPU passthrough is configured. |
 | AMD GPU                 | Supported | When Docker Desktop and drivers are set up. |
-| Native Windows (no WSL2)| Preview (chat only) | [ODS Windows Desktop](WINDOWS-DESKTOP.md): the dashboard and local chat on the CPU, opt-in. The Docker stack still runs in WSL2. |
+| Native Windows (no WSL2)| Preview (chat only) | [ODS Windows Desktop](WINDOWS-DESKTOP.md): the dashboard and local chat on an AMD GPU (Vulkan) or the CPU, opt-in. The Docker stack still runs in WSL2. |
 
 See [WINDOWS-QUICKSTART.md](WINDOWS-QUICKSTART.md) and [WSL2-GPU-PASSTHROUGH.md](WSL2-GPU-PASSTHROUGH.md) for setup.
 

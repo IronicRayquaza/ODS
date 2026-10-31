@@ -18,7 +18,8 @@ param(
     [int]$Port = 0,
     [string]$DashboardDist = '',
     [switch]$NoShortcut,
-    [switch]$NoPortal
+    [switch]$NoPortal,
+    [string[]]$Apps = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -27,14 +28,15 @@ $Lib = Join-Path $PSScriptRoot 'windows\lib'
 . (Join-Path $Lib 'wsl-portal-amd.ps1')
 . (Join-Path $Lib 'app-shortcut.ps1')
 foreach ($name in @('desktop-model.ps1', 'desktop-settings.ps1', 'desktop-python.ps1', 'desktop-runtime.ps1', 'desktop-api-launcher.ps1',
-    'desktop-portal.ps1', 'desktop-uninstall.ps1')) {
+    'desktop-portal.ps1', 'desktop-apps.ps1', 'desktop-uninstall.ps1')) {
     . (Join-Path $Lib $name)
 }
 
 # Files the sign-in task and uninstall.ps1 run, copied beside launch-api.ps1
 # so both keep working after the ODS checkout is moved or deleted.
 $script:ODSDesktopLauncherLibraries = @('private-file.ps1', 'native-llama-runtime.ps1', 'desktop-python.ps1',
-    'desktop-runtime.ps1', 'desktop-api-launcher.ps1', 'desktop-portal.ps1', 'app-shortcut.ps1', 'desktop-uninstall.ps1')
+    'desktop-runtime.ps1', 'desktop-api-launcher.ps1', 'desktop-portal.ps1', 'desktop-apps.ps1', 'app-shortcut.ps1',
+    'desktop-uninstall.ps1')
 $script:ODSDesktopApiReadySeconds = 150
 $script:ODSDesktopFreeSpaceHeadroomGB = 1.5
 
@@ -66,8 +68,8 @@ $script:ODSDesktopUninstallScript = @'
 [CmdletBinding()]
 param([switch]$KeepData, [switch]$RemoveData, [switch]$NonInteractive)
 $ErrorActionPreference = 'Stop'
-foreach ($name in @('native-llama-runtime.ps1', 'desktop-runtime.ps1', 'desktop-api-launcher.ps1', 'desktop-portal.ps1', 'app-shortcut.ps1',
-    'desktop-uninstall.ps1')) {
+foreach ($name in @('native-llama-runtime.ps1', 'desktop-runtime.ps1', 'desktop-api-launcher.ps1', 'desktop-portal.ps1', 'desktop-apps.ps1',
+    'app-shortcut.ps1', 'desktop-uninstall.ps1')) {
     . (Join-Path (Join-Path $PSScriptRoot 'launcher') $name)
 }
 Write-Host ''
@@ -75,7 +77,7 @@ Write-Host '  Removing ODS Desktop'
 $code = 0
 try {
     $result = Invoke-ODSDesktopUninstall -Paths (Get-ODSDesktopPaths $PSScriptRoot) -KeepData:$KeepData -RemoveData:$RemoveData -NonInteractive:$NonInteractive `
-        -PortalPaths (Get-ODSDesktopPortalPaths)
+        -PortalPaths (Get-ODSDesktopPortalPaths) -AppsRoot (Get-ODSDesktopExtensionRoot)
     Write-Host '         Done: the ODS sign-in tasks (model, app, Portal), shortcuts and the Apps & Features entry are gone.'
     foreach ($entry in $result.Removed) { Write-Host "         Deleted $($entry.Path) ($(Format-ODSDesktopBytes $entry.Bytes))" }
     foreach ($entry in $result.Kept) { Write-Host "         Kept $($entry.Path) ($(Format-ODSDesktopBytes $entry.Bytes)); delete it yourself any time." }
@@ -276,7 +278,7 @@ function Publish-ODSDesktopUninstaller($Paths, [string[]]$Shortcuts, [string]$Mo
 }
 
 function Install-ODSDesktop {
-    param([bool]$NonInteractive, [bool]$Repair, [int]$Port, [string]$DashboardDist, [bool]$NoShortcut, [bool]$NoPortal)
+    param([bool]$NonInteractive, [bool]$Repair, [int]$Port, [string]$DashboardDist, [bool]$NoShortcut, [bool]$NoPortal, [string[]]$Apps)
     $paths = Get-ODSDesktopPaths
     $dist = if ($DashboardDist) { $DashboardDist } else { Join-Path $SourceRoot 'extensions\services\dashboard\dist' }
     Write-Host ''
@@ -338,6 +340,13 @@ function Install-ODSDesktop {
     Write-ODSDesktopStage 7 'ODS APP' 'The ODS dashboard, chat and Portal, served on this PC only.'
     $apiPort = Install-ODSDesktopApp $paths $dist $llamaPort $settings $portal
     Write-ODSDesktopSettings $paths.Settings ([ordered]@{ Port = [long]$apiPort; ContextSize = [long]$settings.ContextSize })
+    foreach ($app in $Apps) {
+        # Native apps from manifest recipes (desktop-apps.ps1); each one is pinned and hash-checked.
+        Write-Host "         Installing the $app app (no Docker)..."
+        $address = Install-ODSDesktopExtension -Id $app -AppSource $paths.AppSource `
+            -ServicesDir (Join-Path $paths.InstallDir 'extensions\services') -PythonDir $paths.Python
+        Write-Host "         $app is running at $address"
+    }
     $shortcuts = @()
     if (-not $NoShortcut) {
         $icon = Join-Path $SourceRoot 'extensions\services\dashboard\public\osmantic-os.ico'
@@ -358,7 +367,7 @@ function Install-ODSDesktop {
 
 try {
     $code = @(Install-ODSDesktop -NonInteractive $NonInteractive.IsPresent -Repair $Repair.IsPresent -Port $Port `
-        -DashboardDist $DashboardDist -NoShortcut $NoShortcut.IsPresent -NoPortal $NoPortal.IsPresent)[-1]
+        -DashboardDist $DashboardDist -NoShortcut $NoShortcut.IsPresent -NoPortal $NoPortal.IsPresent -Apps $Apps)[-1]
 } catch {
     # The owner sees one plain sentence and the way back; the full error,
     # with its stack, goes to a log for whoever helps them. It lives in

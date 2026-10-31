@@ -192,7 +192,8 @@ function Invoke-ODSDesktopUninstall {
         [string]$RegistryRoot = $script:ODSDesktopUninstallRoot,
         [string]$ApiTaskName = ('ODSDesktopApi-' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value),
         [scriptblock]$Ask = ${function:Read-ODSDesktopDataChoice},
-        $PortalPaths = $null)
+        $PortalPaths = $null,
+        [string]$AppsRoot = '')
     $runtime = Get-ODSDesktopOwnedRuntime $Paths
     $owned = @(Get-ODSDesktopOwnedPaths $runtime)
     $remove = Resolve-ODSDesktopDataChoice $Paths $owned $KeepData $RemoveData $NonInteractive $Ask
@@ -203,6 +204,7 @@ function Invoke-ODSDesktopUninstall {
     }
     # Portal (desktop-portal.ps1) talks to the model; it goes before the files.
     $portal = if ($PortalPaths) { Remove-ODSDesktopPortal $PortalPaths $remove $Paths.Python } else { $null }
+    $appData = if ($AppsRoot) { @(Remove-ODSDesktopExtensions $remove $AppsRoot) } else { @() }
     $shortcuts = @(Remove-ODSDesktopShortcuts (Join-Path $Paths.Root 'shortcuts.json'))
     $plan = @(Get-ODSDesktopDataPlan $Paths $owned $remove)
     foreach ($entry in @($plan | Where-Object { $_.Remove })) { Remove-Item -LiteralPath $entry.Path -Recurse -Force }
@@ -215,7 +217,9 @@ function Invoke-ODSDesktopUninstall {
     if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse -Force }
     Remove-ODSDesktopLeftovers $Paths $folders
     $kept = @($plan | Where-Object { -not $_.Remove })
-    if ($portal) { $kept += @($portal.Kept | ForEach-Object { [pscustomobject]@{ Path = $_; Bytes = (Get-ODSDesktopFolderBytes $_); Remove = $false } }) }
+    foreach ($folder in @($portal.Kept) + $appData) {
+        if ($folder) { $kept += [pscustomobject]@{ Path = $folder; Bytes = (Get-ODSDesktopFolderBytes $folder); Remove = $false } }
+    }
     return [pscustomobject]@{ StoppedApp = $stoppedApp; StoppedModel = $stoppedModel; StoppedPortal = [bool]($portal -and $portal.Stopped)
         Shortcuts = $shortcuts; Removed = @($plan | Where-Object { $_.Remove }); Kept = $kept }
 }

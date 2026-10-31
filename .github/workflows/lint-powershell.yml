@@ -397,7 +397,7 @@ jobs:
           ./tests/contracts/test-windows-desktop-settings.ps1
           ./tests/contracts/test-windows-desktop-model.ps1
 
-      - name: Windows Desktop Runtime Plan, Launcher, Uninstall and Portal Contracts (PowerShell 7)
+      - name: Windows Desktop Runtime Plan, Launcher, Uninstall, Portal and Apps Contracts (PowerShell 7)
         if: ${{ !cancelled() && runner.os == 'Windows' }}
         shell: pwsh
         run: |
@@ -405,8 +405,9 @@ jobs:
           ./tests/contracts/test-windows-desktop-launcher.ps1
           ./tests/contracts/test-windows-desktop-uninstall.ps1
           ./tests/contracts/test-windows-desktop-portal.ps1
+          ./tests/contracts/test-windows-desktop-apps.ps1
 
-      - name: Windows Desktop Runtime Plan, Launcher, Uninstall and Portal Contracts (Windows PowerShell)
+      - name: Windows Desktop Runtime Plan, Launcher, Uninstall, Portal and Apps Contracts (Windows PowerShell)
         if: ${{ !cancelled() && runner.os == 'Windows' }}
         shell: powershell
         run: |
@@ -414,6 +415,7 @@ jobs:
           ./tests/contracts/test-windows-desktop-launcher.ps1
           ./tests/contracts/test-windows-desktop-uninstall.ps1
           ./tests/contracts/test-windows-desktop-portal.ps1
+          ./tests/contracts/test-windows-desktop-apps.ps1
 
       - name: Windows Docker Pull Contract
         if: ${{ !cancelled() && runner.os == 'Windows' }}

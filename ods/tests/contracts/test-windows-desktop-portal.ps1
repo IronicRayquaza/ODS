@@ -116,6 +116,14 @@ try {
     $tokens = $null; $errors = $null
     $ast = [Management.Automation.Language.Parser]::ParseFile($library, [ref]$tokens, [ref]$errors)
     Check ($errors.Count -eq 0) 'desktop-portal.ps1 parses without errors'
+
+    # --- The uninstaller loads only the libraries setup copies beside it ---
+    $installer = [IO.File]::ReadAllText((Join-Path $root 'installers/windows-desktop.ps1'))
+    $uninstallLibraries = [regex]::Match($installer, "(?s)\`$script:ODSDesktopUninstallScript = @'.*?foreach \(\`$name in @\((.*?)\)\) \{").Groups[1].Value
+    $names = @([regex]::Matches($uninstallLibraries, "'([a-z-]+\.ps1)'") | ForEach-Object { $_.Groups[1].Value })
+    $load = ($names | ForEach-Object { ". '" + (Join-Path $lib $_) + "'" }) -join '; '
+    $taskName = & ([Diagnostics.Process]::GetCurrentProcess().Path) -NoProfile -Command "$load; Get-ODSDesktopPortalTaskName" 2>&1
+    Check ($names.Count -ge 6 -and [string]$taskName -cmatch '^ODSPortal-S-1-5-') 'with only the uninstaller''s libraries, Portal removal can name its task (it once needed wsl-portal-amd.ps1)'
     $pathCommands = 'Test-Path', 'Get-Item', 'Get-ChildItem', 'Remove-Item', 'Move-Item', 'Copy-Item', 'Get-Content', 'Set-Content', 'Add-Content'
     $wildcard = @($ast.FindAll({ param($node)
         $node -is [Management.Automation.Language.CommandAst] -and $node.GetCommandName() -in $pathCommands -and

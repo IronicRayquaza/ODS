@@ -11,7 +11,7 @@
 # Expects: private-file.ps1 (Write-ODSPrivateEnvFile), native-llama-runtime.ps1
 #          (New-ODSNativeLlamaApiKey, Read-ODSNativeLlamaJson,
 #          Get-ODSNativeLlamaFileSha256), wsl-portal-amd.ps1
-#          (Get-ODSPortalUserSid, Get-ODSPortalRuntimeDir),
+#          (Get-ODSPortalRuntimeDir),
 #          backend-contract.ps1 (New-ODSInteractiveScheduledTaskPrincipal),
 #          desktop-python.ps1 (Assert-ODSDesktopDownloadPin,
 #          Save-ODSDesktopPinnedFile, Invoke-ODSDesktopPinnedDownload,
@@ -61,15 +61,21 @@ function Get-ODSDesktopPortalPaths([string]$Root = (Join-Path $env:LOCALAPPDATA 
     }
 }
 
-function Get-ODSDesktopPortalTaskName { return ($script:ODSDesktopPortalTaskPrefix + (Get-ODSPortalUserSid)) }
+function Get-ODSDesktopUserSid {
+    # From Windows itself: uninstall.ps1 loads only the libraries setup copies,
+    # and wsl-portal-amd.ps1, where Get-ODSPortalUserSid lives, is not one of them.
+    return [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+}
 
-function Get-ODSDesktopPortalPipe { return ('\\.\pipe\ods-pixel-ingress-' + (Get-ODSPortalUserSid)) }
+function Get-ODSDesktopPortalTaskName { return ($script:ODSDesktopPortalTaskPrefix + (Get-ODSDesktopUserSid)) }
 
-function Get-ODSDesktopPortalPreviewPipe { return ('\\.\pipe\ods-pixel-preview-' + (Get-ODSPortalUserSid)) }
+function Get-ODSDesktopPortalPipe { return ('\\.\pipe\ods-pixel-ingress-' + (Get-ODSDesktopUserSid)) }
+
+function Get-ODSDesktopPortalPreviewPipe { return ('\\.\pipe\ods-pixel-preview-' + (Get-ODSDesktopUserSid)) }
 
 function Get-ODSDesktopPortalPorts { return @($script:ODSDesktopPortalGatewayPort, $script:ODSDesktopPortalEdgePort, $script:ODSDesktopPortalPreviewPort) }
 
-function Get-ODSDesktopPortalSandboxProfile([string]$UserSid = (Get-ODSPortalUserSid)) {
+function Get-ODSDesktopPortalSandboxProfile([string]$UserSid = (Get-ODSDesktopUserSid)) {
     # sandbox_run.py profile_name: one AppContainer per Windows account.
     $sha = [Security.Cryptography.SHA256]::Create()
     try { $digest = $sha.ComputeHash([Text.Encoding]::ASCII.GetBytes($UserSid)) } finally { $sha.Dispose() }
@@ -369,7 +375,7 @@ function Stop-ODSDesktopPortal($Paths) {
 function Register-ODSDesktopPortalTask($Paths, [string]$PythonDir) {
     $pythonw = Join-Path $PythonDir 'pythonw.exe'
     $action = New-ScheduledTaskAction -Execute $pythonw -Argument ('"' + $Paths.Supervisor + '" "' + $Paths.Root + '"') -WorkingDirectory $Paths.Root
-    $trigger = New-ScheduledTaskTrigger -AtLogOn -User (Get-ODSPortalUserSid)
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User (Get-ODSDesktopUserSid)
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) `
         -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
     Register-ScheduledTask -TaskName (Get-ODSDesktopPortalTaskName) -TaskPath '\' -Action $action -Trigger $trigger -Settings $settings `

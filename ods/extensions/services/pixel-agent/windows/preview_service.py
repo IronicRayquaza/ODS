@@ -66,29 +66,31 @@ def collect_site(workspace, relative_directory):
     for part in relative_directory.split('/'):
         current = os.path.join(current, part)
         if not os.path.isdir(current) or is_reparse_point(current):
-            raise PublishError('source_directory_unavailable')
+            raise PublishError('missing_entry' if not os.path.lexists(current) else 'unsafe_directory')
     files, total = [], 0
     for directory, folders, names in os.walk(current):
         for folder in list(folders):
             full = os.path.join(directory, folder)
             if is_reparse_point(full):
-                raise PublishError('source_contains_link')
+                raise PublishError('unsafe_directory')
             if SENSITIVE.match(folder) or not ASSET_COMPONENT.match(folder):
                 folders.remove(folder)
         for name in names:
             full = os.path.join(directory, name)
             if is_reparse_point(full):
-                raise PublishError('source_contains_link')
+                raise PublishError('unsafe_file')
             if SENSITIVE.match(name) or not ASSET_COMPONENT.match(name) or not stat.S_ISREG(os.lstat(full).st_mode):
                 continue
             relative = os.path.relpath(full, current).replace(os.sep, '/')
             total += os.path.getsize(full)
             files.append((relative, full))
-            if len(files) > MAX_FILES or total > MAX_BYTES:
-                raise PublishError('site_too_large')
+            if len(files) > MAX_FILES:
+                raise PublishError('too_many_files')
+            if total > MAX_BYTES:
+                raise PublishError('snapshot_too_large')
     files.sort()
     if not any(relative == 'index.html' for relative, _ in files):
-        raise PublishError('entry_file_missing')
+        raise PublishError('missing_entry')
     return files, total
 
 
@@ -120,7 +122,7 @@ def snapshot(files, snapshots):
         # Copied bytes are checked again: the source may change while it is read.
         if [(relative, file_sha256(os.path.join(staging, *relative.split('/')))) for relative, _ in files] != entries:
             shutil.rmtree(staging)
-            raise PublishError('source_changed_during_capture')
+            raise PublishError('source_capture_changed')
         try:
             os.rename(staging, destination)
         except FileExistsError:
@@ -143,13 +145,13 @@ def publish(request, workspace, snapshots, port):
     if (not isinstance(request, dict) or set(request) != {'schemaVersion', 'action', 'relativeDirectory'}
             or request['schemaVersion'] != 1 or request['action'] != 'publish'
             or not valid_relative_directory(request['relativeDirectory'])):
-        raise PublishError('invalid_request')
+        raise PublishError('unsafe_directory')
     files, total = collect_site(workspace, request['relativeDirectory'])
     site_id, sha, entries = snapshot(files, snapshots)
     entry_sha = dict(entries)['index.html']
     status, matches = readback(port, site_id, entry_sha)
     if status != 200 or not matches:
-        raise PublishError('readback_failed')
+        raise RuntimeError('the preview did not read back from its own server')
     paths = [relative for relative, _ in entries]
     shown = paths[:32]
     while sum(len(path) for path in shown) > 2048:
@@ -165,6 +167,33 @@ def publish(request, workspace, snapshots, port):
         'publishedEmptyPaths': [path for path in empty if path in shown][:32],
         'publishedEmptyPathsOmitted': len([path for path in empty if path not in shown]),
     }
+
+
+def failure(code):
+    """The failure receipt workspace-preview.mjs validates (validatedFailureCode)."""
+    return {'schemaVersion': 1, 'kind': 'ods-pixel-workspace-preview', 'status': 'failed',
+            'error': 'ODS workspace preview publication failed', 'errorCode': code, 'boundary': BOUNDARY}
+
+
+def verify_current(request, workspace, snapshots):
+    """Whether the published snapshot still matches the folder it came from."""
+    if (set(request) != {'schemaVersion', 'action', 'relativeDirectory', 'siteId', 'sha256'} or request['schemaVersion'] != 1
+            or not valid_relative_directory(request['relativeDirectory']) or not SITE_ID.match(str(request['siteId']))):
+        raise PublishError('unsafe_directory')
+    files, total = collect_site(workspace, request['relativeDirectory'])
+    entries = [(relative, file_sha256(full)) for relative, full in files]
+    sha = site_digest(entries)
+    matched = (sha == request['sha256'] and request['siteId'] == 'site-' + sha[:24]
+               and os.path.isdir(os.path.join(snapshots, request['siteId'])))
+    return {'schemaVersion': 1, 'kind': 'ods-pixel-workspace-preview-verification', 'status': 'matched' if matched else 'changed',
+            'relativeDirectory': request['relativeDirectory'], 'siteId': 'site-' + sha[:24], 'sha256': sha,
+            'entrySha256': dict(entries)['index.html'], 'files': len(entries), 'bytes': total, 'boundary': BOUNDARY}
+
+
+def handle(request, workspace, snapshots, port):
+    if isinstance(request, dict) and request.get('action') == 'verify-current':
+        return verify_current(request, workspace, snapshots)
+    return publish(request, workspace, snapshots, port)
 
 
 class PreviewHandler(http.server.BaseHTTPRequestHandler):
@@ -244,12 +273,24 @@ class ControlProtocol(asyncio.Protocol):
 
     def _handle(self, line):
         try:
-            receipt = publish(json.loads(line.decode('utf-8')), *self.service)
+            request = json.loads(line.decode('utf-8'))
+            receipt = handle(request, *self.service)
         except PublishError as error:
-            receipt = {'schemaVersion': 1, 'status': 'failed', 'code': str(error)}
+            receipt = failure(str(error))
         except (ValueError, UnicodeDecodeError):
-            receipt = {'schemaVersion': 1, 'status': 'failed', 'code': 'invalid_request'}
+            receipt = failure('unsafe_directory')
+        except Exception as error:
+            # Logged, then the connection closes without a receipt: the plugin
+            # reports the preview service unavailable, which is what happened.
+            print(f'preview request failed: {error!r}', file=sys.stderr, flush=True)
+            asyncio.run_coroutine_threadsafe(self._close(), self.loop)
+            raise
+        action = request.get('action') if isinstance(request, dict) else None
+        print(f"preview {action}: {receipt.get('status')} {receipt.get('errorCode') or receipt.get('siteId', '')}", flush=True)
         asyncio.run_coroutine_threadsafe(self._send(receipt), self.loop)
+
+    async def _close(self):
+        self.transport.close()
 
     async def _send(self, receipt):
         self._reply(receipt)

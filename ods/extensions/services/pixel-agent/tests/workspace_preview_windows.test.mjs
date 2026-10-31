@@ -45,3 +45,39 @@ test("the win32 request writes its line without a half-close and reads the reply
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+test("the Windows preview service satisfies the plugin's own tool and verifier", { skip: process.platform !== "win32" }, async () => {
+  const { spawn } = await import("node:child_process");
+  const { writeFileSync, mkdirSync } = await import("node:fs");
+  const { createWorkspacePreviewTool, createWorkspacePreviewVerifier } = await import("../plugin/workspace-preview.mjs");
+  const root = mkdtempSync(path.join(tmpdir(), "ods-preview-service-"));
+  const workspace = path.join(root, "workspace");
+  mkdirSync(path.join(workspace, "game"), { recursive: true });
+  mkdirSync(path.join(workspace, "empty"), { recursive: true });
+  writeFileSync(path.join(workspace, "game", "index.html"), "<!doctype html><button>0</button><script src=app.js></script>");
+  writeFileSync(path.join(workspace, "game", "app.js"), "let n = 0;");
+  writeFileSync(path.join(workspace, "game", ".env"), "SECRET=1");
+  const pipe = `\\\\.\\pipe\\ods-preview-service-test-${process.pid}`;
+  const port = 20000 + (process.pid % 20000);
+  const service = spawn(process.env.ODS_TEST_PYTHON || "python", ["-I", new URL("../windows/preview_service.py", import.meta.url).pathname.replace(/^\//, ""),
+    pipe, workspace, path.join(root, "previews"), String(port)], { stdio: ["ignore", "pipe", "inherit"] });
+  try {
+    await new Promise((resolve, reject) => {
+      service.stdout.on("data", (chunk) => { if (String(chunk).includes("preview ready")) resolve(); });
+      service.on("exit", (code) => reject(new Error(`preview service exited ${code}`)));
+    });
+    const request = (payload, options) => socketRequest(payload, { ...options, socketPath: pipe, platform: "win32" });
+    const tool = createWorkspacePreviewTool({ request });
+    const published = await tool.execute("t1", { relativeDirectory: "game" });
+    assert.match(published.content[0].text, /ODS independently published and read back 2 workspace static files/);
+    assert.ok(!published.details.publishedPaths.includes(".env"));
+    const missing = await tool.execute("t2", { relativeDirectory: "empty" });
+    assert.doesNotMatch(missing.content[0].text, /could not publish a verified browser preview/, "a folder problem is reported as such, not as an unavailable service");
+    const verify = createWorkspacePreviewVerifier({ request });
+    assert.equal(await verify(published.details), true);
+    writeFileSync(path.join(workspace, "game", "app.js"), "let n = 1;");
+    assert.equal(await verify(published.details), false);
+  } finally {
+    service.kill();
+  }
+});

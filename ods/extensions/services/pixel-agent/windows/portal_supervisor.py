@@ -5,10 +5,11 @@ The sign-in task ODSPortal-<SID> runs this with the pinned pythonw.exe:
     pythonw.exe portal_supervisor.py <portal root>
 
 It joins a kill-on-close Job Object, then starts, in order and each proven
-before the next: the OpenClaw gateway (127.0.0.1), the ingress (a per-user
-named pipe) and the Pixel edge (127.0.0.1, bearer key). The outcome goes to
-portal-ready.json for setup to wait on. When any of the three exits, this
-process exits, the job ends the other two, and the task restarts the set.
+before the next: the preview service (a per-user named pipe for publishing,
+127.0.0.1 for serving), the OpenClaw gateway (127.0.0.1), the ingress (a
+per-user named pipe) and the Pixel edge (127.0.0.1, bearer key). The outcome goes to
+portal-ready.json for setup to wait on. When any of them exits, this
+process exits, the job ends the others, and the task restarts the set.
 Nothing listens on anything but loopback or a named pipe.
 """
 import http.client
@@ -49,6 +50,9 @@ def layout(root):
         'openclaw': os.path.join(root, 'openclaw', 'node_modules', 'openclaw', 'openclaw.mjs'),
         'ingress': os.path.join(runtime, 'pixel-agent', 'host', 'windows_ingress.mjs'),
         'edge': os.path.join(runtime, 'pixel-edge'),
+        'preview': os.path.join(runtime, 'pixel-agent', 'windows', 'preview_service.py'),
+        'previews': os.path.join(root, 'previews'),
+        'workspace': os.path.join(root, 'workspace'),
         'state': os.path.join(root, 'state'),
         'config': os.path.join(root, 'state', 'openclaw.json'),
         'home': os.path.join(root, 'home'),
@@ -106,10 +110,14 @@ def wait_until(name, process, ready, deadline):
 
 def start_portal(paths, settings):
     gateway_port, edge_port = int(settings['GATEWAY_PORT']), int(settings['EDGE_PORT'])
-    pipe = settings['INGRESS_PIPE']
+    pipe, preview_pipe, preview_port = settings['INGRESS_PIPE'], settings['PREVIEW_PIPE'], settings['PREVIEW_PORT']
     deadline = time.monotonic() + STARTUP_SECONDS
+    preview = start('preview', [sys.executable, '-I', paths['preview'], preview_pipe, paths['workspace'], paths['previews'],
+                                preview_port], base_environment(paths), paths['previews'], paths)
+    wait_until('preview', preview, lambda: win_job.pipe_ready(preview_pipe, 500), deadline)
     gateway_env = {**base_environment(paths), 'OPENCLAW_STATE_DIR': paths['state'],
-                   'OPENCLAW_CONFIG_PATH': paths['config'], 'OPENCLAW_HOME': paths['home']}
+                   'OPENCLAW_CONFIG_PATH': paths['config'], 'OPENCLAW_HOME': paths['home'],
+                   'ODS_PIXEL_PREVIEW_PIPE': preview_pipe}
     gateway = start('gateway', [paths['node'], paths['openclaw'], 'gateway', 'run'], gateway_env, paths['home'], paths)
     wait_until('gateway', gateway, lambda: http_status(gateway_port, '/health') == 200, deadline)
     ingress_env = {**base_environment(paths), 'PIXEL_INGRESS_PIPE': pipe, 'PIXEL_GATEWAY_PORT': str(gateway_port),
@@ -125,12 +133,13 @@ def start_portal(paths, settings):
     edge = start('edge', [sys.executable, '-c', code, paths['edge']], edge_env, paths['edge'], paths)
     # Any answer proves the listener; /v1/models without the key is a 401.
     wait_until('edge', edge, lambda: http_status(edge_port, '/v1/models') == 401, deadline)
-    return [gateway, ingress, edge]
+    return [preview, gateway, ingress, edge]
 
 
 def main(root):
     paths = layout(root)
     os.makedirs(paths['logs'], exist_ok=True)
+    os.makedirs(paths['previews'], exist_ok=True)
     with open(paths['intent'], encoding='utf-8') as handle:
         if json.load(handle).get('State') != 'running':
             return 0
@@ -147,7 +156,7 @@ def main(root):
                                 'StartedAt': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())})
     while all(child.poll() is None for child in children):
         time.sleep(1)
-    # Exiting closes the job handle; kill-on-close ends the other two.
+    # Exiting closes the job handle; kill-on-close ends the others.
     return next(child.returncode for child in children if child.returncode is not None) or 1
 
 

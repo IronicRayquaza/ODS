@@ -116,6 +116,14 @@ export const ODS_SEPTEMBER16_CONVERSATION_CONTRACT = [
 export const ODS_SANDBOX_RUNTIME_CONTRACT =
   "The sandbox has bash, python3 (no pip), git, rg, jq and node (no npm, npx or packages), but no network. Use node --check, node and node --test for JavaScript syntax and logic checks; there is no DOM or canvas. If a sandbox runtime or tool is missing, say so instead of probing other interpreters or emulating it in another language. Check browser JavaScript in the real page: publish with pixel_ods_workspace_preview, then pixel_ods_workspace_preview_inspect reports uncaught page script errors as pageErrors; no pageErrors does not prove the script works.";
 
+// What the Windows Desktop sandbox (pixel-agent/windows, a Windows AppContainer)
+// can run: cmd.exe, the private Node and the pinned Python, with no network.
+// Measured on Windows 11: Git Bash cannot start in an AppContainer and Node
+// cannot spawn children with piped output there, so node --test must run its
+// files in-process. Static, so the prompt stays cacheable.
+export const ODS_WINDOWS_SANDBOX_RUNTIME_CONTRACT =
+  "The sandbox is Windows cmd.exe, not bash: use cmd syntax (dir, type, copy, del, mkdir, findstr) and chain commands with &&. It has node (no npm, npx or packages) and python (no package installs), but no git and no network. Use node --check and node --experimental-test-isolation=none --test <file> for JavaScript syntax and logic checks; there is no DOM or canvas. Programs there cannot start child processes with piped output. If a sandbox runtime or tool is missing, say so instead of probing other interpreters or emulating it in another language. Check browser JavaScript in the real page: publish with pixel_ods_workspace_preview, then pixel_ods_workspace_preview_inspect reports uncaught page script errors as pageErrors; no pageErrors does not prove the script works.";
+
 // Keep the historical core byte-identical except its workdir sentence, which no
 // longer names Node, while retaining the exact newer CLI and authority-state
 // guidance already present in the compact contract.
@@ -174,7 +182,8 @@ export const ODS_TINY_CONVERSATION_CONTRACT = [
 
 // The historical full core assumed a sandbox. Adapt only those environment
 // claims for native execution; tools, permissions and task routes are unchanged.
-export function conversationContractForExecution(contract, executionHost) {
+export function conversationContractForExecution(contract, executionHost, platform = 'linux') {
+  if (executionHost === 'sandbox' && platform === 'win32') return windowsSandboxContract(contract);
   if (executionHost !== 'gateway') return contract;
   return contract
     .replace(` ${ODS_SANDBOX_RUNTIME_CONTRACT}`, '')
@@ -187,6 +196,16 @@ export function conversationContractForExecution(contract, executionHost) {
       'For protected host facts, native exec output is not a broker receipt and does not replace the required typed ODS host observations.')
     .replace('Generic exec is sandbox evidence, never ODS-host evidence.',
       'Native exec follows the configured owner access policy; its output is not a broker receipt.');
+}
+
+// The Windows Desktop sandbox runs cmd.exe in the workspace folder; only its
+// environment claims change, never tools, permissions or task routes.
+function windowsSandboxContract(contract) {
+  return contract
+    .replace(ODS_SANDBOX_RUNTIME_CONTRACT, ODS_WINDOWS_SANDBOX_RUNTIME_CONTRACT)
+    .replaceAll('Use exec with ls, find or rg --files to list directories', 'Use exec with dir or dir /s /b to list directories')
+    .replaceAll('List with exec ls, find or rg --files', 'List with exec dir or dir /s /b')
+    .replaceAll('exec starts at /workspace.', 'exec starts in the workspace folder.');
 }
 
 export const ODS_LOOP_RECOVERY_CONTRACT =
@@ -362,7 +381,7 @@ export function promptContractForAgent(
   agentId,
   event = undefined,
   { verificationStatus, configuredContextWindow, configuredLeanPrompt, privateBrowserAccess, executionHost,
-    configuredResponseLanguage } = {}
+    configuredResponseLanguage, executionPlatform } = {}
 ) {
   if (!context || context.agentId !== agentId) return undefined;
   const languageContract = responseLanguageContract(configuredResponseLanguage);
@@ -378,7 +397,7 @@ export function promptContractForAgent(
   const tinyPrompt = contextWindows.length > 0 && Math.min(...contextWindows) <= 8192;
   const conversationContract = conversationContractForExecution(tinyPrompt
     ? ODS_TINY_CONVERSATION_CONTRACT : leanPrompt
-    ? ODS_COMPACT_CONVERSATION_CONTRACT : ODS_CONVERSATION_CONTRACT, executionHost)
+    ? ODS_COMPACT_CONVERSATION_CONTRACT : ODS_CONVERSATION_CONTRACT, executionHost, executionPlatform)
     .replace(RESPONSE_LANGUAGE_CONTRACT, () => languageContract);
   const teamRole=managedTeamRole(event);
   if(teamRole==='Coordinator')return {appendSystemContext:'Plan the team size only. Choose the smallest useful number of workers, from 1 to 6. Honor an explicitly requested number within that limit. Return only JSON with one integer field, count. Do not perform the task, ask questions, or use tools.'};

@@ -7,6 +7,9 @@ import { DERIVED_ARTIFACT_CONTRACT, PREVIEW_RUNTIME_CONTRACT } from "./agent-ski
 import { dockerWorkspacePreviewRequest } from "./workspace-preview-docker.mjs";
 
 const SOCKET_PATH = "/run/ods-pixel-preview/control.sock";
+// The Windows Desktop preview service (pixel-agent/windows/preview_service.py)
+// listens on a per-user named pipe; the Portal supervisor names it.
+const WINDOWS_PIPE = /^\\\\\.\\pipe\\ods-pixel-preview-S-1-5-21-\d+-\d+-\d+-\d+$/;
 const PATH_COMPONENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const ASSET_COMPONENT = /^(?!__ods_)(?!__pycache__$)[A-Za-z0-9_\[][A-Za-z0-9._\[\]-]{0,127}$/;
 const SITE_ID = /^site-[a-f0-9]{24}$/;
@@ -188,7 +191,15 @@ function emptyPathFeedback(response) {
     [...shown, ...(omitted > 0 ? [`${omitted} more`] : [])].join(", ") + ". ";
 }
 
-export function socketRequest(payload, { socketPath = SOCKET_PATH, signal, timeoutMs = 30_000 } = {}) {
+export function previewSocketPath(platform = process.platform, env = process.env) {
+  if (platform !== "win32") return SOCKET_PATH;
+  const pipe = env.ODS_PIXEL_PREVIEW_PIPE ?? "";
+  if (!WINDOWS_PIPE.test(pipe)) throw new Error("the Windows preview pipe is not configured");
+  return pipe;
+}
+
+export function socketRequest(payload, { socketPath, signal, timeoutMs = 30_000, platform = process.platform } = {}) {
+  socketPath ??= previewSocketPath(platform);
   if (signal?.aborted) return Promise.reject(new Error("Pixel workspace preview cancelled"));
   return new Promise((resolve, reject) => {
     const connection = net.createConnection({ path: socketPath });
@@ -211,7 +222,10 @@ export function socketRequest(payload, { socketPath = SOCKET_PATH, signal, timeo
     signal?.addEventListener("abort", onAbort, { once: true });
     if (signal?.aborted) onAbort();
     connection.on("connect", () => {
-      connection.end(`${JSON.stringify(payload)}\n`);
+      // A Windows named pipe has no half-close: end() makes the service see a
+      // broken pipe before it can reply. The one framed line is enough there.
+      if (platform === "win32") connection.write(`${JSON.stringify(payload)}\n`);
+      else connection.end(`${JSON.stringify(payload)}\n`);
     });
     connection.on("data", (chunk) => {
       total += chunk.length;

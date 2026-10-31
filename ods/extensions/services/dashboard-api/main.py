@@ -1521,6 +1521,7 @@ async def api_status(api_key: str = Depends(verify_api_key)):
             "bootstrap": None, "uptime": 0,
             "version": app.version, "tier": "Cloud" if cloud_mode else "Unknown",
             "runtimeProfile": RUNTIME_PROFILE.name,
+            "portalEnabled": bool(os.environ.get("PIXEL_OPENWEBUI_KEY")),
             "inferenceMode": "cloud" if cloud_mode else "local",
             "inferenceSource": "cloud-mode" if cloud_mode else "unknown",
             "cpu": {"percent": None, "temp_c": None, "scope": "unknown", "source": "unavailable"},
@@ -1709,6 +1710,8 @@ async def _build_api_status() -> dict:
         "bootstrap": bootstrap_data, "uptime": uptime,
         "version": app.version, "tier": tier,
         "runtimeProfile": RUNTIME_PROFILE.name,
+        # Portal is optional on Windows Desktop; the UI shows its conversations only when it runs.
+        "portalEnabled": bool(os.environ.get("PIXEL_OPENWEBUI_KEY")),
         "inferenceMode": inference_mode_value,
         "inferenceSource": inference_source_value,
         "currentModel": current_model_name,

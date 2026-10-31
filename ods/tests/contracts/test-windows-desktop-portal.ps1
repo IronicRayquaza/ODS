@@ -105,7 +105,7 @@ try {
     # --- Runtime copy: what the task runs, never a checkout or tests ---
     Publish-ODSDesktopPortalRuntime $root $paths
     foreach ($relative in @('pixel-agent\windows\portal_supervisor.py', 'pixel-agent\windows\sandbox_run.py', 'pixel-agent\windows\fs_op.py',
-        'pixel-agent\windows\win_job.py', 'pixel-agent\windows\plugin\index.js', 'pixel-agent\windows\plugin\cancellable.mjs',
+        'pixel-agent\windows\win_job.py', 'pixel-agent\windows\preview_service.py', 'pixel-agent\windows\plugin\index.js', 'pixel-agent\windows\plugin\cancellable.mjs',
         'pixel-agent\windows\plugin\openclaw.plugin.json', 'pixel-agent\host\windows_ingress.mjs', 'pixel-agent\host\pixel_ingress.mjs',
         'pixel-agent\plugin\index.js', 'pixel-agent\plugin\openclaw.plugin.json', 'pixel-edge\pixel_edge.py')) {
         Check (Test-Path -LiteralPath (Join-Path $paths.Runtime $relative) -PathType Leaf) "the runtime copy has $relative"

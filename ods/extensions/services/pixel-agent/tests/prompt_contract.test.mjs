@@ -29,6 +29,7 @@ import {
   operationsRequestContract,
   promptContractForAgent,
   conversationContractForExecution,
+  ODS_WINDOWS_SANDBOX_RUNTIME_CONTRACT,
 } from "../plugin/prompt-contract.mjs";
 import { AGENT_SKILLS, PREVIEW_RUNTIME_CONTRACT } from "../plugin/agent-skills.mjs";
 import { workspacePreviewMode } from "../plugin/tool-loop-guard.mjs";
@@ -1064,4 +1065,18 @@ test('8K core retains authority, execution and preview boundaries on native and 
       assert.doesNotMatch(contract, /sandbox has bash/);
     } else assert.match(contract, /sandbox has bash/);
   }
+});
+
+test("the Windows Desktop sandbox describes cmd.exe and its real toolchain, nothing else changes", () => {
+  for (const contract of [ODS_CONVERSATION_CONTRACT, ODS_COMPACT_CONVERSATION_CONTRACT, ODS_TINY_CONVERSATION_CONTRACT]) {
+    const windows = conversationContractForExecution(contract, "sandbox", "win32");
+    assert.ok(windows.includes(ODS_WINDOWS_SANDBOX_RUNTIME_CONTRACT));
+    assert.ok(!windows.includes(ODS_SANDBOX_RUNTIME_CONTRACT));
+    assert.ok(!windows.includes("ls, find or rg --files"));
+    assert.ok(!windows.includes("exec starts at /workspace"));
+    assert.equal(conversationContractForExecution(contract, "sandbox", "linux"), contract);
+  }
+  assert.match(ODS_WINDOWS_SANDBOX_RUNTIME_CONTRACT, /cmd\.exe, not bash/);
+  assert.match(ODS_WINDOWS_SANDBOX_RUNTIME_CONTRACT, /--experimental-test-isolation=none --test/);
+  assert.match(ODS_WINDOWS_SANDBOX_RUNTIME_CONTRACT, /no git and no network/);
 });

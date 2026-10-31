@@ -48,6 +48,11 @@ describe('Sidebar', () => {
     expect(screen.queryByText('Extensions')).not.toBeInTheDocument()
   })
 
+  test('Windows Desktop with its native Portal lists Portal tasks', () => {
+    render(<Sidebar status={{ ...defaultStatus, runtimeProfile: 'windows-desktop', portalEnabled: true }} collapsed={false} onToggle={() => {}} />)
+    expect(screen.getByRole('button', { name: 'New task' })).toBeInTheDocument()
+  })
+
   test('opens profile settings from the workspace footer', () => {
     render(<Sidebar status={defaultStatus} collapsed={false} onToggle={() => {}} />)
     expect(screen.getByText('Your profile')).toBeInTheDocument()

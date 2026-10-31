@@ -449,6 +449,7 @@ export default definePluginEntry({
         configuredResponseLanguage,
         privateBrowserAccess,
         executionHost,
+        executionPlatform: process.platform,
       });
       const repositoryEvidence = contract ? await extensionRepositoryContext(ownerEvent,
         result => toolLoopGuard.observeRepositorySource(context?.runId ?? event?.runId, result)) : '';

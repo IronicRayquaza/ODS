@@ -32,6 +32,7 @@ $script:ODSDesktopPortalTaskPrefix = 'ODSPortal-'
 $script:ODSDesktopPortalMinContext = 16384
 $script:ODSDesktopPortalGatewayPort = 18789
 $script:ODSDesktopPortalEdgePort = 9595
+$script:ODSDesktopPortalPreviewPort = 18791
 $script:ODSDesktopPortalReadySeconds = 150
 
 function Get-ODSDesktopPortalPaths([string]$Root = (Join-Path $env:LOCALAPPDATA 'ODS\portal')) {
@@ -63,6 +64,10 @@ function Get-ODSDesktopPortalPaths([string]$Root = (Join-Path $env:LOCALAPPDATA 
 function Get-ODSDesktopPortalTaskName { return ($script:ODSDesktopPortalTaskPrefix + (Get-ODSPortalUserSid)) }
 
 function Get-ODSDesktopPortalPipe { return ('\\.\pipe\ods-pixel-ingress-' + (Get-ODSPortalUserSid)) }
+
+function Get-ODSDesktopPortalPreviewPipe { return ('\\.\pipe\ods-pixel-preview-' + (Get-ODSPortalUserSid)) }
+
+function Get-ODSDesktopPortalPorts { return @($script:ODSDesktopPortalGatewayPort, $script:ODSDesktopPortalEdgePort, $script:ODSDesktopPortalPreviewPort) }
 
 function Get-ODSDesktopPortalSandboxProfile([string]$UserSid = (Get-ODSPortalUserSid)) {
     # sandbox_run.py profile_name: one AppContainer per Windows account.
@@ -378,7 +383,7 @@ function Wait-ODSDesktopPortalReady($Paths) {
         if (Test-Path -LiteralPath $Paths.Ready -PathType Leaf) {
             $ready = Read-ODSNativeLlamaJson $Paths.Ready
             if ($ready.Error) { throw ([string]$ready.Error) }
-            foreach ($port in @($script:ODSDesktopPortalGatewayPort, $script:ODSDesktopPortalEdgePort)) {
+            foreach ($port in (Get-ODSDesktopPortalPorts)) {
                 $listener = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
                 if ($listener.Count -ne 1 -or $listener[0].LocalAddress -ne '127.0.0.1') { throw "Portal port $port is not listening on 127.0.0.1 only." }
             }
@@ -401,7 +406,7 @@ function Install-ODSDesktopPortal {
     $null = Get-ODSDesktopPortalBudget -Context ([int]$runtime.ContextSize) -MaxTokens 1 -ModelId ([string]$runtime.GgufFile)
     $pins = Get-ODSDesktopPortalPins $SourceRoot
     Stop-ODSDesktopPortal $Paths
-    foreach ($port in @($script:ODSDesktopPortalGatewayPort, $script:ODSDesktopPortalEdgePort)) { Assert-ODSDesktopPortalPortFree $port }
+    foreach ($port in (Get-ODSDesktopPortalPorts)) { Assert-ODSDesktopPortalPortFree $port }
     foreach ($folder in @($Paths.Root, $Paths.State, $Paths.Home, $Paths.Workspace, $Paths.ChatState, $Paths.Logs)) {
         $null = New-Item -ItemType Directory -Force -Path $folder
     }
@@ -415,7 +420,8 @@ function Install-ODSDesktopPortal {
         -Sandbox $sandbox
     Write-ODSPrivateEnvFile -Path $Paths.Config -Content ($config | ConvertTo-Json -Depth 20)
     $environment = [ordered]@{ GATEWAY_PORT = [string]$script:ODSDesktopPortalGatewayPort; EDGE_PORT = [string]$script:ODSDesktopPortalEdgePort
-        INGRESS_PIPE = (Get-ODSDesktopPortalPipe) }
+        INGRESS_PIPE = (Get-ODSDesktopPortalPipe); PREVIEW_PIPE = (Get-ODSDesktopPortalPreviewPipe)
+        PREVIEW_PORT = [string]$script:ODSDesktopPortalPreviewPort }
     foreach ($name in $secrets.Keys) { $environment[$name] = $secrets[$name] }
     Write-ODSPrivateEnvFile -Path $Paths.Environment -Content (ConvertTo-ODSDesktopEnvText $environment)
     Write-ODSPrivateEnvFile -Path $Paths.Intent -Content '{"State":"running"}'

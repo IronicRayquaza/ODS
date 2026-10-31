@@ -552,6 +552,20 @@ async def _verified_external_host_runtime(host_status: object) -> dict[str, obje
     return _active_runtime_projection({"activeRuntime": runtime})
 
 
+async def _desktop_model_runtime() -> dict[str, object] | None:
+    """The windows-desktop profile has no host agent: prove the model from its own llama-server.
+
+    The same live check as Local chat's status (model record plus the context
+    llama-server reports), projected like the local switchboard's runtime.
+    """
+    from routers import local_chat
+
+    status = await local_chat.local_chat_status()
+    return _active_runtime_projection({"activeRuntime": {
+        "source": "local-switchboard", "model": status.get("model"), "contextLength": status.get("contextSize")}}) \
+        if status.get("state") == "ready" else None
+
+
 async def _model_readiness_issue_for_status(status: object) -> tuple[str, str] | None:
     return _model_readiness_issue_from_status(status)
 
@@ -665,6 +679,8 @@ async def pixel_status(http_response: Response = None) -> dict[str, object]:
             if inference_issue:
                 return {**activation_metadata, "available": False, "model": None, "state": "model_unavailable", "detail": inference_issue}
         runtime = _active_runtime_projection(host_status)
+        if available and runtime is None and RUNTIME_PROFILE.is_desktop:
+            runtime = await _desktop_model_runtime()
         if available and runtime is None:
             runtime = await _verified_external_host_runtime(host_status)
         if available and runtime is not None:

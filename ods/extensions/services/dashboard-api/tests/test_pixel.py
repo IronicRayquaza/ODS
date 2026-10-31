@@ -191,6 +191,22 @@ def test_desktop_activity_probe_uses_the_desktop_edge(monkeypatch):
     assert pixel_runtime_state._pixel_edge_activity_url() is None
 
 
+def test_desktop_portal_proves_its_model_from_its_own_llama_server(monkeypatch):
+    from routers import local_chat
+
+    async def ready():
+        return {"state": "ready", "model": "Qwen3.5-4B-Q4_K_M.gguf", "contextSize": 32768}
+
+    async def starting():
+        return {"state": "model_starting", "message": "starting"}
+
+    monkeypatch.setattr(local_chat, "local_chat_status", ready)
+    assert asyncio.run(pixel._desktop_model_runtime()) == {
+        "source": "local-switchboard", "model": "Qwen3.5-4B-Q4_K_M.gguf", "contextLength": 32768}
+    monkeypatch.setattr(local_chat, "local_chat_status", starting)
+    assert asyncio.run(pixel._desktop_model_runtime()) is None
+
+
 def test_compose_activity_probe_keeps_the_fixed_edge():
     assert pixel_runtime_state._pixel_edge_activity_url() == "http://pixel-edge:9595/v1/activity"
 

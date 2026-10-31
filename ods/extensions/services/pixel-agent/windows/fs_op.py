@@ -10,38 +10,63 @@ import os
 import shutil
 import sys
 
-request = json.loads(os.environ['ODS_FS_REQUEST'])
-op, path = request['op'], request['path']
-if op == 'read':
-    with open(path, 'rb') as handle:
-        sys.stdout.buffer.write(handle.read())
-elif op == 'write':
-    if request.get('mkdir', True):
-        os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
-    data = sys.stdin.buffer.read()
-    with open(path, 'wb') as handle:
-        handle.write(data)
-elif op == 'mkdirp':
-    os.makedirs(path, exist_ok=True)
-elif op == 'remove':
-    if os.path.isdir(path) and not os.path.islink(path):
-        if request.get('recursive'):
-            shutil.rmtree(path)
+
+def make_dirs(target):
+    """Create target and any missing parents, walking up only to a folder that exists.
+
+    os.makedirs checks every parent before creating anything, and the container
+    cannot see the folders above the workspace, so for the workspace itself it
+    tried to create C:\\ and failed (live 2026-11-01). Outside the workspace this
+    still ends at a folder the container may not create, and the error stands.
+    """
+    missing = []
+    folder = os.path.abspath(target)
+    while not os.path.isdir(folder):
+        missing.append(folder)
+        parent = os.path.dirname(folder)
+        if parent == folder:
+            break
+        folder = parent
+    for folder in reversed(missing):
+        os.mkdir(folder)
+
+
+def main(request, stdin, stdout):
+    op, path = request['op'], request['path']
+    if op == 'read':
+        with open(path, 'rb') as handle:
+            stdout.write(handle.read())
+    elif op == 'write':
+        if request.get('mkdir', True):
+            make_dirs(os.path.dirname(os.path.abspath(path)))
+        data = stdin.read()
+        with open(path, 'wb') as handle:
+            handle.write(data)
+    elif op == 'mkdirp':
+        make_dirs(path)
+    elif op == 'remove':
+        if os.path.isdir(path) and not os.path.islink(path):
+            if request.get('recursive'):
+                shutil.rmtree(path)
+            else:
+                os.rmdir(path)
+        elif os.path.lexists(path):
+            os.remove(path)
+        elif not request.get('force'):
+            raise FileNotFoundError(path)
+    elif op == 'rename':
+        os.replace(path, request['to'])
+    elif op == 'stat':
+        try:
+            info = os.lstat(path)
+        except FileNotFoundError:
+            stdout.write(b'null\n')
         else:
-            os.rmdir(path)
-    elif os.path.lexists(path):
-        os.remove(path)
-    elif not request.get('force'):
-        raise FileNotFoundError(path)
-elif op == 'rename':
-    os.replace(path, request['to'])
-elif op == 'stat':
-    try:
-        info = os.lstat(path)
-    except FileNotFoundError:
-        print('null')
+            kind = 'directory' if os.path.isdir(path) else 'file' if os.path.isfile(path) else 'other'
+            stdout.write(json.dumps({'type': kind, 'size': info.st_size, 'mtimeMs': info.st_mtime * 1000}).encode() + b'\n')
     else:
-        kind = 'directory' if os.path.isdir(path) else 'file' if os.path.isfile(path) else 'other'
-        print(json.dumps({'type': kind, 'size': info.st_size, 'mtimeMs': info.st_mtime * 1000}))
-else:
-    raise ValueError(f'unknown file operation {op!r}')
+        raise ValueError(f'unknown file operation {op!r}')
+
+
+if __name__ == '__main__':
+    main(json.loads(os.environ['ODS_FS_REQUEST']), sys.stdin.buffer, sys.stdout.buffer)

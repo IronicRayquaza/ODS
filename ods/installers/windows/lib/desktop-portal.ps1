@@ -337,8 +337,10 @@ function Initialize-ODSDesktopPortalSandbox($Paths, [string]$PythonDir) {
     $null = New-Item -ItemType Directory -Force -Path $Paths.ExecControl
     $sandboxProfile = Get-ODSDesktopPortalSandboxProfile
     $python = Join-Path $PythonDir 'python.exe'
-    & $python -I $Paths.SandboxRunner setup --profile $sandboxProfile --workspace $Paths.Workspace `
-        --read $Paths.Node --read $PythonDir --read $Paths.SandboxHelpers | Out-Host
+    # It prints the profile and its SID as JSON, which is for scripts, not the
+    # setup screen; errors still reach the screen on stderr.
+    $null = & $python -I $Paths.SandboxRunner setup --profile $sandboxProfile --workspace $Paths.Workspace `
+        --read $Paths.Node --read $PythonDir --read $Paths.SandboxHelpers
     if ($LASTEXITCODE -ne 0) { throw "The Portal sandbox could not be prepared (exit $LASTEXITCODE)." }
     return [pscustomobject]@{ Plugin = $Paths.SandboxPlugin; Python = $python; Runner = $Paths.SandboxRunner; Profile = $sandboxProfile
         ToolPath = (@($Paths.Node, $PythonDir, (Join-Path $env:SystemRoot 'System32')) -join ';'); ControlRoot = $Paths.ExecControl }
@@ -377,7 +379,11 @@ function Stop-ODSDesktopPortal($Paths) {
             if (-not $processId) { continue }
             $process = Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$processId)" -ErrorAction SilentlyContinue
             # Only a process that still runs from this Portal's folders is ours.
-            if ($process -and ([string]$process.CommandLine).Contains($Paths.Root)) { Stop-Process -Id ([int]$processId) -Force }
+            if (-not $process -or -not ([string]$process.CommandLine).Contains($Paths.Root)) { continue }
+            # The task stop above ends the job's processes on its own; one that
+            # exits between the check and here is already what we want.
+            try { Stop-Process -Id ([int]$processId) -Force -ErrorAction Stop }
+            catch [Microsoft.PowerShell.Commands.ProcessCommandException] { }
         }
         Remove-Item -LiteralPath $Paths.Ready -Force
     }

@@ -116,6 +116,19 @@ try {
     }
     Check (-not (Test-Path -LiteralPath (Join-Path $paths.Runtime 'pixel-agent\tests'))) 'the runtime copy has no tests'
 
+    # --- Stopping Portal when a child exits on its own mid-stop (live 2026-11-01) ---
+    $stopPaths = Get-ODSDesktopPortalPaths (Join-Path $fixture 'Portal stop')
+    $null = New-Item -ItemType Directory -Force -Path $stopPaths.Root
+    $gone = 4000000
+    while (Get-Process -Id $gone -ErrorAction SilentlyContinue) { $gone += 4 }
+    Write-ODSPrivateEnvFile -Path $stopPaths.Ready -Content (@{ ProcessId = $gone; Children = @() } | ConvertTo-Json -Compress)
+    # The snapshot still shows it as Portal's; by Stop-Process it has exited.
+    function Get-ScheduledTask { }
+    function Get-CimInstance { [pscustomobject]@{ CommandLine = "pythonw.exe `"$($stopPaths.Root)\runtime\portal_supervisor.py`"" } }
+    $message = Get-Failure { Stop-ODSDesktopPortal $stopPaths }
+    Remove-Item function:Get-ScheduledTask, function:Get-CimInstance
+    Check ($message -eq '' -and -not (Test-Path -LiteralPath $stopPaths.Ready)) 'a Portal process that exits during the stop does not fail setup'
+
     # --- Static rules for Windows PowerShell 5.1 ---
     $tokens = $null; $errors = $null
     $ast = [Management.Automation.Language.Parser]::ParseFile($library, [ref]$tokens, [ref]$errors)

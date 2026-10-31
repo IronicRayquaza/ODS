@@ -126,7 +126,9 @@ def start_portal(paths, settings):
     wait_until('ingress', ingress, lambda: win_job.pipe_ready(pipe, 500), deadline)
     edge_env = {**base_environment(paths), 'PIXEL_OPENWEBUI_KEY': settings['PIXEL_OPENWEBUI_KEY'],
                 'PIXEL_PREVIEW_PROXY_KEY': settings['PIXEL_PREVIEW_PROXY_KEY'], 'PIXEL_INGRESS_PIPE': pipe,
-                'PIXEL_EDGE_HOST': '127.0.0.1', 'PIXEL_EDGE_PORT_INTERNAL': str(edge_port)}
+                'PIXEL_EDGE_HOST': '127.0.0.1', 'PIXEL_EDGE_PORT_INTERNAL': str(edge_port),
+                # The dashboard's /pixel-preview/ relay reaches snapshots through the edge.
+                'PIXEL_PREVIEW_ORIGIN_PORT': str(preview_port)}
     # The edge is the upstream pixel_edge.py, run in place by the same pinned Python.
     code = ('import runpy, sys; sys.path.insert(0, sys.argv[1]); '
             "runpy.run_module('pixel_edge', run_name='__main__')")

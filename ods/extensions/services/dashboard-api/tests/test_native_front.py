@@ -118,8 +118,62 @@ def test_talk_and_sign_in_never_receive_the_admin_key(app, path, method):
         assert response.status_code == 200 and response.json()["authorization"] is None
 
 
-def test_pixel_previews_do_not_exist_here(app):
-    assert get(app, "/pixel-preview/abc/index.html").status_code == 404
+def test_pixel_previews_do_not_exist_without_portal(app):
+    assert get(app, "/pixel-preview/site-0123456789abcdef01234567/index.html").status_code == 404
+
+
+SITE = "site-0123456789abcdef01234567"
+
+
+@pytest.fixture
+def preview_app(app):
+    seen = []
+
+    def edge(request):
+        seen.append(request)
+        if request.url.path == f"/preview/{SITE}/index.html":
+            return httpx.Response(200, content=b"<h1>game</h1>", headers={
+                "Content-Type": "text/html", "Content-Security-Policy": "sandbox allow-scripts",
+                "X-Preview-SHA256": "a" * 64, "Set-Cookie": "edge=1", "Server": "edge"})
+        return httpx.Response(404, json={"error": "not found"})
+
+    gate = DashboardGate(app.app, api_key=KEY, preview_edge="http://127.0.0.1:9595/", preview_key="preview-key",
+                         preview_transport=httpx.MockTransport(edge))
+    return gate, seen
+
+
+def test_portal_previews_relay_to_the_edge_with_the_preview_key(preview_app):
+    gate, seen = preview_app
+    response = get(gate, f"/pixel-preview/{SITE}/index.html", headers={"Authorization": "Bearer attacker"})
+    assert response.status_code == 200 and response.content == b"<h1>game</h1>"
+    assert str(seen[-1].url) == f"http://127.0.0.1:9595/preview/{SITE}/index.html"
+    assert seen[-1].headers["authorization"] == "Bearer preview-key"
+    # The edge's own isolating CSP is kept; nothing else from it leaks through.
+    assert response.headers["content-security-policy"] == "sandbox allow-scripts"
+    assert response.headers["x-preview-sha256"] == "a" * 64 and "set-cookie" not in response.headers
+    assert get(gate, f"/pixel-preview/{SITE}/missing.js").status_code == 404
+
+
+def test_portal_previews_need_the_dashboard_sign_in_like_any_api(preview_app):
+    gate, seen = preview_app
+    assert refused(get(gate, f"/pixel-preview/{SITE}/index.html", client=("192.168.1.20", 50123)))
+    session = {"Cookie": f"{SESSION_COOKIE_NAME}={issue_session()}"}
+    assert get(gate, f"/pixel-preview/{SITE}/index.html", client=("192.168.1.20", 50123), headers=session).status_code == 200
+
+
+@pytest.mark.parametrize("path", [
+    f"/pixel-preview/{SITE}/%2e%2e/%2e%2e/v1/models", f"/pixel-preview/{SITE}/a%2fb", f"/pixel-preview/{SITE}/a%5cb",
+    "/pixel-preview/not-a-site/index.html", "/pixel-preview/",
+])
+def test_portal_previews_refuse_anything_but_a_plain_site_path(preview_app, path):
+    gate, seen = preview_app
+    assert get(gate, path).status_code == 404 and not seen
+
+
+def test_a_raw_dot_segment_never_reaches_the_relay():
+    # HTTP clients normalize a literal ../ before sending, so check the raw rule directly.
+    assert not native_front._plain_preview_tail(f"{SITE}/../../v1/models".encode())
+    assert native_front._plain_preview_tail(f"{SITE}/assets/game.v2.js".encode())
 
 
 def test_the_dashboard_and_its_client_routes_are_served(app):

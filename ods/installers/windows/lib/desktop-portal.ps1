@@ -451,7 +451,8 @@ function Install-ODSDesktopPortal {
     Register-ODSDesktopPortalTask $Paths $PythonDir
     Start-ScheduledTask -TaskName (Get-ODSDesktopPortalTaskName) -TaskPath '\'
     Wait-ODSDesktopPortalReady $Paths
-    return [pscustomobject]@{ EdgeUrl = "http://127.0.0.1:$($script:ODSDesktopPortalEdgePort)"; EdgeKey = $secrets.PIXEL_OPENWEBUI_KEY }
+    return [pscustomobject]@{ EdgeUrl = "http://127.0.0.1:$($script:ODSDesktopPortalEdgePort)"; EdgeKey = $secrets.PIXEL_OPENWEBUI_KEY
+        PreviewKey = $secrets.PIXEL_PREVIEW_PROXY_KEY }
 }
 
 function Remove-ODSDesktopPortal($Paths, [bool]$RemoveData, [string]$PythonDir) {

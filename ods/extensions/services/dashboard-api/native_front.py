@@ -16,9 +16,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import urllib.parse
 from pathlib import Path
 from typing import Optional
 
+import httpx
 from starlette.exceptions import HTTPException
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.staticfiles import StaticFiles
@@ -40,6 +42,27 @@ _SECURITY_HEADERS = (
      b"https://huggingface.co https://cdn-avatars.huggingface.co https://t3.gstatic.com/faviconV2; "
      b"connect-src 'self'; media-src 'self' blob:; font-src 'self' https://cdn.jsdelivr.net; frame-src 'self'"),
 )
+
+
+# nginx.conf's /pixel-preview/ location: the Portal workbench frames and reads
+# published snapshots through the edge's authenticated /preview/ relay.
+_PREVIEW_PATH = re.compile(rb"^/pixel-preview/(site-[a-f0-9]{24}/[^?#]*)$")
+_PREVIEW_HEADERS = frozenset((
+    "content-type", "content-security-policy", "cross-origin-opener-policy", "cross-origin-resource-policy",
+    "access-control-allow-origin", "permissions-policy", "referrer-policy", "x-content-type-options",
+    "x-preview-sha256", "cache-control", "content-disposition",
+))
+_PREVIEW_TIMEOUT_SECONDS = 15.0
+
+
+def _plain_preview_tail(tail: bytes) -> bool:
+    """No dot segment, encoded separator or backslash: the HTTP client would
+    normalize those and the relay could name another edge route."""
+    for segment in tail.split(b"/"):
+        decoded = urllib.parse.unquote_to_bytes(segment)
+        if decoded in (b".", b"..") or b"/" in decoded or b"\\" in decoded or b"\\" in segment:
+            return False
+    return True
 
 
 def _loopback_peer(scope: Scope) -> bool:
@@ -99,9 +122,41 @@ def _uses_admin_key(path: str) -> bool:
 class DashboardGate:
     """ASGI middleware: the loopback trust boundary and security headers."""
 
-    def __init__(self, app: ASGIApp, api_key: str) -> None:
+    def __init__(self, app: ASGIApp, api_key: str, preview_edge: str = "", preview_key: str = "",
+                 preview_transport: Optional[httpx.AsyncBaseTransport] = None) -> None:
         self.app = app
         self.authorization = f"Bearer {api_key}".encode("latin-1")
+        # Set only when Portal runs (PIXEL_EDGE_URL and PIXEL_PREVIEW_PROXY_KEY);
+        # without them /pixel-preview/ stays a 404, as before Portal existed.
+        self.preview = (preview_edge.rstrip("/"), preview_key) if preview_edge and preview_key else None
+        self.preview_transport = preview_transport
+
+    async def _preview(self, scope: Scope, receive: Receive, send: Send) -> None:
+        match = _PREVIEW_PATH.match(scope.get("raw_path") or scope["path"].encode("latin-1"))
+        if match and not _plain_preview_tail(match.group(1)):
+            match = None
+        if self.preview is None or scope["type"] != "http" or scope["method"] not in ("GET", "HEAD") or not match:
+            await Response(status_code=404)(scope, receive, send)
+            return
+        if not (trusted_local(scope) or session_is_valid(_session_cookie(scope))):
+            await Response(_SIGN_IN_BODY, status_code=401, media_type="application/json",
+                           headers={"X-ODS-Sign-In": "required", "Cache-Control": "no-store"})(scope, receive, send)
+            return
+        edge, key = self.preview
+        target = f"{edge}/preview/{match.group(1).decode('latin-1')}"
+        query = scope.get("query_string") or b""
+        if query:
+            target += "?" + query.decode("latin-1")
+        try:
+            async with httpx.AsyncClient(timeout=_PREVIEW_TIMEOUT_SECONDS, trust_env=False, follow_redirects=False,
+                                         transport=self.preview_transport) as client:
+                upstream = await client.get(target, headers={"Authorization": f"Bearer {key}"})
+        except httpx.TransportError:
+            await Response(status_code=502, headers={"Cache-Control": "no-store"})(scope, receive, send)
+            return
+        headers = {name: value for name, value in upstream.headers.items() if name.lower() in _PREVIEW_HEADERS}
+        body = b"" if scope["method"] == "HEAD" else upstream.content
+        await Response(body, status_code=upstream.status_code, headers=headers)(scope, receive, send)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] not in ("http", "websocket"):
@@ -118,7 +173,7 @@ class DashboardGate:
 
         path = scope["path"]
         if path == "/pixel-preview" or path.startswith("/pixel-preview/"):
-            await Response(status_code=404)(scope, receive, secured)
+            await self._preview(scope, receive, secured)
             return
         # A client's own Authorization is never trusted; only the gate adds one.
         headers = [(name, value) for name, value in scope["headers"] if name.lower() != b"authorization"]

@@ -2028,7 +2028,9 @@ if RUNTIME_PROFILE.is_desktop:
 
     _dashboard_dist = native_front.dist_dir()
     if _dashboard_dist is not None:
-        app.add_middleware(native_front.DashboardGate, api_key=DASHBOARD_API_KEY)
+        app.add_middleware(native_front.DashboardGate, api_key=DASHBOARD_API_KEY,
+                           preview_edge=os.environ.get("PIXEL_EDGE_URL", ""),
+                           preview_key=os.environ.get("PIXEL_PREVIEW_PROXY_KEY", ""))
         app.mount("/", native_front.DashboardFiles(directory=_dashboard_dist, html=True), name="dashboard")
 
 

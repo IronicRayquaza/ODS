@@ -387,6 +387,8 @@ function New-ODSDesktopApiEnvironment($Paths, [int]$ApiPort, [int]$LlamaPort, [s
         # routers/pixel.py reaches the native Pixel edge on loopback with its key.
         $environment.PIXEL_EDGE_URL = [string]$Portal.EdgeUrl
         $environment.PIXEL_OPENWEBUI_KEY = [string]$Portal.EdgeKey
+        # native_front.py relays /pixel-preview/ to the edge with this key, as nginx does.
+        $environment.PIXEL_PREVIEW_PROXY_KEY = [string]$Portal.PreviewKey
     }
     return $environment
 }

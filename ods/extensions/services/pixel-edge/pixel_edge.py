@@ -190,6 +190,20 @@ _INGRESS_PIPE = os.environ.get("PIXEL_INGRESS_PIPE", "")
 def _ingress_connector():
     return NamedPipeConnector(path=_INGRESS_PIPE) if _INGRESS_PIPE else UnixConnector(path=_SOCKET_PATH)
 
+
+# Windows has no Unix socket client in asyncio. The Desktop preview service
+# serves each snapshot on loopback under its own <site>.localhost origin, so
+# the relay connects there with that Host instead of the private socket.
+_PREVIEW_ORIGIN_PORT = int(os.environ.get("PIXEL_PREVIEW_ORIGIN_PORT", "0") or "0")
+
+
+def _preview_transport(site_id: str):
+    """(connector, request URL prefix, Host) for one preview relay request."""
+    if _PREVIEW_ORIGIN_PORT:
+        return (TCPConnector(), f"http://127.0.0.1:{_PREVIEW_ORIGIN_PORT}",
+                f"{site_id}.localhost:{_PREVIEW_ORIGIN_PORT}")
+    return UnixConnector(path=_PREVIEW_SOCKET_PATH), "http://pixel-preview.internal", "pixel-preview.internal"
+
 # Header names (case-insensitive) that may be forwarded to upstream.
 _SAFE_HEADERS = frozenset({
     "accept",
@@ -1858,14 +1872,14 @@ async def handle_preview(request: web.Request):
     if upstream_path is None:
         return web.json_response({"error": "not found"}, status=404)
 
-    connector = UnixConnector(path=_PREVIEW_SOCKET_PATH)
+    connector, origin, host = _preview_transport(request.match_info["site_id"])
     timeout = ClientTimeout(total=10, sock_connect=3, sock_read=5)
     try:
         async with ClientSession(connector=connector, timeout=timeout) as session:
             async with session.request(
                 "GET",
-                f"http://pixel-preview.internal{upstream_path}",
-                headers={"Host": "pixel-preview.internal"},
+                f"{origin}{upstream_path}",
+                headers={"Host": host},
             ) as upstream:
                 if upstream.status not in {200, 404}:
                     return web.json_response({"error": "preview unavailable"}, status=502)

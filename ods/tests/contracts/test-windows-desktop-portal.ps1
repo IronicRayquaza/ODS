@@ -102,9 +102,10 @@ try {
     # --- dashboard-api gets the edge origin and key only when Portal runs ---
     $desktop = Get-ODSDesktopPaths (Join-Path $fixture 'desktop')
     $plain = New-ODSDesktopApiEnvironment $desktop 3101 8080 'C:\runtime' ('a' * 40)
-    Check (-not $plain.Contains('PIXEL_EDGE_URL') -and -not $plain.Contains('PIXEL_OPENWEBUI_KEY')) 'without Portal the app gets no edge settings'
-    $withPortal = New-ODSDesktopApiEnvironment $desktop 3101 8080 'C:\runtime' ('a' * 40) ([pscustomobject]@{ EdgeUrl = 'http://127.0.0.1:9595'; EdgeKey = ('e' * 40) })
+    Check (-not $plain.Contains('PIXEL_EDGE_URL') -and -not $plain.Contains('PIXEL_OPENWEBUI_KEY') -and -not $plain.Contains('PIXEL_PREVIEW_PROXY_KEY')) 'without Portal the app gets no edge settings'
+    $withPortal = New-ODSDesktopApiEnvironment $desktop 3101 8080 'C:\runtime' ('a' * 40) ([pscustomobject]@{ EdgeUrl = 'http://127.0.0.1:9595'; EdgeKey = ('e' * 40); PreviewKey = ('p' * 40) })
     Check ($withPortal.PIXEL_EDGE_URL -eq 'http://127.0.0.1:9595' -and $withPortal.PIXEL_OPENWEBUI_KEY -eq ('e' * 40)) 'with Portal the app gets the loopback edge origin and key'
+    Check ($withPortal.PIXEL_PREVIEW_PROXY_KEY -eq ('p' * 40)) 'with Portal the app gets the preview relay key the workbench panel needs'
 
     # --- Runtime copy: what the task runs, never a checkout or tests ---
     Publish-ODSDesktopPortalRuntime $root $paths

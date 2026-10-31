@@ -1282,6 +1282,9 @@ if RUNTIME_PROFILE.is_desktop:
 
     native_llm.configured()
     app.include_router(local_chat.router)
+    from routers import desktop_apps
+
+    app.include_router(desktop_apps.router)
 
 
 # ================================================================

@@ -14,3 +14,8 @@ it('keeps every entry for the Compose stack', () => {
   expect(ids({ runtimeProfile: 'compose', gpu: { gpu_count: 2 } })).toEqual(
     expect.arrayContaining(['dashboard', 'extensions', 'models', 'gpu-monitor', 'settings']))
 })
+
+it('shows native Apps on Windows Desktop only', () => {
+  expect(ids({ runtimeProfile: 'windows-desktop' })).toContain('desktop-apps')
+  expect(ids({ runtimeProfile: 'compose' })).not.toContain('desktop-apps')
+})

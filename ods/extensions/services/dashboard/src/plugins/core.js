@@ -30,6 +30,7 @@ const Usage = lazy(() => import('../pages/Usage'))
 const Pixel = lazy(() => import('../pages/Pixel'))
 const PixelSettings = lazy(() => import('../pages/PixelSettings'))
 const OpenCodeApp = lazy(() => import('../pages/OpenCodeApp'))
+const DesktopApps = lazy(() => import('../pages/DesktopApps'))
 
 export const coreRoutes = [
   { id: 'home', path: '/', label: 'Home', icon: Cloud, component: Pixel, getProps: ({ status }) => ({ systemStatus: status }), sidebar: false },
@@ -65,6 +66,18 @@ export const coreRoutes = [
     component: Extensions,
     getProps: () => ({}),
     sidebar: notOnWindowsDesktop,
+    order: 2,
+  },
+  {
+    // Windows Desktop runs apps natively from their manifest recipes instead
+    // of Docker extensions; the Extensions entry stays hidden there.
+    id: 'desktop-apps',
+    path: '/desktop-apps',
+    label: 'Apps',
+    icon: Puzzle,
+    component: DesktopApps,
+    getProps: () => ({}),
+    sidebar: ({ status }) => isWindowsDesktop(status),
     order: 2,
   },
   {

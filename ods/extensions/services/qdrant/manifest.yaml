@@ -20,3 +20,24 @@ service:
   compose_file: compose.yaml
   category: optional
   depends_on: []
+
+# ODS Desktop (Windows, no Docker and no WSL) runs the same release natively.
+# Pin: the official v1.16.3 Windows zip, one file (qdrant.exe); size and SHA-256
+# match the GitHub release digest and were rechecked after download on 2026-10-31.
+native:
+  windows:
+    version: "1.16.3"
+    download:
+      url: https://github.com/qdrant/qdrant/releases/download/v1.16.3/qdrant-x86_64-pc-windows-msvc.zip
+      size: 27008258
+      sha256: a1159282922776a05bdeaad9e90c85d8d1ca0bc90d9e5e4add56133e15748753
+    executable: qdrant.exe
+    env:
+      QDRANT__SERVICE__HOST: "127.0.0.1"
+      QDRANT__SERVICE__HTTP_PORT: "{port}"
+      QDRANT__SERVICE__GRPC_PORT: "6334"
+      QDRANT__STORAGE__STORAGE_PATH: '{data}\storage'
+      QDRANT__STORAGE__SNAPSHOTS_PATH: '{data}\snapshots'
+      QDRANT__TELEMETRY_DISABLED: "true"
+    port: 6333
+    health: /healthz

@@ -331,6 +331,40 @@
       "type": "array",
       "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
       "description": "Categorization tags for service discovery"
+    },
+    "native": {
+      "type": "object",
+      "description": "Optional native runtimes. windows: how ODS Desktop (no Docker, no WSL) installs and runs this service.",
+      "additionalProperties": false,
+      "properties": {
+        "windows": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["version", "download", "executable", "port", "health"],
+          "properties": {
+            "version": { "type": "string", "pattern": "^[0-9][0-9A-Za-z.+-]{0,40}$" },
+            "download": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["url", "size", "sha256"],
+              "properties": {
+                "url": { "type": "string", "pattern": "^https://github\\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/releases/download/[^\\s]+\\.zip$" },
+                "size": { "type": "integer", "minimum": 1 },
+                "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+              }
+            },
+            "executable": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\\.exe$" },
+            "args": { "type": "array", "items": { "type": "string", "maxLength": 512 }, "maxItems": 32 },
+            "env": {
+              "type": "object",
+              "propertyNames": { "pattern": "^[A-Z][A-Z0-9_]{0,80}$" },
+              "additionalProperties": { "type": "string", "maxLength": 1024 }
+            },
+            "port": { "type": "integer", "minimum": 1024, "maximum": 65535 },
+            "health": { "type": "string", "pattern": "^/[A-Za-z0-9._/-]{0,120}$" }
+          }
+        }
+      }
     }
   },
   "additionalProperties": true

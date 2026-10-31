@@ -37,6 +37,18 @@ test('image capability belongs to the selected native model and matching input c
   f.entry={...f.entry,modelOverride:'other-model'};
   assert.equal(createContextCompaction(f.args).context(user).model?.imageInput,undefined);
 });
+test('Windows access runtime report of unavailable admits context; on POSIX it still refuses',t => {
+  // createAccessRuntime has no POSIX admission on Windows and always reports
+  // this exact status while it lets ordinary chat through (ODS Desktop).
+  const windowsStub={status:() => ({available:false,phase:'unavailable',revision:null,active:0,proof:null}),
+    acquire(){throw Error('POSIX admission unavailable');},release(){throw Error('POSIX admission unavailable');},owns:() => false};
+  const f=fixture(t,{admission:windowsStub});
+  assert.equal(createContextCompaction({...f.args,posix:false}).context(user).status,'ready');
+  f.entry=undefined;
+  assert.equal(createContextCompaction({...f.args,posix:false}).context(user).status,'missing');
+  f.entry={sessionId:'session-one',modelProvider:'ods-gateway',model:'ods/current',contextTokens:32768};
+  assert.equal(createContextCompaction({...f.args,posix:true}).context(user).status,'unavailable');
+});
 function fixture(t, overrides = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(),'ods-context-'));
   fs.chmodSync(directory,0o700);

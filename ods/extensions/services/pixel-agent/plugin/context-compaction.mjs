@@ -85,7 +85,7 @@ export function createContextCompaction({agentId = 'pixel', readSession, readCon
   directory = path.join(process.env.OPENCLAW_STATE_DIR || path.join(os.homedir(), '.openclaw'), '.ods-context-compactions'),
   now = () => Date.now(), instanceId = PROCESS_INSTANCE, timeoutMs = 1920000,
   prepareModel = prepareStableContextModel, maximumRequests = 128, requireModelObservation = true,
-  busyRetryLimit = 120, busyRetryDelayMs = 250} = {}) {
+  busyRetryLimit = 120, busyRetryDelayMs = 250, posix = typeof process.getuid === 'function'} = {}) {
   if (!/^[a-z0-9_-]{1,64}$/.test(agentId) || typeof readSession !== 'function' ||
       typeof callGateway !== 'function' || !admission || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 ||
       timeoutMs > 1920000 || !Number.isSafeInteger(maximumRequests) || maximumRequests < 1 || maximumRequests > 512 ||
@@ -193,7 +193,12 @@ export function createContextCompaction({agentId = 'pixel', readSession, readCon
       tokensBefore:operation.tokensBefore,tokensAfter:operation.tokensAfter,reason:operation.reason,count} : idle(count);
     const status = admission.status();
     const uncertain = operation?.status === 'unknown' && admission.owns(operation.leaseToken);
-    return {schemaVersion:1, status:uncertain || status?.available !== true ? 'unavailable'
+    // Access coordination is POSIX-only. On Windows the access runtime always
+    // reports 'unavailable' while it admits ordinary chat (subagent-delivery.mjs
+    // keeps the same policy), so that report alone must not refuse every turn
+    // that carries history (ODS Desktop, live 2026-11-01).
+    const admitted = status?.available === true || (!posix && status?.phase === 'unavailable');
+    return {schemaVersion:1, status:uncertain || !admitted ? 'unavailable'
       : pending.has(user) || activeSession(keyFor(user)) ? 'busy' : sessionRevision ? 'ready' : 'missing',
       sessionExists:sessionRevision !== null, sessionRevision,
       context:used !== null && measuredAt ? {used,window:reportedWindow,measuredAt} : null,

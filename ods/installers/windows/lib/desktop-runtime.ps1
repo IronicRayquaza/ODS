@@ -54,6 +54,10 @@ $script:ODSDesktopVcRedistSuccessCodes = @(0, 1638, 3010)
 # and a restart loses llama.cpp's prompt cache; 16K keeps a full re-read of a
 # long chat to about a minute instead of many.
 $script:ODSDesktopCpuContextCap = 16384
+# Portal's agent needs room for its tool history: building and testing a small
+# web page took 20-25K tokens on Qwen3.5-4B (measured 2026-10-31) and a 16K
+# context ran out before the preview step. Only the space a task uses costs time.
+$script:ODSDesktopPortalCpuContextCap = 32768
 
 function Get-ODSDesktopPaths([string]$Root = (Join-Path $env:LOCALAPPDATA 'ODS\desktop')) {
     $app = Join-Path $Root 'app'
@@ -245,7 +249,7 @@ function Get-ODSDesktopRecommendation {
         Get-GpuInfo's answer, or $null for the CPU route (no usable Vulkan
         device after all).
     #>
-    param([Parameter(Mandatory = $true)][string]$SourceRoot, [long]$ContextSetting = 0, $Gpu = $null)
+    param([Parameter(Mandatory = $true)][string]$SourceRoot, [long]$ContextSetting = 0, $Gpu = $null, [switch]$Portal)
     $ramGB = Get-SystemRamGB
     $config = $null
     if ($Gpu) { $config = Get-ODSDesktopGpuModel $Gpu $ramGB $SourceRoot }
@@ -255,11 +259,24 @@ function Get-ODSDesktopRecommendation {
         if (-not $config) { throw "This PC has $ramGB GB of memory; ODS Desktop needs at least 8 GB to run a local model." }
     }
     # The GPU route takes the catalog's context for the GPU's memory.
-    $cap = if ($route -eq 'gpu') { [int]$config.MaxContext } else { $script:ODSDesktopCpuContextCap }
+    $cap = if ($route -eq 'gpu') { [int]$config.MaxContext } elseif ($Portal) { $script:ODSDesktopPortalCpuContextCap }
+        else { $script:ODSDesktopCpuContextCap }
     $context = Resolve-ODSDesktopContextSize ([int]$config.MaxContext) $cap
     if ($ContextSetting -gt 0) { $context = Resolve-ODSDesktopContextSize ([int]$ContextSetting) ([int]$ContextSetting) }
     return [pscustomobject]@{ Route = $route; Gpu = $(if ($route -eq 'gpu') { $Gpu } else { $null }); Config = $config
         Plan = [pscustomobject]@{ GgufFile = [string]$config.GgufFile; ContextSize = $context } }
+}
+
+function Resolve-ODSDesktopSelection($Existing, $Plan, [long]$ContextSetting) {
+    # main's rule (Resolve-ODSPortalRuntimeSelection) keeps the model and context
+    # a rerun finds. The owner's saved context setting (-ContextSize) is a newer,
+    # explicit choice: it wins for the context; the kept model stays.
+    $selection = Resolve-ODSPortalRuntimeSelection $Existing $Plan
+    if ($ContextSetting -gt 0 -and [long]$selection.ContextSize -ne $ContextSetting) {
+        Write-Host "         Using your context setting: $ContextSetting tokens."
+        $selection.ContextSize = [int]$ContextSetting
+    }
+    return $selection
 }
 
 function Get-ODSDesktopEngineRoute($Recommendation, $Qualification) {

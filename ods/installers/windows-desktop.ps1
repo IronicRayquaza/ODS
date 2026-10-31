@@ -16,6 +16,7 @@ param(
     [switch]$NonInteractive,
     [switch]$Repair,
     [int]$Port = 0,
+    [int]$ContextSize = 0,
     [string]$DashboardDist = '',
     [switch]$NoShortcut,
     [switch]$NoPortal,
@@ -278,7 +279,8 @@ function Publish-ODSDesktopUninstaller($Paths, [string[]]$Shortcuts, [string]$Mo
 }
 
 function Install-ODSDesktop {
-    param([bool]$NonInteractive, [bool]$Repair, [int]$Port, [string]$DashboardDist, [bool]$NoShortcut, [bool]$NoPortal, [string[]]$Apps)
+    param([bool]$NonInteractive, [bool]$Repair, [int]$Port, [int]$ContextSize, [string]$DashboardDist, [bool]$NoShortcut, [bool]$NoPortal,
+        [string[]]$Apps)
     $paths = Get-ODSDesktopPaths
     $dist = if ($DashboardDist) { $DashboardDist } else { Join-Path $SourceRoot 'extensions\services\dashboard\dist' }
     Write-Host ''
@@ -290,11 +292,13 @@ function Install-ODSDesktop {
     $defaults = [ordered]@{ Port = [long]0; ContextSize = [long]0 }
     $explicit = @{}
     if ($Port) { $explicit.Port = [long]$Port }
+    if ($ContextSize) { $explicit.ContextSize = [long]$ContextSize }
     $settings = Resolve-ODSDesktopSettings -Explicit $explicit -Previous (Read-ODSDesktopSettings $paths.Settings) -Defaults $defaults
-    $recommendation = Get-ODSDesktopRecommendation -SourceRoot $SourceRoot -ContextSetting ([long]$settings.ContextSize) -Gpu (Get-GpuInfo)
+    $recommendation = Get-ODSDesktopRecommendation -SourceRoot $SourceRoot -ContextSetting ([long]$settings.ContextSize) -Gpu (Get-GpuInfo) `
+        -Portal:(-not $NoPortal)
     # Read-only here; stage 3 refuses a runtime Desktop may not take over.
     $existing = Get-ODSPortalExistingRuntime
-    $selection = Resolve-ODSPortalRuntimeSelection $existing $recommendation.Plan
+    $selection = Resolve-ODSDesktopSelection $existing $recommendation.Plan ([long]$settings.ContextSize)
     Assert-ODSDesktopDiskSpace $selection $recommendation
 
     Write-ODSDesktopStage 2 'MICROSOFT VISUAL C++ RUNTIME' 'The model engine is built with it.'
@@ -311,8 +315,8 @@ function Install-ODSDesktop {
     $engine = Install-ODSDesktopModelEngine $existing $paths.RuntimeOwner $recommendation
     if ($engine.Route -ne $recommendation.Route) {
         # No usable Vulkan device after all: the CPU route's model, and its space.
-        $recommendation = Get-ODSDesktopRecommendation -SourceRoot $SourceRoot -ContextSetting ([long]$settings.ContextSize)
-        $selection = Resolve-ODSPortalRuntimeSelection $existing $recommendation.Plan
+        $recommendation = Get-ODSDesktopRecommendation -SourceRoot $SourceRoot -ContextSetting ([long]$settings.ContextSize) -Portal:(-not $NoPortal)
+        $selection = Resolve-ODSDesktopSelection $existing $recommendation.Plan ([long]$settings.ContextSize)
         Assert-ODSDesktopDiskSpace $selection $recommendation
     }
 
@@ -366,7 +370,7 @@ function Install-ODSDesktop {
 }
 
 try {
-    $code = @(Install-ODSDesktop -NonInteractive $NonInteractive.IsPresent -Repair $Repair.IsPresent -Port $Port `
+    $code = @(Install-ODSDesktop -NonInteractive $NonInteractive.IsPresent -Repair $Repair.IsPresent -Port $Port -ContextSize $ContextSize `
         -DashboardDist $DashboardDist -NoShortcut $NoShortcut.IsPresent -NoPortal $NoPortal.IsPresent -Apps $Apps)[-1]
 } catch {
     # The owner sees one plain sentence and the way back; the full error,

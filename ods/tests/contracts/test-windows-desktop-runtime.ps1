@@ -121,6 +121,18 @@ try {
         $cpu = Get-ODSDesktopRecommendation -SourceRoot $root
         Check ($cpu.Route -ceq 'cpu' -and $cpu.Plan.ContextSize -le 16384) 'no GPU argument is the CPU route (no usable Vulkan device after all)'
         Check ((Get-ODSDesktopRecommendation -SourceRoot $root -ContextSetting 8192 -Gpu $radeon).Plan.ContextSize -eq 8192) 'the owner''s context setting wins on the GPU route'
+        $portalCpu = Get-ODSDesktopRecommendation -SourceRoot $root -Portal
+        Check ($portalCpu.Route -ceq 'cpu' -and $portalCpu.Plan.ContextSize -eq [math]::Min(32768, [int]$portalCpu.Config.MaxContext) -and
+            $portalCpu.Plan.ContextSize -gt 16384) 'with Portal the CPU route gets 32K of context for the agent''s tool history'
+        Check ((Get-ODSDesktopRecommendation -SourceRoot $root -Portal -ContextSetting 16384).Plan.ContextSize -eq 16384) 'the owner''s context setting still wins with Portal'
+        & {
+            # A rerun finds a model running at 16K; main's rule would keep it unchanged.
+            function Resolve-ODSPortalRuntimeSelection { return [pscustomobject]@{ GgufFile = 'kept.gguf'; ContextSize = 16384; Carried = $true; MmprojFile = $null } }
+            $plan = [pscustomobject]@{ GgufFile = 'recommended.gguf'; ContextSize = 32768 }
+            $chosen = Resolve-ODSDesktopSelection $null $plan 32768
+            Check ($chosen.GgufFile -ceq 'kept.gguf' -and $chosen.ContextSize -eq 32768 -and $chosen.Carried) 'a rerun applies the owner''s new context setting to the kept model'
+            Check ((Resolve-ODSDesktopSelection $null $plan 0).ContextSize -eq 16384) 'without a context setting a rerun keeps the running context'
+        }
         $script:ramGB = 16
         $script:output = @()
         $igpu = @{ Backend = 'amd'; Name = 'AMD Radeon(TM) Graphics'; VramMB = 512; Count = 1; MemoryType = 'discrete' }

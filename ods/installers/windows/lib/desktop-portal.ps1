@@ -34,6 +34,13 @@ $script:ODSDesktopPortalGatewayPort = 18789
 $script:ODSDesktopPortalEdgePort = 9595
 $script:ODSDesktopPortalPreviewPort = 18791
 $script:ODSDesktopPortalReadySeconds = 150
+# The ODS and OpenClaw tools Portal offers on Windows Desktop. In Sandbox mode
+# OpenClaw hides every tool missing from tools.sandbox.tools.allow; Linux adds
+# its list in pixel-runtime-budget.py. Desktop lists only tools that work
+# without a host agent, Unix sockets or the network: no host observation,
+# extensions, research, downloads, history search, images, web fetch or search.
+$script:ODSDesktopPortalTools = @('create_goal', 'get_goal', 'update_goal', 'update_plan', 'pixel_ods_activity',
+    'pixel_ods_ask_user', 'pixel_ods_goal', 'pixel_ods_skill', 'pixel_ods_workspace_preview')
 
 function Get-ODSDesktopPortalPaths([string]$Root = (Join-Path $env:LOCALAPPDATA 'ODS\portal')) {
     $runtime = Join-Path $Root 'runtime'
@@ -211,7 +218,9 @@ function New-ODSDesktopPortalConfig {
             list = @($agent)
         }
         tools = [ordered]@{ exec = $exec
-            toolSearch = [ordered]@{ enabled = $true; mode = 'tools'; searchDefaultLimit = 5; maxSearchLimit = 10 } }
+            toolSearch = [ordered]@{ enabled = $true; mode = 'tools'; searchDefaultLimit = 5; maxSearchLimit = 10 }
+            alsoAllow = @($script:ODSDesktopPortalTools)
+            sandbox = [ordered]@{ tools = [ordered]@{ allow = @($script:ODSDesktopPortalTools) } } }
         plugins = $plugins
     }
 }

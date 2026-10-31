@@ -73,6 +73,18 @@ try {
         Check ((Get-Acl -LiteralPath $keyFile).AreAccessRulesProtected -and -not @($rules | Where-Object { [string]$_.IdentityReference -match 'Users|Everyone|Authenticated' }).Count) 'the key file is owner-only'
     }
 
+    # --- A repair waits for its own app to let go of the port (live 2026-11-01) ---
+    $script:listenChecks = 0
+    function Get-ScheduledTask { [pscustomobject]@{ TaskName = 'ODSApp-embeddings-S-1'; State = 'Running' } }
+    function Stop-ScheduledTask { }
+    function Get-NetTCPConnection { $script:listenChecks++; if ($script:listenChecks -le 3) { [pscustomobject]@{ LocalAddress = '127.0.0.1' } } }
+    Stop-ODSDesktopExtension 'embeddings' 8090
+    Check ($script:listenChecks -eq 4) 'stopping an app waits until its port is free'
+    $script:listenChecks = 0
+    Stop-ODSDesktopExtension 'embeddings'
+    Check ($script:listenChecks -eq 0) 'uninstall, which passes no port, does not wait on one'
+    Remove-Item function:Get-ScheduledTask, function:Stop-ScheduledTask, function:Get-NetTCPConnection
+
     # --- Which apps a setup rerun repairs ---
     $repairRoot = Join-Path $fixture 'repair-apps'
     foreach ($id in @('qdrant', 'embeddings', 'half-done')) { $null = New-Item -ItemType Directory -Force -Path (Join-Path $repairRoot "$id\bin") }

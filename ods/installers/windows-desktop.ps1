@@ -17,6 +17,7 @@ param(
     [switch]$Repair,
     [int]$Port = 0,
     [int]$ContextSize = 0,
+    [ValidateSet('', 'auto', 'cpu', 'gpu')][string]$Device = '',
     [string]$DashboardDist = '',
     [switch]$NoShortcut,
     [switch]$NoPortal,
@@ -154,6 +155,10 @@ function Install-ODSDesktopModelEngine($Existing, [string]$OwnerPath, $Recommend
     $adapter = if ($Recommendation.Gpu) { [string]$Recommendation.Gpu.Name } else { '' }
     $qualification = Test-ODSNativeLlamaQualification -ExecutablePath $runtime.ExecutablePath -ExpectedBuild $pin.Build -AdapterName $adapter
     if ($qualification.PolicyHint) { Write-Host "         $($qualification.PolicyHint)" }
+    if ($Recommendation.Route -eq 'gpu' -and $Recommendation.Gpu.Backend -eq 'nvidia') {
+        # Opt-in -Device gpu: main's selector skips NVIDIA, so name its Vulkan device here.
+        $qualification.Device = Select-ODSDesktopNvidiaDevice @($qualification.Devices) $adapter
+    }
     $route = Get-ODSDesktopEngineRoute $Recommendation $qualification
     if ($route -eq 'gpu') {
         Write-Host "         llama.cpp $($pin.ReleaseTag) runs on $($qualification.Device.Name): $($qualification.Device.Description) ($($qualification.Device.TotalMiB) MiB, Vulkan)."
@@ -279,8 +284,8 @@ function Publish-ODSDesktopUninstaller($Paths, [string[]]$Shortcuts, [string]$Mo
 }
 
 function Install-ODSDesktop {
-    param([bool]$NonInteractive, [bool]$Repair, [int]$Port, [int]$ContextSize, [string]$DashboardDist, [bool]$NoShortcut, [bool]$NoPortal,
-        [string[]]$Apps)
+    param([bool]$NonInteractive, [bool]$Repair, [int]$Port, [int]$ContextSize, [string]$Device, [string]$DashboardDist, [bool]$NoShortcut,
+        [bool]$NoPortal, [string[]]$Apps)
     $paths = Get-ODSDesktopPaths
     $dist = if ($DashboardDist) { $DashboardDist } else { Join-Path $SourceRoot 'extensions\services\dashboard\dist' }
     Write-Host ''
@@ -289,13 +294,14 @@ function Install-ODSDesktop {
 
     Write-ODSDesktopStage 1 'CHECKS' 'Windows, your account, the model for this PC, disk space.'
     Assert-ODSDesktopHost $dist
-    $defaults = [ordered]@{ Port = [long]0; ContextSize = [long]0 }
+    $defaults = [ordered]@{ Port = [long]0; ContextSize = [long]0; Device = 'auto' }
     $explicit = @{}
     if ($Port) { $explicit.Port = [long]$Port }
     if ($ContextSize) { $explicit.ContextSize = [long]$ContextSize }
+    if ($Device) { $explicit.Device = $Device }
     $settings = Resolve-ODSDesktopSettings -Explicit $explicit -Previous (Read-ODSDesktopSettings $paths.Settings) -Defaults $defaults
     $recommendation = Get-ODSDesktopRecommendation -SourceRoot $SourceRoot -ContextSetting ([long]$settings.ContextSize) -Gpu (Get-GpuInfo) `
-        -Portal:(-not $NoPortal)
+        -Portal:(-not $NoPortal) -Device ([string]$settings.Device)
     # Read-only here; stage 3 refuses a runtime Desktop may not take over.
     $existing = Get-ODSPortalExistingRuntime
     $selection = Resolve-ODSDesktopSelection $existing $recommendation.Plan ([long]$settings.ContextSize)
@@ -328,6 +334,15 @@ function Install-ODSDesktop {
 
     Write-ODSDesktopStage 5 'START THE MODEL' 'It starts by itself whenever you sign in to Windows.'
     $llamaPort = Start-ODSDesktopModel $existing $engine $selection $paths
+    if ($engine.Route -eq 'gpu' -and $recommendation.Gpu.Backend -eq 'nvidia') {
+        if (Test-ODSDesktopModelAnswer $llamaPort (Get-ODSPortalApiKey)) {
+            Write-Host "         The model answers correctly on $($recommendation.Gpu.Name)."
+        } else {
+            Write-Host "         The model did not answer correctly on $($recommendation.Gpu.Name); it runs on the CPU instead."
+            $engine.Route = 'cpu'
+            $llamaPort = Start-ODSDesktopModel (Get-ODSPortalExistingRuntime) $engine $selection $paths
+        }
+    }
 
     Write-ODSDesktopStage 6 'PORTAL' 'The ODS agent: it plans, writes files and runs commands in a sandbox. No Docker, no WSL.'
     Install-ODSDesktopAppPython $paths $Repair
@@ -343,7 +358,7 @@ function Install-ODSDesktop {
 
     Write-ODSDesktopStage 7 'ODS APP' 'The ODS dashboard, chat and Portal, served on this PC only.'
     $apiPort = Install-ODSDesktopApp $paths $dist $llamaPort $settings $portal
-    Write-ODSDesktopSettings $paths.Settings ([ordered]@{ Port = [long]$apiPort; ContextSize = [long]$settings.ContextSize })
+    Write-ODSDesktopSettings $paths.Settings ([ordered]@{ Port = [long]$apiPort; ContextSize = [long]$settings.ContextSize; Device = [string]$settings.Device })
     foreach ($app in $Apps) {
         # Native apps from manifest recipes (desktop-apps.ps1); each one is pinned and hash-checked.
         Write-Host "         Installing the $app app (no Docker)..."
@@ -370,7 +385,7 @@ function Install-ODSDesktop {
 }
 
 try {
-    $code = @(Install-ODSDesktop -NonInteractive $NonInteractive.IsPresent -Repair $Repair.IsPresent -Port $Port -ContextSize $ContextSize `
+    $code = @(Install-ODSDesktop -NonInteractive $NonInteractive.IsPresent -Repair $Repair.IsPresent -Port $Port -ContextSize $ContextSize -Device $Device `
         -DashboardDist $DashboardDist -NoShortcut $NoShortcut.IsPresent -NoPortal $NoPortal.IsPresent -Apps $Apps)[-1]
 } catch {
     # The owner sees one plain sentence and the way back; the full error,

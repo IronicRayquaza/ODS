@@ -109,7 +109,13 @@ try {
         $nvidia = @{ Backend = 'nvidia'; Name = 'NVIDIA GeForce RTX 4070'; VramMB = 12282; Count = 1; MemoryType = 'discrete' }
         $result = Get-ODSDesktopRecommendation -SourceRoot $root -Gpu $nvidia
         Check ($result.Route -ceq 'cpu' -and $null -eq $result.Gpu -and $result.Plan.ContextSize -le 16384) 'an NVIDIA GPU keeps the CPU route and its 16K context'
-        Check (($script:output -join ' ') -match 'RTX 4070: ODS Desktop uses the GPU on AMD Radeon only') 'the CPU route on an NVIDIA PC says why'
+        Check (($script:output -join ' ') -match 'RTX 4070: the model runs on the CPU\. Run setup with -Device gpu') 'the CPU route on an NVIDIA PC says how to opt in to the GPU'
+        $optIn = Get-ODSDesktopRecommendation -SourceRoot $root -Gpu $nvidia -Device gpu -Portal
+        Check ($optIn.Route -ceq 'gpu' -and $optIn.Gpu.Backend -eq 'nvidia' -and $optIn.Plan.ContextSize -eq [math]::Min(32768, [int]$optIn.Config.MaxContext)) 'with -Device gpu an NVIDIA GPU takes the GPU route with the CPU route''s model and context'
+        Check ((Get-ODSDesktopRecommendation -SourceRoot $root -Gpu @{ Backend = 'amd'; Name = 'AMD Radeon RX 9070 XT'; VramMB = 16304; Count = 1; MemoryType = 'discrete' } -Device cpu).Route -ceq 'cpu') '-Device cpu keeps even an AMD GPU on the CPU'
+        $devices = @([pscustomobject]@{ Name = 'Vulkan0'; Description = 'NVIDIA GeForce RTX 3050 Laptop GPU' }, [pscustomobject]@{ Name = 'Vulkan1'; Description = 'Intel(R) UHD Graphics' })
+        Check ((Select-ODSDesktopNvidiaDevice $devices 'NVIDIA GeForce RTX 3050 Laptop GPU').Name -ceq 'Vulkan0') 'the opt-in route names the NVIDIA Vulkan device, never the Intel one'
+        Check ($null -eq (Select-ODSDesktopNvidiaDevice @($devices[1]) 'NVIDIA GeForce RTX 3050 Laptop GPU')) 'with no NVIDIA Vulkan device the opt-in route finds none'
         $script:output = @()
         $result = Get-ODSDesktopRecommendation -SourceRoot $root -Gpu @{ Backend = 'none'; Name = 'None'; VramMB = 0; MemoryType = 'none' }
         Check ($result.Route -ceq 'cpu' -and $script:output.Count -eq 0) 'a PC without a GPU takes the CPU route quietly'

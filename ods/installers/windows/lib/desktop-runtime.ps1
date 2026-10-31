@@ -223,7 +223,9 @@ function Get-ODSDesktopGpuModel($Gpu, [int]$RamGB, [string]$SourceRoot) {
         setup says so; no GPU capacity is ever inferred from an adapter name.
     #>
     if ($Gpu.Backend -ne 'amd') {
-        if ($Gpu.Backend -and $Gpu.Backend -ne 'none') {
+        if ($Gpu.Backend -eq 'nvidia') {
+            Write-Host "         $($Gpu.Name): the model runs on the CPU. Run setup with -Device gpu to try this GPU over Vulkan."
+        } elseif ($Gpu.Backend -and $Gpu.Backend -ne 'none') {
             Write-Host "         $($Gpu.Name): ODS Desktop uses the GPU on AMD Radeon only for now, so the model runs on the CPU."
         }
         return $null
@@ -249,17 +251,23 @@ function Get-ODSDesktopRecommendation {
         Get-GpuInfo's answer, or $null for the CPU route (no usable Vulkan
         device after all).
     #>
-    param([Parameter(Mandatory = $true)][string]$SourceRoot, [long]$ContextSetting = 0, $Gpu = $null, [switch]$Portal)
+    param([Parameter(Mandatory = $true)][string]$SourceRoot, [long]$ContextSetting = 0, $Gpu = $null, [switch]$Portal,
+        [ValidateSet('auto', 'cpu', 'gpu')][string]$Device = 'auto')
     $ramGB = Get-SystemRamGB
     $config = $null
-    if ($Gpu) { $config = Get-ODSDesktopGpuModel $Gpu $ramGB $SourceRoot }
-    $route = if ($config) { 'gpu' } else { 'cpu' }
-    if ($route -eq 'cpu') {
+    if ($Device -ceq 'cpu') { $Gpu = $null }
+    # Opt-in (-Device gpu): an NVIDIA GPU over Vulkan with the CPU route's model
+    # and context, llama.cpp fitting as many layers as its memory holds. The
+    # model must still answer correctly once loaded (Test-ODSDesktopModelAnswer).
+    $nvidia = $Device -ceq 'gpu' -and $Gpu -and $Gpu.Backend -eq 'nvidia'
+    if ($Gpu -and -not $nvidia) { $config = Get-ODSDesktopGpuModel $Gpu $ramGB $SourceRoot }
+    $route = if ($config -or $nvidia) { 'gpu' } else { 'cpu' }
+    if (-not $config) {
         $config = Resolve-ODSDesktopCatalogModel $script:ODSDesktopCpuGpuInfo $ramGB $SourceRoot
         if (-not $config) { throw "This PC has $ramGB GB of memory; ODS Desktop needs at least 8 GB to run a local model." }
     }
-    # The GPU route takes the catalog's context for the GPU's memory.
-    $cap = if ($route -eq 'gpu') { [int]$config.MaxContext } elseif ($Portal) { $script:ODSDesktopPortalCpuContextCap }
+    # The AMD GPU route takes the catalog's context for the GPU's memory.
+    $cap = if ($route -eq 'gpu' -and -not $nvidia) { [int]$config.MaxContext } elseif ($Portal) { $script:ODSDesktopPortalCpuContextCap }
         else { $script:ODSDesktopCpuContextCap }
     $context = Resolve-ODSDesktopContextSize ([int]$config.MaxContext) $cap
     if ($ContextSetting -gt 0) { $context = Resolve-ODSDesktopContextSize ([int]$ContextSetting) ([int]$ContextSetting) }
@@ -277,6 +285,37 @@ function Resolve-ODSDesktopSelection($Existing, $Plan, [long]$ContextSetting) {
         $selection.ContextSize = [int]$ContextSetting
     }
     return $selection
+}
+
+function Select-ODSDesktopNvidiaDevice([object[]]$Devices, [string]$AdapterName) {
+    <#
+    .SYNOPSIS
+        The Vulkan device of the detected NVIDIA adapter, or $null. Used only
+        for the opt-in -Device gpu route; main's selector leaves NVIDIA out.
+    #>
+    $nvidia = @($Devices | Where-Object { $_.Name -cmatch '^Vulkan[0-9]{1,2}$' -and $_.Description -match '(?i)nvidia|geforce|quadro|\brtx\b' })
+    if ($nvidia.Count -eq 0) { return $null }
+    $target = ConvertTo-ODSNativeLlamaAdapterKey $AdapterName
+    if ($target) {
+        $match = @($nvidia | Where-Object { $key = ConvertTo-ODSNativeLlamaAdapterKey $_.Description; $key -and ($key -eq $target -or $key.Contains($target) -or $target.Contains($key)) })
+        if ($match.Count -ge 1) { return $match[0] }
+    }
+    if ($nvidia.Count -eq 1) { return $nvidia[0] }
+    return $null
+}
+
+function Test-ODSDesktopModelAnswer([int]$Port, [string]$ApiKey) {
+    # A GPU start counts only when the model gives a correct answer: a wrong
+    # memory layout can load and still produce garbage.
+    $body = @{ model = 'check'; max_tokens = 12; temperature = 0
+        messages = @(@{ role = 'user'; content = 'What is 2 + 3? Reply with the number only.' }) } | ConvertTo-Json -Depth 4
+    try {
+        $reply = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$Port/v1/chat/completions" -Body $body -ContentType 'application/json' `
+            -Headers @{ Authorization = "Bearer $ApiKey" } -TimeoutSec 180
+    } catch [System.Net.WebException] {
+        return $false
+    }
+    return ([string]$reply.choices[0].message.content).Trim() -match '^\D{0,8}5\D{0,8}$'
 }
 
 function Get-ODSDesktopEngineRoute($Recommendation, $Qualification) {

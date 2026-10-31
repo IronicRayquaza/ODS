@@ -78,11 +78,20 @@ try {
     function Get-ScheduledTask { [pscustomobject]@{ TaskName = 'ODSApp-embeddings-S-1'; State = 'Running' } }
     function Stop-ScheduledTask { }
     function Get-NetTCPConnection { $script:listenChecks++; if ($script:listenChecks -le 3) { [pscustomobject]@{ LocalAddress = '127.0.0.1' } } }
-    Stop-ODSDesktopExtension 'embeddings' 8090
+    Stop-ODSDesktopExtension 'embeddings' $null 8090
     Check ($script:listenChecks -eq 4) 'stopping an app waits until its port is free'
     $script:listenChecks = 0
     Stop-ODSDesktopExtension 'embeddings'
-    Check ($script:listenChecks -eq 0) 'uninstall, which passes no port, does not wait on one'
+    Check ($script:listenChecks -eq 0) 'without a port or ready.json there is nothing to wait on'
+
+    # --- Uninstall waits for the app process itself, so its logs can be deleted (live 2026-11-01) ---
+    $stopPaths = Get-ODSDesktopExtensionPaths 'embeddings' (Join-Path $fixture 'stop-apps')
+    $null = New-Item -ItemType Directory -Force -Path $stopPaths.Root
+    $exiting = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\ping.exe') -ArgumentList '-n', '3', '127.0.0.1' -WindowStyle Hidden -PassThru
+    Write-ODSPrivateEnvFile -Path $stopPaths.Ready -Content (@{ ProcessId = $exiting.Id; Port = 8090 } | ConvertTo-Json -Compress)
+    $script:listenChecks = 0
+    Stop-ODSDesktopExtension 'embeddings' $stopPaths
+    Check ($exiting.HasExited) 'stopping an app waits until the process ready.json names has exited'
     Remove-Item function:Get-ScheduledTask, function:Stop-ScheduledTask, function:Get-NetTCPConnection
 
     # --- Which apps a setup rerun repairs ---

@@ -139,16 +139,28 @@ function Register-ODSDesktopExtensionTask([string]$Id, $Paths, [string]$PythonDi
         -Description "ODS Desktop app: $Id on 127.0.0.1. Starts at sign-in." -Force | Out-Null
 }
 
-function Stop-ODSDesktopExtension([string]$Id, [int]$Port = 0) {
+function Get-ODSDesktopExtensionProcess($Paths) {
+    # The app process ready.json names, held as an object so a reused PID
+    # cannot stand in for it later. $null when there is none.
+    if (-not $Paths -or -not (Test-Path -LiteralPath $Paths.Ready -PathType Leaf)) { return $null }
+    $ready = Read-ODSNativeLlamaJson $Paths.Ready
+    if (-not $ready.ProcessId) { return $null }
+    return (Get-Process -Id ([int]$ready.ProcessId) -ErrorAction SilentlyContinue)
+}
+
+function Stop-ODSDesktopExtension([string]$Id, $Paths = $null, [int]$Port = 0) {
     $task = Get-ScheduledTask -TaskName (Get-ODSDesktopExtensionTaskName $Id) -TaskPath '\' -ErrorAction SilentlyContinue
     # Ending the task ends the supervisor; its kill-on-close job ends the app.
     if (-not $task -or [string]$task.State -ne 'Running') { return }
+    $app = Get-ODSDesktopExtensionProcess $Paths
     Stop-ScheduledTask -TaskName $task.TaskName -TaskPath '\'
-    # The app exits a moment after the supervisor. Wait for its port, so the
-    # caller's port check sees only other programs (live 2026-11-01: a repair
-    # rerun found the old llama-server still listening).
+    # The app exits a moment after the supervisor. Wait for it and its port, so
+    # a repair's port check sees only other programs and uninstall can delete
+    # its logs (live 2026-11-01: the old llama-server was still listening, and
+    # app.log was still open).
     $deadline = (Get-Date).AddSeconds($script:ODSDesktopExtensionStopSeconds)
-    while ($Port -gt 0 -and (Get-Date) -lt $deadline -and @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue).Count) {
+    while ((Get-Date) -lt $deadline -and (($app -and -not $app.HasExited) -or
+            ($Port -gt 0 -and @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue).Count))) {
         Start-Sleep -Milliseconds 250
     }
 }
@@ -178,7 +190,7 @@ function Install-ODSDesktopExtension {
     param([string]$Id, [string]$AppSource, [string]$ServicesDir, [string]$PythonDir, [string]$LlamaServer)
     $paths = Get-ODSDesktopExtensionPaths $Id
     $recipe = Get-ODSDesktopExtensionRecipe $AppSource $ServicesDir $PythonDir $Id $paths
-    Stop-ODSDesktopExtension $Id ([int]$recipe.port)
+    Stop-ODSDesktopExtension $Id $paths ([int]$recipe.port)
     $listener = @(Get-NetTCPConnection -LocalPort ([int]$recipe.port) -State Listen -ErrorAction SilentlyContinue)
     if ($listener.Count) { throw "$($recipe.name) needs port $($recipe.port), which another program is using; nothing was stopped." }
     foreach ($folder in @($paths.Root, $paths.Data, $paths.Logs)) { $null = New-Item -ItemType Directory -Force -Path $folder }
@@ -203,7 +215,7 @@ function Remove-ODSDesktopExtensions([bool]$RemoveData, [string]$Root = (Get-ODS
     foreach ($folder in @(Get-ChildItem -LiteralPath $Root -Directory)) {
         $taskName = Get-ODSDesktopExtensionTaskName $folder.Name
         if (Get-ScheduledTask -TaskName $taskName -TaskPath '\' -ErrorAction SilentlyContinue) {
-            Stop-ODSDesktopExtension $folder.Name
+            Stop-ODSDesktopExtension $folder.Name (Get-ODSDesktopExtensionPaths $folder.Name $Root)
             Unregister-ScheduledTask -TaskName $taskName -TaskPath '\' -Confirm:$false
         }
         foreach ($item in @(Get-ChildItem -LiteralPath $folder.FullName -Force)) {

@@ -311,11 +311,11 @@ function Assert-ODSDesktopRuntimeTakeover($Existing, [string]$OwnerPath) {
 
 # --- dashboard-api -----------------------------------------------------------
 
-function New-ODSDesktopApiEnvironment($Paths, [int]$ApiPort, [int]$LlamaPort, [string]$RuntimeDir, [string]$ApiKey) {
+function New-ODSDesktopApiEnvironment($Paths, [int]$ApiPort, [int]$LlamaPort, [string]$RuntimeDir, [string]$ApiKey, $Portal = $null) {
     # The whole environment dashboard-api runs with (runtime_profile.py,
     # native_llm.py, native_front.py read it).
     if ($ApiKey -cnotmatch '^[A-Za-z0-9_-]{32,128}$') { throw 'The dashboard API key is invalid.' }
-    return [ordered]@{
+    $environment = [ordered]@{
         ODS_RUNTIME_PROFILE = 'windows-desktop'
         ODS_DATA_DIR = $Paths.Data
         ODS_INSTALL_DIR = $Paths.InstallDir
@@ -327,6 +327,12 @@ function New-ODSDesktopApiEnvironment($Paths, [int]$ApiPort, [int]$LlamaPort, [s
         ODS_DASHBOARD_DIST = $Paths.Dist
         PYTHONUTF8 = '1'
     }
+    if ($Portal) {
+        # routers/pixel.py reaches the native Pixel edge on loopback with its key.
+        $environment.PIXEL_EDGE_URL = [string]$Portal.EdgeUrl
+        $environment.PIXEL_OPENWEBUI_KEY = [string]$Portal.EdgeKey
+    }
+    return $environment
 }
 
 function ConvertTo-ODSDesktopEnvText($Environment) {

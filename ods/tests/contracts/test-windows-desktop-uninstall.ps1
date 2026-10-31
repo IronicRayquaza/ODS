@@ -192,7 +192,8 @@ try {
     $uninstaller = & $text '$script:ODSDesktopUninstallScript'
     $copied = & $text '$script:ODSDesktopLauncherLibraries'
     $sourced = @([regex]::Matches($uninstaller, "'([a-z-]+\.ps1)'") | ForEach-Object { $_.Groups[1].Value })
-    Check ($sourced.Count -eq 5 -and -not ($sourced | Where-Object { -not $copied.Contains("'$_'") })) 'uninstall.ps1 loads only libraries setup copies beside it, so it works after the checkout is gone'
+    Check ($sourced.Count -eq 6 -and -not ($sourced | Where-Object { -not $copied.Contains("'$_'") })) 'uninstall.ps1 loads only libraries setup copies beside it, so it works after the checkout is gone'
+    Check ($sourced -contains 'desktop-portal.ps1' -and $uninstaller.Contains('-PortalPaths (Get-ODSDesktopPortalPaths)')) 'uninstall.ps1 also removes Portal: its task, sandbox profile and files'
 } finally {
     $env:USERPROFILE = $profileHome
     foreach ($process in $started) { if (-not $process.HasExited) { $process.Kill() }; $process.Dispose() }

@@ -160,6 +160,41 @@ def test_edge_url_rejects_every_origin_escape(value):
         pixel._validate_edge_url(value)
 
 
+def test_compose_profile_refuses_a_loopback_edge():
+    with pytest.raises(ValueError):
+        pixel._validate_edge_url("http://127.0.0.1:9595")
+
+
+def _desktop_profile(monkeypatch):
+    import runtime_profile
+    desktop = runtime_profile.RuntimeProfile(runtime_profile.WINDOWS_DESKTOP, "C:\\ods-data")
+    monkeypatch.setattr(pixel, "RUNTIME_PROFILE", desktop)
+    monkeypatch.setattr(pixel_runtime_state, "RUNTIME_PROFILE", desktop)
+
+
+def test_desktop_profile_accepts_only_its_loopback_edge(monkeypatch):
+    _desktop_profile(monkeypatch)
+    assert pixel._validate_edge_url("http://127.0.0.1:9595") == "http://127.0.0.1:9595"
+    assert pixel._validate_edge_url("http://127.0.0.1:19595") == "http://127.0.0.1:19595"
+    for value in ("http://pixel-edge:9595", "http://localhost:9595", "http://0.0.0.0:9595", "http://192.168.1.5:9595",
+                  "http://127.0.0.1", "https://127.0.0.1:9595", "http://user:pass@127.0.0.1:9595",
+                  "http://127.0.0.1:9595/v1"):
+        with pytest.raises(ValueError):
+            pixel._validate_edge_url(value)
+
+
+def test_desktop_activity_probe_uses_the_desktop_edge(monkeypatch):
+    _desktop_profile(monkeypatch)
+    monkeypatch.setenv("PIXEL_EDGE_URL", "http://127.0.0.1:9595")
+    assert pixel_runtime_state._pixel_edge_activity_url() == "http://127.0.0.1:9595/v1/activity"
+    monkeypatch.setenv("PIXEL_EDGE_URL", "http://pixel-edge:9595")
+    assert pixel_runtime_state._pixel_edge_activity_url() is None
+
+
+def test_compose_activity_probe_keeps_the_fixed_edge():
+    assert pixel_runtime_state._pixel_edge_activity_url() == "http://pixel-edge:9595/v1/activity"
+
+
 def test_pixel_config_is_optional_but_strict(monkeypatch):
     monkeypatch.delenv("PIXEL_OPENWEBUI_KEY", raising=False)
     assert pixel._pixel_config() is None

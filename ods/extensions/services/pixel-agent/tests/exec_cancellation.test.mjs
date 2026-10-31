@@ -97,3 +97,32 @@ test("gateway cancellation stops the actual child process group", { skip: !linux
     await closed;
   }
 });
+
+test("windows preparation emits the marker form the ods-windows backend unwraps", async () => {
+  const { unwrapCancellable } = await import("../windows/plugin/cancellable.mjs");
+  const parent = mkdtempSync(path.join(tmpdir(), "pixel-cancel-win-"));
+  const root = path.join(parent, ".ods-exec-control");
+  mkdirSync(root);
+  const control = createExecCancellationControl({ root, platform: "win32" });
+  const command = 'node -e "console.log(6*7)" && type "my file.txt"';
+  const prepared = control.prepare("run-1", command);
+  assert.match(prepared, /^ods-cancellable [0-9a-f]{64} [A-Za-z0-9+/=]+$/);
+  // Direct and Tool Search exec both pass the guard: the second wraps the first.
+  const twice = control.prepare("run-1", prepared);
+  assert.equal(control.signal("run-1"), true);
+  const marker = readFileSync(path.join(root, prepared.split(" ")[1] + ".cancel"));
+  assert.equal(marker.length, 0);
+  assert.equal(control.clear("run-1"), true);
+  const unwrapped = unwrapCancellable(twice, "C:\control");
+  assert.equal(unwrapped.text, command);
+  assert.equal(unwrapped.marker, "C:\control\\" + prepared.split(" ")[1] + ".cancel");
+  assert.deepEqual(unwrapCancellable("dir", "C:\control"), { text: "dir", marker: "" });
+});
+
+test("windows preparation refuses a control root that is a link or a file", () => {
+  const parent = mkdtempSync(path.join(tmpdir(), "pixel-cancel-win-"));
+  const file = path.join(parent, "not-a-folder");
+  copyFileSync(new URL(import.meta.url), file);
+  assert.throws(() => createExecCancellationControl({ root: file, platform: "win32" }).prepare("run", "dir"),
+    /unsafe Pixel execution control root/);
+});

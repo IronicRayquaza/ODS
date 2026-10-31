@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 
 import httpx
+
+from runtime_profile import RUNTIME_PROFILE
 
 
 _lock = threading.Lock()
@@ -49,16 +52,27 @@ def _local_pixel_stream_active() -> bool:
         return _active_streams > 0
 
 
+def _pixel_edge_activity_url() -> str | None:
+    """Compose's fixed edge, or the Desktop profile's loopback-only native edge."""
+    if not RUNTIME_PROFILE.is_desktop:
+        return _PIXEL_EDGE_ACTIVITY_URL
+    origin = os.environ.get("PIXEL_EDGE_URL", "")
+    if re.fullmatch(r"http://127\.0\.0\.1:[1-9][0-9]{0,4}", origin) is None:
+        return None
+    return origin + "/v1/activity"
+
+
 def _pixel_edge_stream_active() -> bool:
     """Read the content-free activity projection shared with Open WebUI."""
     key = os.environ.get("PIXEL_OPENWEBUI_KEY", "")
-    if not key or key != key.strip() or len(key) < 32 or len(key) > 4096:
+    url = _pixel_edge_activity_url()
+    if url is None or not key or key != key.strip() or len(key) < 32 or len(key) > 4096:
         return False
     try:
         timeout = httpx.Timeout(connect=2.0, read=2.0, write=2.0, pool=2.0)
         with httpx.Client(timeout=timeout, trust_env=False, follow_redirects=False) as client:
             response = client.get(
-                _PIXEL_EDGE_ACTIVITY_URL,
+                url,
                 headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
             )
         if response.status_code != 200:

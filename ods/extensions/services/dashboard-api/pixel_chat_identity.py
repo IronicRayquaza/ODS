@@ -4,9 +4,14 @@ import json
 from fastapi import HTTPException
 from host_agent_client import AgentClientError, async_request_json
 from portal_identity_contract import normalize_document
+from runtime_profile import RUNTIME_PROFILE
+import desktop_portal_identity
 
 
 async def confirmed_display_name():
+    if RUNTIME_PROFILE.is_desktop:
+        # No host agent on Desktop: the identity lives in its data folder.
+        return desktop_portal_identity.read_document()["displayName"]
     try:
         document = normalize_document(await async_request_json(
             "GET", "/v1/pixel/identity", timeout=3))

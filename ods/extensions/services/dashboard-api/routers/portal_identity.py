@@ -6,7 +6,9 @@ from fastapi.responses import JSONResponse
 from host_agent_client import AgentHTTPError, AgentProtocolError, AgentUnavailable
 from host_agent_client import async_request_json as request_agent_json
 from portal_identity_contract import normalize_document, normalize_edit
+from runtime_profile import RUNTIME_PROFILE
 from security import verify_api_key
+import desktop_portal_identity
 
 from routers.pixel_providers import _check_depth, _constant, _float, _pairs
 
@@ -29,7 +31,18 @@ async def _body(request):
         raise HTTPException(400, "Invalid assistant identity request", headers=NO_STORE) from None
 
 
+def _desktop_request(payload=None):
+    if payload is None:
+        return JSONResponse(desktop_portal_identity.read_document(), headers=NO_STORE)
+    try:
+        return JSONResponse(desktop_portal_identity.save_document(payload), headers=NO_STORE)
+    except desktop_portal_identity.IdentityConflict:
+        raise HTTPException(409, "Assistant identity changed elsewhere; refresh before saving.", headers=NO_STORE) from None
+
+
 async def _request(method, payload=None):
+    if RUNTIME_PROFILE.is_desktop:
+        return _desktop_request(payload)
     path = "/v1/pixel/identity/save" if method == "POST" else "/v1/pixel/identity"
     try:
         result = await request_agent_json(method, path, payload=payload, timeout=10)

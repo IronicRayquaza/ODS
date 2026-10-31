@@ -22,7 +22,7 @@ import sys
 from datetime import datetime
 from urllib.parse import quote, urlsplit
 
-from aiohttp import web, ClientSession, UnixConnector, TCPConnector, ClientTimeout, ClientError
+from aiohttp import web, ClientSession, NamedPipeConnector, UnixConnector, TCPConnector, ClientTimeout, ClientError
 from transition_gate import TransitionGate, GateError, strict_json, valid_binding
 from runtime_identity import project_runtime_identity, unknown_runtime_identity
 from chat_context import project_context, valid_history_snapshot
@@ -181,6 +181,14 @@ _PUBLIC_MODEL = "portal/default"
 _LEGACY_MODEL = "pixel/default"
 _ALLOWED_MODELS = (_PUBLIC_MODEL, _LEGACY_MODEL)
 _LISTEN_PORT = int(os.environ.get("PIXEL_EDGE_PORT_INTERNAL", "9595"))
+# Docker publishes the edge on its private network; the native Windows Desktop
+# profile serves it on loopback only and reaches its ingress over a named pipe.
+_LISTEN_HOST = os.environ.get("PIXEL_EDGE_HOST", "0.0.0.0")
+_INGRESS_PIPE = os.environ.get("PIXEL_INGRESS_PIPE", "")
+
+
+def _ingress_connector():
+    return NamedPipeConnector(path=_INGRESS_PIPE) if _INGRESS_PIPE else UnixConnector(path=_SOCKET_PATH)
 
 # Header names (case-insensitive) that may be forwarded to upstream.
 _SAFE_HEADERS = frozenset({
@@ -812,7 +820,7 @@ def _message_text(content) -> str:
 # ---------------------------------------------------------------------------
 
 async def _ingress_ready() -> bool:
-    connector = UnixConnector(path=_SOCKET_PATH)
+    connector = _ingress_connector()
     timeout = ClientTimeout(total=3, sock_connect=2, sock_read=2)
     try:
         async with ClientSession(connector=connector, timeout=timeout) as session:
@@ -855,7 +863,7 @@ async def handle_runtime_identity(request: web.Request):
     if request.query_string:
         return web.json_response({"error": "invalid request"}, status=400)
     try:
-        connector = UnixConnector(path=_SOCKET_PATH)
+        connector = _ingress_connector()
         timeout = ClientTimeout(total=3, sock_connect=2, sock_read=2)
         async with ClientSession(connector=connector, timeout=timeout) as session:
             async with session.get("http://pixel-upstream/v1/runtime-identity", allow_redirects=False) as response:
@@ -942,7 +950,7 @@ async def handle_example_projects(request: web.Request):
             return web.json_response({"error": "invalid example project request"}, status=400)
     try:
         timeout = ClientTimeout(total=38 if opening else 4, sock_connect=2)
-        async with ClientSession(connector=UnixConnector(path=_SOCKET_PATH), timeout=timeout) as session:
+        async with ClientSession(connector=_ingress_connector(), timeout=timeout) as session:
             upstream_request = (session.post("http://pixel-upstream/v1/example-projects", json={"name": name},
                                              headers={"Accept": "application/json"}, allow_redirects=False)
                                 if opening else
@@ -998,7 +1006,7 @@ async def handle_chat_activity(request: web.Request):
 
 
 async def _context_upstream(data, *, compact=False):
-    connector = UnixConnector(path=_SOCKET_PATH)
+    connector = _ingress_connector()
     timeout = ClientTimeout(total=18, sock_connect=2, sock_read=16)
     async with ClientSession(connector=connector, timeout=timeout) as session:
         async with session.post(f"http://pixel-upstream/v1/chat/{'compact' if compact else 'context'}",
@@ -1113,7 +1121,7 @@ async def handle_chat_images_delete(request: web.Request):
     if request.app[_CANCEL_EVENTS_KEY].get(data["user"]) or any(user == data["user"] for user, _ in request.app[_COMPACTIONS_KEY]):
         return web.json_response({"error": "conversation_busy"}, status=409)
     try:
-        async with ClientSession(connector=UnixConnector(path=_SOCKET_PATH), timeout=ClientTimeout(total=18)) as session:
+        async with ClientSession(connector=_ingress_connector(), timeout=ClientTimeout(total=18)) as session:
             async with session.post("http://pixel-upstream/v1/chat/images-delete", json=data,
                                     headers={"Content-Type": "application/json", "Accept": "application/json"}) as upstream:
                 if upstream.status in {409, 423, 429}:
@@ -1156,7 +1164,7 @@ def _remember_chat_activity(app, chat_id, state):
 def _access_transport():
     transport = os.environ.get('PIXEL_ACCESS_TRANSPORT', 'unix')
     if transport == 'unix':
-        return UnixConnector(path=_SOCKET_PATH), 'http://pixel-upstream'
+        return _ingress_connector(), 'http://pixel-upstream'
     if transport == 'docker-desktop-host':
         port = os.environ.get('PIXEL_NATIVE_ACCESS_PORT', '18790')
         if not re.fullmatch(r'[1-9][0-9]{0,4}', port) or int(port) > 65535:
@@ -1509,7 +1517,7 @@ async def _handle_admitted_chat(request, image_turn, reservation, limit):
         # A URL in chat is not an outbound fetch by this transport. Let an
         # authorized browser handle local previews; public-fetch restrictions
         # and the unavailable-browser response remain enforced by the harness.
-        connector = UnixConnector(path=_SOCKET_PATH)
+        connector = _ingress_connector()
         timeout = ClientTimeout(total=_TOTAL_TIMEOUT,
                                 sock_connect=_CONNECT_TIMEOUT,
                                 sock_read=_SOCK_READ_TIMEOUT)
@@ -1590,7 +1598,7 @@ async def handle_chat_cancel(request: web.Request):
     ):
         return web.json_response({"error": "invalid cancellation request"}, status=400)
 
-    connector = UnixConnector(path=_SOCKET_PATH)
+    connector = _ingress_connector()
     # Outlive the ingress's 16 s harness + managed-project cancellation budget.
     timeout = ClientTimeout(total=20, sock_connect=2, sock_read=18)
     try:
@@ -1979,4 +1987,4 @@ def create_app() -> web.Application:
 
 
 if __name__ == "__main__":
-    web.run_app(create_app(), host="0.0.0.0", port=_LISTEN_PORT)
+    web.run_app(create_app(), host=_LISTEN_HOST, port=_LISTEN_PORT)

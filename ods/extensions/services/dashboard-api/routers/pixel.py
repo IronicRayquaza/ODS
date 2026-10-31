@@ -37,6 +37,7 @@ from pixel_runtime_identity import project_runtime_identity, unknown_runtime_ide
 from pixel_readiness import project_readiness
 from routers.pixel_images import router as image_router, resolve_message_images, conversation_storage
 from pixel_edge_read_client import borrow_edge_read_client, get_edge_read_client
+from runtime_profile import RUNTIME_PROFILE
 
 
 logger = logging.getLogger(__name__)
@@ -100,7 +101,12 @@ _MODEL_SUPPORT_REASONS = {
 
 
 def _validate_edge_url(raw: str) -> str:
-    """Accept exactly the fixed internal Pixel edge origin."""
+    """Accept exactly the fixed internal Pixel edge origin.
+
+    Compose reaches the edge as pixel-edge:9595 on its private network. The
+    windows-desktop profile has no Docker network: its native edge listens on
+    127.0.0.1 only, so that profile accepts a loopback origin and nothing else.
+    """
     try:
         parsed = urlparse(raw)
         port = parsed.port
@@ -108,10 +114,14 @@ def _validate_edge_url(raw: str) -> str:
         raise ValueError("PIXEL_EDGE_URL is invalid") from exc
     if parsed.scheme != "http":
         raise ValueError("PIXEL_EDGE_URL scheme must be http")
-    if parsed.hostname != "pixel-edge" or port != 9595:
-        raise ValueError("PIXEL_EDGE_URL must use pixel-edge:9595")
     if parsed.username or parsed.password or parsed.path or parsed.params or parsed.query or parsed.fragment:
         raise ValueError("PIXEL_EDGE_URL must be an origin without userinfo, path, query, or fragment")
+    if RUNTIME_PROFILE.is_desktop:
+        if parsed.hostname != "127.0.0.1" or port is None:
+            raise ValueError("PIXEL_EDGE_URL must be http://127.0.0.1:<port> in the windows-desktop profile")
+        return f"http://127.0.0.1:{port}"
+    if parsed.hostname != "pixel-edge" or port != 9595:
+        raise ValueError("PIXEL_EDGE_URL must use pixel-edge:9595")
     return _DEFAULT_EDGE_URL
 
 

@@ -17,7 +17,8 @@ param(
     [switch]$Repair,
     [int]$Port = 0,
     [string]$DashboardDist = '',
-    [switch]$NoShortcut
+    [switch]$NoShortcut,
+    [switch]$NoPortal
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,14 +27,14 @@ $Lib = Join-Path $PSScriptRoot 'windows\lib'
 . (Join-Path $Lib 'wsl-portal-amd.ps1')
 . (Join-Path $Lib 'app-shortcut.ps1')
 foreach ($name in @('desktop-model.ps1', 'desktop-settings.ps1', 'desktop-python.ps1', 'desktop-runtime.ps1', 'desktop-api-launcher.ps1',
-    'desktop-uninstall.ps1')) {
+    'desktop-portal.ps1', 'desktop-uninstall.ps1')) {
     . (Join-Path $Lib $name)
 }
 
 # Files the sign-in task and uninstall.ps1 run, copied beside launch-api.ps1
 # so both keep working after the ODS checkout is moved or deleted.
 $script:ODSDesktopLauncherLibraries = @('private-file.ps1', 'native-llama-runtime.ps1', 'desktop-python.ps1',
-    'desktop-runtime.ps1', 'desktop-api-launcher.ps1', 'app-shortcut.ps1', 'desktop-uninstall.ps1')
+    'desktop-runtime.ps1', 'desktop-api-launcher.ps1', 'desktop-portal.ps1', 'app-shortcut.ps1', 'desktop-uninstall.ps1')
 $script:ODSDesktopApiReadySeconds = 150
 $script:ODSDesktopFreeSpaceHeadroomGB = 1.5
 
@@ -65,15 +66,17 @@ $script:ODSDesktopUninstallScript = @'
 [CmdletBinding()]
 param([switch]$KeepData, [switch]$RemoveData, [switch]$NonInteractive)
 $ErrorActionPreference = 'Stop'
-foreach ($name in @('native-llama-runtime.ps1', 'desktop-runtime.ps1', 'desktop-api-launcher.ps1', 'app-shortcut.ps1', 'desktop-uninstall.ps1')) {
+foreach ($name in @('native-llama-runtime.ps1', 'desktop-runtime.ps1', 'desktop-api-launcher.ps1', 'desktop-portal.ps1', 'app-shortcut.ps1',
+    'desktop-uninstall.ps1')) {
     . (Join-Path (Join-Path $PSScriptRoot 'launcher') $name)
 }
 Write-Host ''
 Write-Host '  Removing ODS Desktop'
 $code = 0
 try {
-    $result = Invoke-ODSDesktopUninstall -Paths (Get-ODSDesktopPaths $PSScriptRoot) -KeepData:$KeepData -RemoveData:$RemoveData -NonInteractive:$NonInteractive
-    Write-Host '         Done: the ODS sign-in tasks, shortcuts and the Apps & Features entry are gone.'
+    $result = Invoke-ODSDesktopUninstall -Paths (Get-ODSDesktopPaths $PSScriptRoot) -KeepData:$KeepData -RemoveData:$RemoveData -NonInteractive:$NonInteractive `
+        -PortalPaths (Get-ODSDesktopPortalPaths)
+    Write-Host '         Done: the ODS sign-in tasks (model, app, Portal), shortcuts and the Apps & Features entry are gone.'
     foreach ($entry in $result.Removed) { Write-Host "         Deleted $($entry.Path) ($(Format-ODSDesktopBytes $entry.Bytes))" }
     foreach ($entry in $result.Kept) { Write-Host "         Kept $($entry.Path) ($(Format-ODSDesktopBytes $entry.Bytes)); delete it yourself any time." }
     Write-Host '         Chats you saved in the ODS window are kept by Microsoft Edge as site data for localhost, not in these folders.'
@@ -90,7 +93,7 @@ function Write-ODSDesktopStage([int]$Step, [string]$Title, [string]$Detail) {
     Write-Host ''
     $style = @{}
     if (-not $env:NO_COLOR) { $style.ForegroundColor = 'Cyan' }
-    Write-Host ("  [{0}/6]  {1}" -f $Step, $Title) @style
+    Write-Host ("  [{0}/7]  {1}" -f $Step, $Title) @style
     Write-Host "         $Detail"
 }
 
@@ -228,14 +231,18 @@ function Wait-ODSDesktopApiReady($Paths, [int]$Port) {
     throw "The ODS app did not start within $($script:ODSDesktopApiReadySeconds) seconds. See $(Join-Path $Paths.Logs 'dashboard-api.err.log')."
 }
 
-function Install-ODSDesktopApp($Paths, [string]$Dist, [int]$LlamaPort, $Settings, [bool]$Repair) {
-    Stop-ODSDesktopApp $Paths
+function Install-ODSDesktopAppPython($Paths, [bool]$Repair) {
+    # The app and Portal's supervisor and edge share this pinned Python.
     $lock = Join-Path $SourceRoot 'extensions\services\dashboard-api\requirements.lock'
     $problem = Test-ODSDesktopPythonInstall -Directory $Paths.Python -Requirements $lock -Full:$Repair
     if ($problem) {
         Write-Host "         $problem Installing Python and the ODS app packages (hash-checked)..."
         $null = Install-ODSDesktopPython -SourceRoot $SourceRoot -Destination $Paths.Python -Requirements $lock
     }
+}
+
+function Install-ODSDesktopApp($Paths, [string]$Dist, [int]$LlamaPort, $Settings, $Portal) {
+    Stop-ODSDesktopApp $Paths
     Publish-ODSDesktopApp $SourceRoot $Paths
     Publish-ODSDesktopDist $Dist $Paths
     $null = New-Item -ItemType Directory -Force -Path $Paths.Data
@@ -245,7 +252,7 @@ function Install-ODSDesktopApp($Paths, [string]$Dist, [int]$LlamaPort, $Settings
     $key = if ($previous['DASHBOARD_API_KEY']) { [string]$previous['DASHBOARD_API_KEY'] } else { New-ODSNativeLlamaApiKey }
     $current = if ($previous['DASHBOARD_API_PORT']) { [int]$previous['DASHBOARD_API_PORT'] } else { 0 }
     $apiPort = Select-ODSDesktopApiPort ([int]$Settings.Port) $current
-    $environment = New-ODSDesktopApiEnvironment $Paths $apiPort $LlamaPort (Get-ODSPortalRuntimeDir) $key
+    $environment = New-ODSDesktopApiEnvironment $Paths $apiPort $LlamaPort (Get-ODSPortalRuntimeDir) $key $Portal
     Write-ODSPrivateEnvFile -Path $Paths.Environment -Content (ConvertTo-ODSDesktopEnvText $environment)
     Publish-ODSDesktopLauncher $Paths
     Write-ODSPrivateEnvFile -Path $Paths.Intent -Content '{"State":"running"}'
@@ -269,7 +276,7 @@ function Publish-ODSDesktopUninstaller($Paths, [string[]]$Shortcuts, [string]$Mo
 }
 
 function Install-ODSDesktop {
-    param([bool]$NonInteractive, [bool]$Repair, [int]$Port, [string]$DashboardDist, [bool]$NoShortcut)
+    param([bool]$NonInteractive, [bool]$Repair, [int]$Port, [string]$DashboardDist, [bool]$NoShortcut, [bool]$NoPortal)
     $paths = Get-ODSDesktopPaths
     $dist = if ($DashboardDist) { $DashboardDist } else { Join-Path $SourceRoot 'extensions\services\dashboard\dist' }
     Write-Host ''
@@ -316,8 +323,20 @@ function Install-ODSDesktop {
     Write-ODSDesktopStage 5 'START THE MODEL' 'It starts by itself whenever you sign in to Windows.'
     $llamaPort = Start-ODSDesktopModel $existing $engine $selection $paths
 
-    Write-ODSDesktopStage 6 'ODS APP' 'The ODS dashboard and chat, served on this PC only.'
-    $apiPort = Install-ODSDesktopApp $paths $dist $llamaPort $settings $Repair
+    Write-ODSDesktopStage 6 'PORTAL' 'The ODS agent: it plans, writes files and runs commands in a sandbox. No Docker, no WSL.'
+    Install-ODSDesktopAppPython $paths $Repair
+    $portal = $null
+    if ($NoPortal) {
+        Stop-ODSDesktopPortal (Get-ODSDesktopPortalPaths)
+        Write-Host '         Skipped (-NoPortal).'
+    } else {
+        $portal = Install-ODSDesktopPortal -SourceRoot $SourceRoot -Paths (Get-ODSDesktopPortalPaths) -PythonDir $paths.Python `
+            -RuntimeDir (Get-ODSPortalRuntimeDir)
+        Write-Host '         Running; it starts by itself whenever you sign in to Windows.'
+    }
+
+    Write-ODSDesktopStage 7 'ODS APP' 'The ODS dashboard, chat and Portal, served on this PC only.'
+    $apiPort = Install-ODSDesktopApp $paths $dist $llamaPort $settings $portal
     Write-ODSDesktopSettings $paths.Settings ([ordered]@{ Port = [long]$apiPort; ContextSize = [long]$settings.ContextSize })
     $shortcuts = @()
     if (-not $NoShortcut) {
@@ -339,7 +358,7 @@ function Install-ODSDesktop {
 
 try {
     $code = @(Install-ODSDesktop -NonInteractive $NonInteractive.IsPresent -Repair $Repair.IsPresent -Port $Port `
-        -DashboardDist $DashboardDist -NoShortcut $NoShortcut.IsPresent)[-1]
+        -DashboardDist $DashboardDist -NoShortcut $NoShortcut.IsPresent -NoPortal $NoPortal.IsPresent)[-1]
 } catch {
     # The owner sees one plain sentence and the way back; the full error,
     # with its stack, goes to a log for whoever helps them. It lives in

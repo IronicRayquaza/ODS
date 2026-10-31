@@ -636,6 +636,14 @@ export function createExecCancellationControl({
   const hostWrapper = path.join(resolvedRoot, "cancellable-exec.sh");
 
   function assertRoot() {
+    if (platform === "win32") {
+      // Windows has no POSIX modes or owner ids here: Desktop setup creates this
+      // folder under the owner-only Portal home. There is no wrapper script;
+      // the ods-windows sandbox backend watches the markers itself.
+      const rootInfo = fs.lstatSync(resolvedRoot);
+      if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw new Error("unsafe Pixel execution control root");
+      return;
+    }
     const owner = typeof process.getuid === "function" ? process.getuid() : undefined;
     const rootInfo = fs.lstatSync(resolvedRoot);
     const wrapperInfo = fs.lstatSync(hostWrapper);
@@ -677,6 +685,9 @@ export function createExecCancellationControl({
         if (error?.code !== "ENOENT") throw error;
       }
       const encoded = Buffer.from(command, "utf8").toString("base64");
+      // The Windows Desktop backend (pixel-agent/windows/plugin) runs this in a
+      // Job Object it terminates when the marker for this run appears.
+      if (platform === "win32") return `ods-cancellable ${execMarkerId(runId)} ${encoded}`;
       // Validate the owner-side file above even when execution uses its sandbox
       // bind mount. Gateway execution uses that same verified file directly.
       const immutableWrapper = executionHost === "gateway" ? nativeRuntimeExecWrapper(process.execPath, platform) : undefined;

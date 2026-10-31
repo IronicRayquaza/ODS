@@ -1,0 +1,19 @@
+{
+  "id": "ods-windows-sandbox",
+  "name": "ODS Windows Sandbox",
+  "description": "Runs Portal commands in a Windows AppContainer with no network (ODS Desktop).",
+  "version": "1.0.0",
+  "activation": { "onStartup": true },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["python", "runner", "profile", "toolPath", "controlRoot"],
+    "properties": {
+      "python": { "type": "string", "minLength": 3, "maxLength": 1024 },
+      "runner": { "type": "string", "minLength": 3, "maxLength": 1024 },
+      "profile": { "type": "string", "pattern": "^ODS\\.Portal\\.Sandbox\\.[a-f0-9]{24}$" },
+      "toolPath": { "type": "string", "minLength": 3, "maxLength": 4096 },
+      "controlRoot": { "type": "string", "minLength": 3, "maxLength": 1024 }
+    }
+  }
+}

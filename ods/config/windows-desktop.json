@@ -18,5 +18,14 @@
     "sha256": "71138adf1f4ca900cdb7d289c21b7494329f2332b6d85f0e1c42108c0384ed3e",
     "publishedAt": "2026-08-04T22:51:12Z"
   },
+  "portalNode": {
+    "version": "22.23.1",
+    "file": "node-v22.23.1-win-x64.zip",
+    "url": "https://nodejs.org/dist/v22.23.1/node-v22.23.1-win-x64.zip",
+    "size": 35682836,
+    "sha256": "7df0bc9375723f4a86b3aa1b7cc73342423d9677a8df4538aca31a049e309c29",
+    "publishedAt": "2026-06-22"
+  },
+  "portalVerification": "Node 22.23.1 is the version vendor/pixel/RELEASE-MANIFEST.json pins for the OpenClaw gateway on Linux. The win-x64 digest comes from nodejs.org/dist/v22.23.1/SHASUMS256.txt, which lists the manifest's linux-x64 digest unchanged; the zip was downloaded and hashed on 2026-10-31. OpenClaw and its plugins keep their pins in RELEASE-MANIFEST.json.",
   "verification": "python.org embeddable amd64 zip downloaded and hashed 2026-10-23; its python.exe carries a valid Authenticode signature from the Python Software Foundation. pip wheel digest and size from the PyPI JSON API. Both releases were public at least two weeks before pinning (3.13.17 and pip 26.2.2 were newer). This receipt does not assert fleet qualification."
 }

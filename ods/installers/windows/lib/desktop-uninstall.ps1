@@ -191,7 +191,8 @@ function Invoke-ODSDesktopUninstall {
         [switch]$KeepData, [switch]$RemoveData, [switch]$NonInteractive,
         [string]$RegistryRoot = $script:ODSDesktopUninstallRoot,
         [string]$ApiTaskName = ('ODSDesktopApi-' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value),
-        [scriptblock]$Ask = ${function:Read-ODSDesktopDataChoice})
+        [scriptblock]$Ask = ${function:Read-ODSDesktopDataChoice},
+        $PortalPaths = $null)
     $runtime = Get-ODSDesktopOwnedRuntime $Paths
     $owned = @(Get-ODSDesktopOwnedPaths $runtime)
     $remove = Resolve-ODSDesktopDataChoice $Paths $owned $KeepData $RemoveData $NonInteractive $Ask
@@ -200,6 +201,8 @@ function Invoke-ODSDesktopUninstall {
     if ($runtime -and $runtime.TaskName) {
         $stoppedModel = Stop-ODSDesktopTask $runtime.TaskName (Join-Path $runtime.RuntimeDir 'intent.json') (Join-Path $runtime.RuntimeDir 'process-ownership.json')
     }
+    # Portal (desktop-portal.ps1) talks to the model; it goes before the files.
+    $portal = if ($PortalPaths) { Remove-ODSDesktopPortal $PortalPaths $remove $Paths.Python } else { $null }
     $shortcuts = @(Remove-ODSDesktopShortcuts (Join-Path $Paths.Root 'shortcuts.json'))
     $plan = @(Get-ODSDesktopDataPlan $Paths $owned $remove)
     foreach ($entry in @($plan | Where-Object { $_.Remove })) { Remove-Item -LiteralPath $entry.Path -Recurse -Force }
@@ -211,6 +214,8 @@ function Invoke-ODSDesktopUninstall {
     $key = Get-ODSDesktopUninstallKey $RegistryRoot
     if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse -Force }
     Remove-ODSDesktopLeftovers $Paths $folders
-    return [pscustomobject]@{ StoppedApp = $stoppedApp; StoppedModel = $stoppedModel; Shortcuts = $shortcuts
-        Removed = @($plan | Where-Object { $_.Remove }); Kept = @($plan | Where-Object { -not $_.Remove }) }
+    $kept = @($plan | Where-Object { -not $_.Remove })
+    if ($portal) { $kept += @($portal.Kept | ForEach-Object { [pscustomobject]@{ Path = $_; Bytes = (Get-ODSDesktopFolderBytes $_); Remove = $false } }) }
+    return [pscustomobject]@{ StoppedApp = $stoppedApp; StoppedModel = $stoppedModel; StoppedPortal = [bool]($portal -and $portal.Stopped)
+        Shortcuts = $shortcuts; Removed = @($plan | Where-Object { $_.Remove }); Kept = $kept }
 }

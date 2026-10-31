@@ -268,7 +268,7 @@ def parse(argv):
             sub.add_argument('--read', action='append', default=[])
         elif name == 'fsop':
             sub.add_argument('--python', required=True)
-        else:
+        elif name == 'run':
             sub.add_argument('--path', required=True)
             sub.add_argument('--cwd', default='')
             sub.add_argument('--cancel-marker', default='')

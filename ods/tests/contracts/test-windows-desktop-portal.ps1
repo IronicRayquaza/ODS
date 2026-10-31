@@ -66,7 +66,8 @@ try {
     Check ($entry.config.python -eq $sandbox.Python -and $entry.config.runner -eq $sandbox.Runner -and $entry.config.profile -eq $sandbox.Profile -and
         $entry.config.toolPath -eq $sandbox.ToolPath -and $entry.config.controlRoot -eq $sandbox.ControlRoot) 'the sandbox plugin receives every runner setting (a shadowed parameter once left them empty)'
     Check (@($boxed.plugins.allow) -contains 'ods-windows-sandbox' -and @($boxed.plugins.load.paths) -contains $sandbox.Plugin) 'the sandbox plugin is allowed and loaded from the runtime copy'
-    $allowed = @($boxed.tools.sandbox.tools.allow)
+    $allowed = @($boxed.tools.sandbox.tools.alsoAllow)
+    Check ($null -eq $boxed.tools.sandbox.tools['allow']) 'the sandbox list is additive (alsoAllow): a plain allow would hide read, write, edit and exec'
     Check ($allowed -contains 'pixel_ods_workspace_preview' -and @($boxed.tools.alsoAllow) -contains 'pixel_ods_workspace_preview') 'the preview tool is visible in Sandbox mode (OpenClaw hides tools missing from its sandbox allow list)'
     Check (-not ($allowed | Where-Object { $_ -in @('web_fetch', 'web_search', 'pixel_ods_history', 'pixel_ods_host_observe', 'pixel_ods_extensions', 'pixel_ods_download_promote') })) 'tools that need a host agent, a Unix socket or the network stay hidden on Desktop'
     $profileName = Get-ODSDesktopPortalSandboxProfile 'S-1-5-21-1-2-3-1001'

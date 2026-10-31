@@ -16,6 +16,15 @@ test('lists native apps with their state and opens a running one', async () => {
   expect(screen.getByText('-Apps n8n')).toBeInTheDocument()
 })
 
+test('shows the API address of a running embeddings app instead of an Open link', async () => {
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, json: async () => ({ apps: [
+    { id: 'embeddings', name: 'TEI (Embeddings)', version: '1.5', installedVersion: '1.5', state: 'running', url: null, apiUrl: 'http://127.0.0.1:8090/v1' },
+  ] }) })
+  render(<DesktopApps />)
+  expect(await screen.findByText('http://127.0.0.1:8090/v1')).toBeInTheDocument()
+  expect(screen.queryByRole('link', { name: /open/i })).toBeNull()
+})
+
 test('says plainly when the list does not load', async () => {
   vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false, status: 503, json: async () => ({}) })
   render(<DesktopApps />)

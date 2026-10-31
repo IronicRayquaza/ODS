@@ -8,7 +8,7 @@ block; this module applies the same rules and resolves the placeholders.
 
 As a script (setup runs it with the pinned Python), it prints JSON:
     python -I desktop_app_recipes.py list <extensions\\services folder>
-    python -I desktop_app_recipes.py resolve <extensions\\services folder> <id> <data folder>
+    python -I desktop_app_recipes.py resolve <extensions\\services folder> <id> <data folder> <bin folder>
 """
 from __future__ import annotations
 
@@ -26,8 +26,13 @@ _EXECUTABLE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.exe$")
 _ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]{0,80}$")
 _HEALTH = re.compile(r"^/[A-Za-z0-9._/-]{0,120}$")
 _VERSION = re.compile(r"^[0-9][0-9A-Za-z.+-]{0,40}$")
+_MODEL_URL = re.compile(r"^https://huggingface\.co/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/resolve/[a-f0-9]{40}/[A-Za-z0-9._-]+\.gguf$")
 _PLACEHOLDER = re.compile(r"\{([a-z]+)\}")
-_KEYS = {"version", "download", "executable", "args", "env", "port", "health"}
+_KEYS = {"version", "download", "executable", "runtime", "model", "args", "env", "port", "health"}
+# {model} and {keyfile} exist only for the llama-server kind: its pinned model
+# file, and an owner-only API key file setup creates, because ODS never runs an
+# unauthenticated llama-server.
+_PLACEHOLDERS = {"zip": {"port", "data"}, "llama-server": {"port", "data", "model", "keyfile"}}
 
 
 class RecipeError(ValueError):
@@ -38,17 +43,26 @@ def parse_recipe(service_id: str, name: str, block: object) -> dict:
     """Validate one native.windows block; return it in a fixed shape."""
     if not _ID.match(service_id):
         raise RecipeError(f"{service_id!r}: invalid service id")
-    if not isinstance(block, dict) or not {"version", "download", "executable", "port", "health"} <= set(block) <= _KEYS:
-        raise RecipeError(f"{service_id}: native.windows needs version, download, executable, port and health only")
-    download = block["download"]
-    if not isinstance(download, dict) or set(download) != {"url", "size", "sha256"}:
-        raise RecipeError(f"{service_id}: download needs exactly url, size and sha256")
-    if not isinstance(download["url"], str) or not _URL.match(download["url"]):
-        raise RecipeError(f"{service_id}: download url must be a GitHub release zip over HTTPS")
-    if type(download["size"]) is not int or download["size"] < 1 or not _SHA256.match(str(download["sha256"])):
-        raise RecipeError(f"{service_id}: download needs a positive size and a lowercase SHA-256")
-    if not _VERSION.match(str(block["version"])) or not _EXECUTABLE.match(str(block["executable"])):
-        raise RecipeError(f"{service_id}: invalid version or executable")
+    if not isinstance(block, dict) or not {"version", "port", "health"} <= set(block) <= _KEYS:
+        raise RecipeError(f"{service_id}: native.windows needs version, port and health, and only known keys")
+    if {"download", "executable"} <= set(block) and not {"runtime", "model"} & set(block):
+        kind, pinned, url_rule, where = "zip", block["download"], _URL, "a GitHub release zip"
+        if not _EXECUTABLE.match(str(block["executable"])):
+            raise RecipeError(f"{service_id}: invalid executable")
+    elif {"runtime", "model"} <= set(block) and not {"download", "executable"} & set(block):
+        kind, pinned, url_rule, where = "llama-server", block["model"], _MODEL_URL, "a Hugging Face GGUF pinned to a commit"
+        if block["runtime"] != "llama-server":
+            raise RecipeError(f"{service_id}: the only runtime is llama-server")
+    else:
+        raise RecipeError(f"{service_id}: native.windows needs download and executable, or runtime and model")
+    if not isinstance(pinned, dict) or set(pinned) != {"url", "size", "sha256"}:
+        raise RecipeError(f"{service_id}: the pinned file needs exactly url, size and sha256")
+    if not isinstance(pinned["url"], str) or not url_rule.match(pinned["url"]):
+        raise RecipeError(f"{service_id}: the pinned file must be {where} over HTTPS")
+    if type(pinned["size"]) is not int or pinned["size"] < 1 or not _SHA256.match(str(pinned["sha256"])):
+        raise RecipeError(f"{service_id}: the pinned file needs a positive size and a lowercase SHA-256")
+    if not _VERSION.match(str(block["version"])):
+        raise RecipeError(f"{service_id}: invalid version")
     if type(block["port"]) is not int or not 1024 <= block["port"] <= 65535 or not _HEALTH.match(str(block["health"])):
         raise RecipeError(f"{service_id}: invalid port or health path")
     args = block.get("args", [])
@@ -58,19 +72,22 @@ def parse_recipe(service_id: str, name: str, block: object) -> dict:
     if not isinstance(env, dict) or not all(_ENV_NAME.match(str(key)) and isinstance(value, str) for key, value in env.items()):
         raise RecipeError(f"{service_id}: env must map NAME to string")
     for value in [*args, *env.values()]:
-        unknown = set(_PLACEHOLDER.findall(value)) - {"port", "data"}
+        unknown = set(_PLACEHOLDER.findall(value)) - _PLACEHOLDERS[kind]
         if unknown:
             raise RecipeError(f"{service_id}: unknown placeholder {sorted(unknown)[0]!r}")
-    return {"id": service_id, "name": name, "version": str(block["version"]), "url": download["url"],
-            "size": download["size"], "sha256": download["sha256"], "executable": block["executable"],
-            "args": list(args), "env": dict(env), "port": block["port"], "health": block["health"]}
+    return {"id": service_id, "name": name, "version": str(block["version"]), "kind": kind, "url": pinned["url"],
+            "size": pinned["size"], "sha256": pinned["sha256"], "file": pinned["url"].rsplit("/", 1)[-1],
+            "executable": block.get("executable"), "args": list(args), "env": dict(env), "port": block["port"],
+            "health": block["health"]}
 
 
-def resolve(recipe: dict, data_dir: str) -> dict:
-    """Fill {port} and {data} for one install; data_dir must be an absolute Windows path."""
-    if not PureWindowsPath(data_dir).is_absolute():
-        raise RecipeError("the app data folder must be an absolute Windows path")
-    values = {"port": str(recipe["port"]), "data": data_dir.rstrip("\\")}
+def resolve(recipe: dict, data_dir: str, bin_dir: str) -> dict:
+    """Fill the placeholders for one install; both folders must be absolute Windows paths."""
+    if not PureWindowsPath(data_dir).is_absolute() or not PureWindowsPath(bin_dir).is_absolute():
+        raise RecipeError("the app data and bin folders must be absolute Windows paths")
+    data, binaries = data_dir.rstrip("\\"), bin_dir.rstrip("\\")
+    values = {"port": str(recipe["port"]), "data": data, "model": binaries + "\\" + recipe["file"],
+              "keyfile": data + "\\api-key"}
     fill = lambda text: _PLACEHOLDER.sub(lambda match: values[match.group(1)], text)  # noqa: E731
     return {**recipe, "args": [fill(item) for item in recipe["args"]],
             "env": {key: fill(value) for key, value in recipe["env"].items()}}
@@ -90,15 +107,15 @@ def load_recipes(services_dir: Path) -> list[dict]:
 
 
 def main(argv: list[str]) -> str:
-    """list <services>: every recipe. resolve <services> <id> <data dir>: one, ready to launch."""
+    """list <services>: every recipe. resolve <services> <id> <data dir> <bin dir>: one, ready to launch."""
     if argv[:1] == ["list"] and len(argv) == 2:
         return json.dumps(load_recipes(Path(argv[1])), indent=1)
-    if argv[:1] == ["resolve"] and len(argv) == 4:
+    if argv[:1] == ["resolve"] and len(argv) == 5:
         found = [recipe for recipe in load_recipes(Path(argv[1])) if recipe["id"] == argv[2]]
         if not found:
             raise RecipeError(f"{argv[2]!r} has no native.windows recipe")
-        return json.dumps(resolve(found[0], argv[3]), indent=1)
-    raise SystemExit("usage: desktop_app_recipes.py list <services> | resolve <services> <id> <data dir>")
+        return json.dumps(resolve(found[0], argv[3], argv[4]), indent=1)
+    raise SystemExit("usage: desktop_app_recipes.py list <services> | resolve <services> <id> <data dir> <bin dir>")
 
 
 if __name__ == "__main__":

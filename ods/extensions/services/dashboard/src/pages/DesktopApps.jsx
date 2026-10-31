@@ -61,6 +61,11 @@ export default function DesktopApps() {
                   </a>
                 )}
               </div>
+              {app.apiUrl && (
+                <p className="mt-3 text-sm text-theme-text-muted">
+                  OpenAI-compatible API at <code className="rounded bg-black/30 px-1.5 py-0.5">{app.apiUrl}</code>. Its key is the <code className="rounded bg-black/30 px-1.5 py-0.5">api-key</code> file in the app's data folder.
+                </p>
+              )}
               {app.state === 'available' && (
                 <p className="mt-3 text-sm text-theme-text-muted">
                   To install, run ODS setup with <code className="rounded bg-black/30 px-1.5 py-0.5">-Apps {app.id}</code>.

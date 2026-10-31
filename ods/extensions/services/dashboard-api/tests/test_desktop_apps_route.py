@@ -56,7 +56,22 @@ def test_an_installed_app_that_answers_is_running(apps_home, monkeypatch):
         _install_marker(apps_home, "qdrant", "1.16.3")
         qdrant = next(app for app in asyncio.run(desktop_apps.desktop_apps())["apps"] if app["id"] == "qdrant")
         assert qdrant["state"] == "running" and qdrant["installedVersion"] == "1.16.3"
-        assert qdrant["url"] == f"http://127.0.0.1:{server.server_port}/"
+        assert qdrant["url"] == f"http://127.0.0.1:{server.server_port}/" and qdrant["apiUrl"] is None
+    finally:
+        server.shutdown()
+
+
+def test_a_running_llama_server_app_shows_its_api_not_a_page(apps_home, monkeypatch):
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Healthy)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        real = desktop_apps.desktop_app_recipes.load_recipes
+        monkeypatch.setattr(desktop_apps.desktop_app_recipes, "load_recipes",
+                            lambda services: [{**recipe, "port": server.server_port} for recipe in real(services) if recipe["id"] == "embeddings"])
+        _install_marker(apps_home, "embeddings", "1.5")
+        (embeddings,) = asyncio.run(desktop_apps.desktop_apps())["apps"]
+        assert embeddings["state"] == "running" and embeddings["url"] is None
+        assert embeddings["apiUrl"] == f"http://127.0.0.1:{server.server_port}/v1"
     finally:
         server.shutdown()
 

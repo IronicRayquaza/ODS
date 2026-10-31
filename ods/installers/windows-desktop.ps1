@@ -359,11 +359,15 @@ function Install-ODSDesktop {
     Write-ODSDesktopStage 7 'ODS APP' 'The ODS dashboard, chat and Portal, served on this PC only.'
     $apiPort = Install-ODSDesktopApp $paths $dist $llamaPort $settings $portal
     Write-ODSDesktopSettings $paths.Settings ([ordered]@{ Port = [long]$apiPort; ContextSize = [long]$settings.ContextSize; Device = [string]$settings.Device })
-    foreach ($app in $Apps) {
+    # Run as a script file, "-Apps a,b" arrives as one string, so split it here.
+    $requested = @($Apps | ForEach-Object { ([string]$_).Split(',') } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    foreach ($app in @($requested + @(Get-ODSDesktopInstalledExtensions) | Select-Object -Unique)) {
         # Native apps from manifest recipes (desktop-apps.ps1); each one is pinned and hash-checked.
+        # Installed ones are repaired too, so they follow this run's llama-server.
         Write-Host "         Installing the $app app (no Docker)..."
         $address = Install-ODSDesktopExtension -Id $app -AppSource $paths.AppSource `
-            -ServicesDir (Join-Path $paths.InstallDir 'extensions\services') -PythonDir $paths.Python
+            -ServicesDir (Join-Path $paths.InstallDir 'extensions\services') -PythonDir $paths.Python `
+            -LlamaServer $engine.Runtime.ExecutablePath
         Write-Host "         $app is running at $address"
     }
     $shortcuts = @()

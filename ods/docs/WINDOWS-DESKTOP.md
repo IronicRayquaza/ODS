@@ -25,7 +25,9 @@ This is an opt-in preview. `.\install.ps1` and the
   command runs in a Windows sandbox (see [Portal](#portal)). Websites it
   builds open as previews in the ODS window.
 - **Native apps** from the extension catalog where a Windows recipe exists:
-  Qdrant (vector database) today, installed with `-Apps qdrant`.
+  Qdrant (vector database, `-Apps qdrant`) and embeddings (BAAI bge-base-en-v1.5
+  on ODS's own llama-server: an OpenAI-compatible `/v1/embeddings` API behind a
+  key, `-Apps embeddings`). Each setup rerun repairs every installed app.
 - **An Apps & Features entry** to remove it, which asks before deleting your data.
 
 Not in the preview yet: switching models from the dashboard (rerun setup
@@ -70,7 +72,7 @@ again and it continues where it stopped. At the end ODS opens in its window.
 Run the same command again at any time to repair or update. It keeps your
 model, port and chats. Add `-Repair` to re-check every file hash, `-Port <n>`
 to choose the window's port, `-ContextSize <tokens>` to choose the model's
-context, `-Device gpu` to try an NVIDIA GPU (or `-Device cpu` to use none), `-NoPortal` to leave Portal out, `-Apps qdrant` to add native apps,
+context, `-Device gpu` to try an NVIDIA GPU (or `-Device cpu` to use none), `-NoPortal` to leave Portal out, `-Apps qdrant,embeddings` to add native apps,
 and `-NonInteractive` for a scripted run (it never installs prerequisites; it
 explains what is missing instead).
 
@@ -83,7 +85,7 @@ explains what is missing instead).
 | `%LOCALAPPDATA%\ODS\lemonade\portal-runtime` | The model server's plan, private key and log |
 | `%LOCALAPPDATA%\ODS\llama.cpp` | The pinned llama.cpp build |
 | `%LOCALAPPDATA%\ODS\portal` | Portal: its Node, OpenClaw, settings, logs, previews, and `workspace` (the agent's projects) |
-| `%LOCALAPPDATA%\ODS\apps\<app>` | A native app: its files, `data` and logs |
+| `%LOCALAPPDATA%\ODS\apps\<app>` | A native app: its files, `data` (for embeddings, also its `api-key`) and logs |
 
 Sign-in tasks run them, as you, with limited rights:
 `ODSLlamaServerRuntime-<your SID>` (the model), `ODSDesktopApi-<your SID>`

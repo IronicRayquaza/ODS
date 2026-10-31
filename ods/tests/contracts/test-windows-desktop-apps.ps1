@@ -32,8 +32,8 @@ try {
     Check ((Get-ODSDesktopExtensionTaskName 'qdrant' 'S-1-5-21-1-2-3-1001') -ceq 'ODSApp-qdrant-S-1-5-21-1-2-3-1001') 'the sign-in task is per app and per Windows account'
 
     # --- The download pin Save-ODSDesktopPinnedFile checks ---
-    $recipe = [pscustomobject]@{ id = 'qdrant'; name = 'Qdrant (Vector DB)'; version = '1.16.3'
-        url = 'https://github.com/qdrant/qdrant/releases/download/v1.16.3/qdrant-x86_64-pc-windows-msvc.zip'; size = 27008258
+    $recipe = [pscustomobject]@{ id = 'qdrant'; name = 'Qdrant (Vector DB)'; version = '1.16.3'; kind = 'zip'; file = 'qdrant-x86_64-pc-windows-msvc.zip'
+        url ='https://github.com/qdrant/qdrant/releases/download/v1.16.3/qdrant-x86_64-pc-windows-msvc.zip'; size = 27008258
         sha256 = 'a1159282922776a05bdeaad9e90c85d8d1ca0bc90d9e5e4add56133e15748753'; executable = 'qdrant.exe'; args = @()
         env = [pscustomobject]@{ QDRANT__SERVICE__HOST = '127.0.0.1'; QDRANT__SERVICE__HTTP_PORT = '6333' }; port = 6333; health = '/healthz' }
     $pin = New-ODSDesktopExtensionPin $recipe
@@ -47,15 +47,53 @@ try {
     Check ($launch.env.QDRANT__SERVICE__HOST -eq '127.0.0.1' -and $launch.data -ceq $paths.Data) 'the launch file keeps the loopback setting and the data folder'
     $json = ($launch | ConvertTo-Json -Depth 6) | ConvertFrom-Json
     Check ($json.args -is [array] -or $null -eq $json.args -or @($json.args).Count -eq 0) 'an empty argument list stays a list'
+    Check ((New-ODSDesktopExtensionLaunch $recipe $paths 'C:\elsewhere\llama-server.exe').executablePath -ceq (Join-Path $paths.Bin 'qdrant.exe')) 'a zip app never runs the llama-server it is handed'
+
+    # --- The llama-server kind: Desktop's own llama-server, a pinned model, a key ---
+    $embedPaths = Get-ODSDesktopExtensionPaths 'embeddings' (Join-Path $fixture 'apps [QA] O''Brien')
+    $llama = [pscustomobject]@{ id = 'embeddings'; name = 'TEI (Embeddings)'; version = '1.5'; kind = 'llama-server'; file = 'bge-base-en-v1.5-q8_0.gguf'
+        url = 'https://huggingface.co/CompendiumLabs/bge-base-en-v1.5-gguf/resolve/24914efdfa9ee54e815c3fcaa78a617031251c5c/bge-base-en-v1.5-q8_0.gguf'
+        size = 117974304; sha256 = 'ad1afe72cd6654a558667a3db10878b049a75bfd72912e1dabb91310d671173c'; executable = $null
+        args = @('-m', (Join-Path $embedPaths.Bin 'bge-base-en-v1.5-q8_0.gguf'), '--api-key-file', (Join-Path $embedPaths.Data 'api-key'))
+        env = [pscustomobject]@{}; port = 8090; health = '/health' }
+    Check ((New-ODSDesktopExtensionPin $llama).file -ceq 'bge-base-en-v1.5-q8_0.gguf') 'the model pin is named after the model file'
+    $engine = Join-Path $fixture 'llama.cpp\b9014\llama-server.exe'
+    $llamaLaunch = New-ODSDesktopExtensionLaunch $llama $embedPaths $engine
+    Check ($llamaLaunch.executablePath -ceq $engine -and $llamaLaunch.port -eq 8090) 'a llama-server app runs the llama-server setup hands it'
+    Check ((Get-Failure { $null = New-ODSDesktopExtensionLaunch $llama $embedPaths '' }) -match 'did not find it') 'a llama-server app without a llama-server is refused'
+    $null = New-Item -ItemType Directory -Force -Path $embedPaths.Data
+    New-ODSDesktopExtensionKey $embedPaths
+    $keyFile = Join-Path $embedPaths.Data 'api-key'
+    $key = [IO.File]::ReadAllText($keyFile)
+    Check ($key -cmatch '^ods-[0-9a-f]{64}$') 'setup writes a random key, one line, no newline'
+    New-ODSDesktopExtensionKey $embedPaths
+    Check ([IO.File]::ReadAllText($keyFile) -ceq $key) 'a rerun keeps the existing key'
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+        $rules = @((Get-Acl -LiteralPath $keyFile).Access)
+        Check ((Get-Acl -LiteralPath $keyFile).AreAccessRulesProtected -and -not @($rules | Where-Object { [string]$_.IdentityReference -match 'Users|Everyone|Authenticated' }).Count) 'the key file is owner-only'
+    }
+
+    # --- Which apps a setup rerun repairs ---
+    $repairRoot = Join-Path $fixture 'repair-apps'
+    foreach ($id in @('qdrant', 'embeddings', 'half-done')) { $null = New-Item -ItemType Directory -Force -Path (Join-Path $repairRoot "$id\bin") }
+    foreach ($id in @('qdrant', 'embeddings')) { [IO.File]::WriteAllText((Join-Path $repairRoot "$id\bin\ods-app.json"), '{}') }
+    $installed = @(Get-ODSDesktopInstalledExtensions $repairRoot | Sort-Object)
+    Check (($installed -join ',') -ceq 'embeddings,qdrant') 'a rerun repairs the apps that finished installing, and no others'
+    Check (@(Get-ODSDesktopInstalledExtensions (Join-Path $fixture 'none')).Count -eq 0) 'no apps folder means nothing to repair'
 
     # --- The real recipe, resolved by the shared Python reader ---
     $python = @(Get-Command python -CommandType Application -ErrorAction SilentlyContinue)
     $hasYaml = $python.Count -and ((& $python[0].Source -c 'import yaml' 2>$null) -or $LASTEXITCODE -eq 0)
     if ($hasYaml) {
         $resolved = Get-ODSDesktopExtensionRecipe (Join-Path $root 'extensions/services/dashboard-api') (Join-Path $root 'extensions/services') `
-            (Split-Path -Parent $python[0].Source) 'qdrant' $paths.Data
+            (Split-Path -Parent $python[0].Source) 'qdrant' $paths
         Check ($resolved.env.QDRANT__STORAGE__STORAGE_PATH -ceq (Join-Path $paths.Data 'storage')) 'the shipped Qdrant recipe resolves its storage into the app data folder'
-        Check ((Get-Failure { $null = Get-ODSDesktopExtensionRecipe (Join-Path $root 'extensions/services/dashboard-api') (Join-Path $root 'extensions/services') (Split-Path -Parent $python[0].Source) 'no-such-app' $paths.Data }) -match 'no usable native Windows recipe') 'an app without a recipe is refused'
+        $embed = Get-ODSDesktopExtensionRecipe (Join-Path $root 'extensions/services/dashboard-api') (Join-Path $root 'extensions/services') `
+            (Split-Path -Parent $python[0].Source) 'embeddings' $embedPaths
+        $embedArgs = @($embed.args)
+        Check ($embed.kind -ceq 'llama-server' -and $embedArgs[[array]::IndexOf($embedArgs, '-m') + 1] -ceq (Join-Path $embedPaths.Bin $embed.file)) 'the shipped embeddings recipe loads its model from the app bin folder'
+        Check ($embedArgs[[array]::IndexOf($embedArgs, '--api-key-file') + 1] -ceq (Join-Path $embedPaths.Data 'api-key')) 'the shipped embeddings recipe reads the key setup writes'
+        Check ((Get-Failure { $null = Get-ODSDesktopExtensionRecipe (Join-Path $root 'extensions/services/dashboard-api') (Join-Path $root 'extensions/services') (Split-Path -Parent $python[0].Source) 'no-such-app' $paths }) -match 'no usable native Windows recipe') 'an app without a recipe is refused'
     } else {
         Microsoft.PowerShell.Utility\Write-Host 'SKIP recipe resolution: no Python with PyYAML on PATH'
     }

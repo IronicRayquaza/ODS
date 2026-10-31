@@ -340,9 +340,24 @@
         "windows": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["version", "download", "executable", "port", "health"],
+          "required": ["version", "port", "health"],
+          "oneOf": [
+            { "required": ["download", "executable"], "not": { "anyOf": [{ "required": ["runtime"] }, { "required": ["model"] }] } },
+            { "required": ["runtime", "model"], "not": { "anyOf": [{ "required": ["download"] }, { "required": ["executable"] }] } }
+          ],
           "properties": {
             "version": { "type": "string", "pattern": "^[0-9][0-9A-Za-z.+-]{0,40}$" },
+            "runtime": { "const": "llama-server", "description": "Run ODS Desktop's pinned llama.cpp llama-server instead of a downloaded executable." },
+            "model": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["url", "size", "sha256"],
+              "properties": {
+                "url": { "type": "string", "pattern": "^https://huggingface\\.co/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/resolve/[a-f0-9]{40}/[A-Za-z0-9._-]+\\.gguf$" },
+                "size": { "type": "integer", "minimum": 1 },
+                "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+              }
+            },
             "download": {
               "type": "object",
               "additionalProperties": false,

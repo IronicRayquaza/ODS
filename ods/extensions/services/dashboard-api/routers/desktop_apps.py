@@ -48,11 +48,15 @@ async def _healthy(client: httpx.AsyncClient, port: int, path: str) -> bool:
 async def _app_state(client: httpx.AsyncClient, recipe: dict) -> dict:
     installed = _installed_version(recipe["id"])
     running = installed is not None and await _healthy(client, recipe["port"], recipe["health"])
+    address = f"http://127.0.0.1:{recipe['port']}"
+    # A llama-server app is an API behind a key, not a page to open.
+    api = recipe["kind"] == "llama-server"
     return {
         "id": recipe["id"], "name": recipe["name"], "version": recipe["version"],
         "installedVersion": installed,
         "state": "running" if running else "installed" if installed else "available",
-        "url": f"http://127.0.0.1:{recipe['port']}/" if running else None,
+        "url": f"{address}/" if running and not api else None,
+        "apiUrl": f"{address}/v1" if running and api else None,
         "installCommand": f"windows-desktop.ps1 -Apps {recipe['id']}",
     }
 

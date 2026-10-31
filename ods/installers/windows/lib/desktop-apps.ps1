@@ -7,7 +7,10 @@
 #          profile, with no Docker and no WSL. Each app gets
 #          %LOCALAPPDATA%\ODS\apps\<id> (bin, data, logs, launch.json) and one
 #          per-user sign-in task, ODSApp-<id>-<SID>, that runs
-#          desktop_app_supervisor.py on the pinned Python.
+#          desktop_app_supervisor.py on the pinned Python. Two recipe kinds:
+#          zip (a pinned release zip with its own executable) and llama-server
+#          (a pinned GGUF run by Desktop's own llama-server, behind an
+#          owner-only API key file).
 # Expects: private-file.ps1 (Write-ODSPrivateEnvFile), native-llama-runtime.ps1
 #          (Read-ODSNativeLlamaJson), desktop-portal.ps1 (Get-ODSDesktopUserSid),
 #          backend-contract.ps1 (New-ODSInteractiveScheduledTaskPrincipal),
@@ -16,7 +19,8 @@
 #          (Publish-ODSDesktopFolder)
 # Provides: Get-ODSDesktopExtensionPaths, Get-ODSDesktopExtensionTaskName,
 #           New-ODSDesktopExtensionPin, New-ODSDesktopExtensionLaunch,
-#           Install-ODSDesktopExtension, Remove-ODSDesktopExtensions
+#           Get-ODSDesktopInstalledExtensions, Install-ODSDesktopExtension,
+#           Remove-ODSDesktopExtensions
 # Modder notes: the recipe rules and placeholder resolution live in
 #   dashboard-api/desktop_app_recipes.py only; this file asks the pinned
 #   Python for a resolved recipe. App data survives uninstall unless removed.
@@ -47,48 +51,80 @@ function Get-ODSDesktopExtensionTaskName([string]$Id, [string]$UserSid = (Get-OD
 
 function New-ODSDesktopExtensionPin($Recipe) {
     # The shape Save-ODSDesktopPinnedFile checks: file, url, size, sha256.
-    return [pscustomobject]@{ file = ([string]$Recipe.url).Split('/')[-1]; url = [string]$Recipe.url
+    return [pscustomobject]@{ file = [string]$Recipe.file; url = [string]$Recipe.url
         size = [long]$Recipe.size; sha256 = [string]$Recipe.sha256 }
 }
 
-function New-ODSDesktopExtensionLaunch($Recipe, $Paths) {
+function New-ODSDesktopExtensionLaunch($Recipe, $Paths, [string]$LlamaServer) {
     <#
     .SYNOPSIS
-        launch.json for desktop_app_supervisor.py. Pure.
+        launch.json for desktop_app_supervisor.py. Pure. A llama-server
+        recipe runs Desktop's own pinned llama-server.exe.
     #>
+    if ($Recipe.kind -ceq 'llama-server') {
+        if (-not $LlamaServer) { throw "$($Recipe.name) runs on ODS Desktop's llama-server, and setup did not find it." }
+        $executable = $LlamaServer
+    } else {
+        $executable = Join-Path $Paths.Bin ([string]$Recipe.executable)
+    }
     $appEnvironment = [ordered]@{}
     foreach ($property in $Recipe.env.PSObject.Properties) { $appEnvironment[$property.Name] = [string]$property.Value }
     return [ordered]@{
-        name = [string]$Recipe.name; executablePath = Join-Path $Paths.Bin ([string]$Recipe.executable)
+        name = [string]$Recipe.name; executablePath = $executable
         args = @($Recipe.args | ForEach-Object { [string]$_ }); env = $appEnvironment; port = [int]$Recipe.port
         health = [string]$Recipe.health; data = $Paths.Data
     }
 }
 
-function Get-ODSDesktopExtensionRecipe([string]$AppSource, [string]$ServicesDir, [string]$PythonDir, [string]$Id, [string]$DataDir) {
-    $output = & (Join-Path $PythonDir 'python.exe') -I (Join-Path $AppSource 'desktop_app_recipes.py') resolve $ServicesDir $Id $DataDir
+function Get-ODSDesktopExtensionRecipe([string]$AppSource, [string]$ServicesDir, [string]$PythonDir, [string]$Id, $Paths) {
+    $output = & (Join-Path $PythonDir 'python.exe') -I (Join-Path $AppSource 'desktop_app_recipes.py') resolve $ServicesDir $Id $Paths.Data $Paths.Bin
     if ($LASTEXITCODE -ne 0) { throw "'$Id' has no usable native Windows recipe." }
     return (($output -join "`n") | ConvertFrom-Json)
 }
 
 function Install-ODSDesktopExtensionFiles($Recipe, $Paths) {
-    # A rerun with the same pinned zip keeps the unpacked files.
+    # A rerun with the same pinned file keeps what is installed.
     if ((Test-Path -LiteralPath $Paths.Marker -PathType Leaf) -and [string](Read-ODSNativeLlamaJson $Paths.Marker).Sha256 -ceq [string]$Recipe.sha256) { return }
     $download = Join-Path $env:TEMP ('ods-app-' + [guid]::NewGuid().ToString('N'))
     $null = New-Item -ItemType Directory -Path $download
     try {
-        $zip = Save-ODSDesktopPinnedFile (New-ODSDesktopExtensionPin $Recipe) $download ${function:Invoke-ODSDesktopPinnedDownload}
+        $pinned = Save-ODSDesktopPinnedFile (New-ODSDesktopExtensionPin $Recipe) $download ${function:Invoke-ODSDesktopPinnedDownload}
         Publish-ODSDesktopFolder $Paths.Bin {
             param($stage)
-            Expand-Archive -LiteralPath $zip -DestinationPath $stage
-            if (-not (Test-Path -LiteralPath (Join-Path $stage ([string]$Recipe.executable)) -PathType Leaf)) {
-                throw "The $($Recipe.name) download has no $($Recipe.executable)."
+            if ($Recipe.kind -ceq 'llama-server') {
+                # The model is the whole payload; the pin already checked it.
+                Move-Item -LiteralPath $pinned -Destination (Join-Path $stage ([string]$Recipe.file))
+            } else {
+                Expand-Archive -LiteralPath $pinned -DestinationPath $stage
+                if (-not (Test-Path -LiteralPath (Join-Path $stage ([string]$Recipe.executable)) -PathType Leaf)) {
+                    throw "The $($Recipe.name) download has no $($Recipe.executable)."
+                }
             }
             Write-ODSPrivateEnvFile -Path (Join-Path $stage 'ods-app.json') -Content (@{ Version = [string]$Recipe.version; Sha256 = [string]$Recipe.sha256 } | ConvertTo-Json -Compress)
         }
     } finally {
         Remove-Item -LiteralPath $download -Recurse -Force
     }
+}
+
+function New-ODSDesktopExtensionKey($Paths) {
+    # llama-server apps never run without a key. Owner-only, and kept across
+    # reinstalls so a client that already has it keeps working.
+    $keyFile = Join-Path $Paths.Data 'api-key'
+    if (Test-Path -LiteralPath $keyFile -PathType Leaf) { return }
+    $bytes = New-Object byte[] 32
+    $generator = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $generator.GetBytes($bytes) } finally { $generator.Dispose() }
+    Write-ODSPrivateEnvFile -Path $keyFile -Content ('ods-' + (($bytes | ForEach-Object { $_.ToString('x2') }) -join ''))
+}
+
+function Get-ODSDesktopInstalledExtensions([string]$Root = (Get-ODSDesktopExtensionRoot)) {
+    # The apps a setup rerun repairs, so a llama.cpp upgrade never leaves one
+    # pointing at a removed llama-server.exe.
+    if (-not (Test-Path -LiteralPath $Root)) { return @() }
+    return @(Get-ChildItem -LiteralPath $Root -Directory | Where-Object {
+        $_.Name -cmatch '^[a-z0-9][a-z0-9-]{0,40}$' -and (Test-Path -LiteralPath (Join-Path $_.FullName 'bin\ods-app.json') -PathType Leaf)
+    } | ForEach-Object { $_.Name })
 }
 
 function Register-ODSDesktopExtensionTask([string]$Id, $Paths, [string]$PythonDir, [string]$Supervisor) {
@@ -130,15 +166,16 @@ function Install-ODSDesktopExtension {
     .SYNOPSIS
         Install or repair one native app and start it. Returns its local address.
     #>
-    param([string]$Id, [string]$AppSource, [string]$ServicesDir, [string]$PythonDir)
+    param([string]$Id, [string]$AppSource, [string]$ServicesDir, [string]$PythonDir, [string]$LlamaServer)
     $paths = Get-ODSDesktopExtensionPaths $Id
-    $recipe = Get-ODSDesktopExtensionRecipe $AppSource $ServicesDir $PythonDir $Id $paths.Data
+    $recipe = Get-ODSDesktopExtensionRecipe $AppSource $ServicesDir $PythonDir $Id $paths
     Stop-ODSDesktopExtension $Id
     $listener = @(Get-NetTCPConnection -LocalPort ([int]$recipe.port) -State Listen -ErrorAction SilentlyContinue)
     if ($listener.Count) { throw "$($recipe.name) needs port $($recipe.port), which another program is using; nothing was stopped." }
     foreach ($folder in @($paths.Root, $paths.Data, $paths.Logs)) { $null = New-Item -ItemType Directory -Force -Path $folder }
     Install-ODSDesktopExtensionFiles $recipe $paths
-    Write-ODSPrivateEnvFile -Path $paths.Launch -Content ((New-ODSDesktopExtensionLaunch $recipe $paths) | ConvertTo-Json -Depth 6)
+    if ($recipe.kind -ceq 'llama-server') { New-ODSDesktopExtensionKey $paths }
+    Write-ODSPrivateEnvFile -Path $paths.Launch -Content ((New-ODSDesktopExtensionLaunch $recipe $paths $LlamaServer) | ConvertTo-Json -Depth 6)
     if (Test-Path -LiteralPath $paths.Ready) { Remove-Item -LiteralPath $paths.Ready -Force }
     Register-ODSDesktopExtensionTask $Id $paths $PythonDir (Join-Path $AppSource 'desktop_app_supervisor.py')
     Start-ScheduledTask -TaskName (Get-ODSDesktopExtensionTaskName $Id) -TaskPath '\'

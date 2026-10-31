@@ -63,3 +63,13 @@ def test_a_recipe_outside_the_rules_is_refused(change):
 def test_a_relative_data_folder_is_refused():
     with pytest.raises(recipes.RecipeError):
         recipes.resolve(recipes.parse_recipe("qdrant", "Qdrant", VALID), "apps\\qdrant")
+
+
+def test_the_script_lists_and_resolves_for_setup():
+    import json
+    listed = json.loads(recipes.main(["list", str(SERVICES)]))
+    assert "qdrant" in [recipe["id"] for recipe in listed]
+    resolved = json.loads(recipes.main(["resolve", str(SERVICES), "qdrant", "C:\\ODS\\apps\\qdrant\\data"]))
+    assert resolved["env"]["QDRANT__STORAGE__STORAGE_PATH"] == "C:\\ODS\\apps\\qdrant\\data\\storage"
+    with pytest.raises(recipes.RecipeError):
+        recipes.main(["resolve", str(SERVICES), "not-an-app", "C:\\x"])

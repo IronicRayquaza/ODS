@@ -6,8 +6,9 @@ Setup installs from these recipes; dashboard-api reads them for status. The
 manifest schema (extensions/schema/service-manifest.v1.json) defines the
 block; this module applies the same rules and resolves the placeholders.
 
-Run as a script, it prints every recipe as JSON for setup:
-    python -I desktop_app_recipes.py <extensions\\services folder>
+As a script (setup runs it with the pinned Python), it prints JSON:
+    python -I desktop_app_recipes.py list <extensions\\services folder>
+    python -I desktop_app_recipes.py resolve <extensions\\services folder> <id> <data folder>
 """
 from __future__ import annotations
 
@@ -88,5 +89,17 @@ def load_recipes(services_dir: Path) -> list[dict]:
     return recipes
 
 
+def main(argv: list[str]) -> str:
+    """list <services>: every recipe. resolve <services> <id> <data dir>: one, ready to launch."""
+    if argv[:1] == ["list"] and len(argv) == 2:
+        return json.dumps(load_recipes(Path(argv[1])), indent=1)
+    if argv[:1] == ["resolve"] and len(argv) == 4:
+        found = [recipe for recipe in load_recipes(Path(argv[1])) if recipe["id"] == argv[2]]
+        if not found:
+            raise RecipeError(f"{argv[2]!r} has no native.windows recipe")
+        return json.dumps(resolve(found[0], argv[3]), indent=1)
+    raise SystemExit("usage: desktop_app_recipes.py list <services> | resolve <services> <id> <data dir>")
+
+
 if __name__ == "__main__":
-    print(json.dumps(load_recipes(Path(sys.argv[1])), indent=1))
+    print(main(sys.argv[1:]))

@@ -70,7 +70,7 @@ again and it continues where it stopped. At the end ODS opens in its window.
 Run the same command again at any time to repair or update. It keeps your
 model, port and chats. Add `-Repair` to re-check every file hash, `-Port <n>`
 to choose the window's port, `-ContextSize <tokens>` to choose the model's
-context, `-NoPortal` to leave Portal out, `-Apps qdrant` to add native apps,
+context, `-Device gpu` to try an NVIDIA GPU (or `-Device cpu` to use none), `-NoPortal` to leave Portal out, `-Apps qdrant` to add native apps,
 and `-NonInteractive` for a scripted run (it never installs prerequisites; it
 explains what is missing instead).
 
@@ -173,9 +173,13 @@ Logs: `%LOCALAPPDATA%\ODS\desktop\logs` (the app),
 - **CPU threads:** llama.cpp picks its own thread count. On PCs with many
   cores it can use more threads than is fastest; a `--threads` option needs a
   change to the shared llama.cpp launcher and is discussed in RFC #7968.
-- **GPU:** only AMD Radeon GPUs, the route ODS already qualifies natively on
-  Windows. On a PC with an NVIDIA driver the NVIDIA GPU is detected first and
-  the model runs on the CPU. When llama.cpp lists no usable Vulkan device
+- **GPU:** AMD Radeon GPUs are used by default, the route ODS already
+  qualifies natively on Windows. An NVIDIA GPU is used only with `-Device gpu`:
+  llama.cpp runs over Vulkan with as many layers as the card holds, and setup
+  keeps the GPU only if the model then answers a test question correctly
+  (otherwise it says so and uses the CPU). On a 4 GB RTX 3050 Laptop GPU with
+  32K of context this measured about 2.5 times the CPU's prompt speed and twice
+  its writing speed. Without the option the model runs on the CPU. When llama.cpp lists no usable Vulkan device
   (an old driver), setup says so and uses the CPU; update the driver and run
   setup again. A rerun keeps the model and context you already have.
 - **Speed of Portal on the CPU:** the agent's instructions are about 6K

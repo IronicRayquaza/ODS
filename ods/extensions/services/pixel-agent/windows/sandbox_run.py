@@ -26,6 +26,7 @@ import ctypes as C
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -95,6 +96,19 @@ API = None
 def profile_name(user_sid):
     """One AppContainer per Windows account; the name is not a secret."""
     return 'ODS.Portal.Sandbox.' + hashlib.sha256(user_sid.encode('ascii')).hexdigest()[:24]
+
+
+# node --test runs each test file in a child process over a libuv pipe, which
+# an AppContainer cannot create, so the run hangs with no output (Phase 0
+# spike; a live demo turn on 2026-11-01). The prompt asks for
+# --experimental-test-isolation=none, a small model forgets it, and Node
+# refuses that flag in NODE_OPTIONS, so the command gets it here.
+_NODE_TEST = re.compile(r'(?i)(?<![\w.\-])(node(?:\.exe)?)(?=\s[^&|]*?(?<!\S)--test(?=\s|$))(?![^&|]*--experimental-test-isolation)')
+
+
+def with_test_isolation(command):
+    """Add --experimental-test-isolation=none to each `node ... --test` in a command line."""
+    return _NODE_TEST.sub(r'\1 --experimental-test-isolation=none', command)
 
 
 def build_command_line(command):
@@ -220,7 +234,7 @@ def wait(process, job, cancel_marker):
 def run(options):
     environment = sandbox_environment(options.workspace, options.path)
     program = os.path.join(os.environ['SystemRoot'], 'System32', 'cmd.exe')
-    command = ' '.join(options.command)
+    command = with_test_isolation(' '.join(options.command))
     cwd = options.cwd or options.workspace
     sid, _ = container_sid(options.profile)
     job = win_job.new_job(memory_bytes=JOB_MEMORY_BYTES, max_processes=JOB_MAX_PROCESSES)

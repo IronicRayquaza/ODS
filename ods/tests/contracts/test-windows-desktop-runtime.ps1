@@ -175,6 +175,36 @@ try {
     Check ((Get-Failure { New-ODSDesktopLlamaOptions $runtime $qualified 'cuda' }) -match "Unknown Desktop model route 'cuda'") 'an unknown route is refused'
     Check ($script:ODSDesktopRuntimeTaskDescriptions['gpu'] -match 'AMD GPU' -and $script:ODSDesktopRuntimeTaskDescriptions['cpu'] -match 'on the CPU') 'the sign-in task says where the model runs'
 
+    # --- GPU layer calibration (opt-in NVIDIA route) -----------------------------
+    $options = New-ODSDesktopLlamaOptions $runtime $qualified 'gpu' '24'
+    $arguments = ' ' + ((New-ODSNativeLlamaLaunchArguments $plan ([pscustomobject]$options)) -join ' ') + ' '
+    Check ($options.NGpuLayers -ceq '24' -and $arguments.Contains(' --n-gpu-layers 24 ')) 'a measured GPU split reaches llama.cpp'
+    Check ((New-ODSDesktopLlamaOptions $runtime ([pscustomobject]@{ Device = $null }) 'cpu' '24').NGpuLayers -ceq '0') 'the CPU route ignores a GPU split'
+    Check ((Get-Failure { New-ODSDesktopLlamaOptions $runtime $qualified 'gpu' 'many' }) -match 'launch options are invalid') 'a GPU split that is not auto, all or a number is refused by main''s check'
+    Check (((Get-ODSDesktopGpuLayerCandidates 33) -join ',') -ceq '33,28,23,18') 'a 33-layer model is measured at 33, 28, 23 and 18 layers'
+    Check (((Get-ODSDesktopGpuLayerCandidates 2) -join ',') -ceq '2,1') 'a tiny layer count gives distinct candidates, never zero'
+    Check ((Get-Failure { Get-ODSDesktopGpuLayerCandidates 0 }) -match 'at least one') 'a model reporting no layers is refused'
+    $offload = Get-ODSDesktopOffloadedLayers @('print_info: n_layer = 32', 'load_tensors: offloaded 13/33 layers to GPU', 'load_tensors: CPU_Mapped model buffer size')
+    Check ($offload.Offloaded -eq 13 -and $offload.Total -eq 33) 'llama.cpp''s offload line gives the layers on the GPU and the total'
+    Check ($null -eq (Get-ODSDesktopOffloadedLayers @('no offload line here'))) 'a log without the offload line gives nothing'
+    # The 2026-11-02 measurements on an RTX 3050 4 GB, Qwen3.5-4B, 32K context, 7K-token prompt.
+    $measured = @(
+        [pscustomobject]@{ Layers = 'auto'; Correct = $true; PromptTps = 564; GenTps = 6.0 },
+        [pscustomobject]@{ Layers = '33'; Correct = $false; PromptTps = 0; GenTps = 0 },
+        [pscustomobject]@{ Layers = '28'; Correct = $true; PromptTps = 131; GenTps = 12.0 },
+        [pscustomobject]@{ Layers = '23'; Correct = $true; PromptTps = 773; GenTps = 13.3 },
+        [pscustomobject]@{ Layers = '18'; Correct = $true; PromptTps = 700; GenTps = 9.1 })
+    Check ((Select-ODSDesktopGpuLayers $measured) -ceq '23') 'the fastest correct split wins; a wrong answer never does'
+    $spill = @([pscustomobject]@{ Layers = '28'; Correct = $true; PromptTps = 131; GenTps = 14.0 }, [pscustomobject]@{ Layers = '23'; Correct = $true; PromptTps = 773; GenTps = 13.3 })
+    Check ((Select-ODSDesktopGpuLayers $spill) -ceq '23') 'a split that spills into shared memory loses even when it writes a little faster'
+    Check ($null -eq (Select-ODSDesktopGpuLayers @([pscustomobject]@{ Layers = '33'; Correct = $false; PromptTps = 0; GenTps = 0 }))) 'no correct split means no measured choice'
+    Check ((New-ODSDesktopGpuCalibrationKey 'Qwen3.5-4B-Q4_K_M.gguf' 32768 'NVIDIA GeForce RTX 3050 Laptop GPU' 'b9014') -ceq 'Qwen3.5-4B-Q4_K_M.gguf|32768|NVIDIA GeForce RTX 3050 Laptop GPU|b9014') 'a saved split is tied to the model, context, GPU and llama.cpp build'
+    Check ((Get-ODSDesktopPaths 'C:\ODS\desktop').GpuCalibration -ceq 'C:\ODS\desktop\gpu-calibration.json') 'the measured split lives in the Desktop folder, so uninstall removes it'
+    # Seen live 2026-11-03: 33 layers on a 4 GB RTX 3050 could not reserve compute buffers, and main restored the previous runtime.
+    Check (Test-ODSDesktopSplitDidNotFit 'The llama.cpp runtime did not start: llama-server exited during startup with code -1073741819. It crashed (0xC0000005). The previous ODS runtime was restored and is running again.') 'a split that cannot start, with the old runtime restored, only does not fit'
+    Check (-not (Test-ODSDesktopSplitDidNotFit 'The llama.cpp runtime did not start (crash), and restoring the previous runtime also failed: access denied')) 'a failed restore is never mistaken for a split that does not fit'
+    Check (-not (Test-ODSDesktopSplitDidNotFit 'Port 8080 is in use.')) 'an unrelated failure still stops setup'
+
     # --- Who may own the model runtime -----------------------------------------
     $owner = Join-Path $fixture 'runtime-owner.json'
     Assert-ODSDesktopRuntimeTakeover ([pscustomobject]@{ Kind = 'none' }) $owner

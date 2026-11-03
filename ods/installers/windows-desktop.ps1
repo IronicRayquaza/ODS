@@ -168,10 +168,10 @@ function Install-ODSDesktopModelEngine($Existing, [string]$OwnerPath, $Recommend
     return [pscustomobject]@{ Runtime = $runtime; Qualification = $qualification; Route = $route }
 }
 
-function Start-ODSDesktopModel($Existing, $Engine, $Selection, $Paths) {
+function Start-ODSDesktopModel($Existing, $Engine, $Selection, $Paths, [string]$GpuLayers = '') {
     if ($Existing.Kind -eq 'llama-server') { $port = [int]$Existing.Selection.Port; $keep = $true }
     else { $port = Select-ODSPortalRuntimePort; $keep = $false }
-    $options = New-ODSDesktopLlamaOptions $Engine.Runtime $Engine.Qualification $Engine.Route
+    $options = New-ODSDesktopLlamaOptions $Engine.Runtime $Engine.Qualification $Engine.Route $GpuLayers
     if ($Engine.Route -eq 'gpu') { Write-ODSPortalFitWarning $Engine.Qualification.Device (Join-Path (Get-ODSPortalModelsDir) $Selection.GgufFile) }
     $plan = [ordered]@{ ExecutablePath = $Engine.Runtime.ExecutablePath; Port = $port; ModelsDir = (Get-ODSPortalModelsDir)
         ContextSize = $Selection.ContextSize; GgufFile = $Selection.GgufFile }
@@ -184,6 +184,88 @@ function Start-ODSDesktopModel($Existing, $Engine, $Selection, $Paths) {
     $previous = if ($Existing.Kind -eq 'llama-server') { Split-Path -Parent $Existing.Launch.ExecutablePath } else { '' }
     Remove-ODSNativeLlamaOldRuntimes -KeepDirectory $Engine.Runtime.Directory -PreviousDirectory $previous
     return $port
+}
+
+# About 6,300 prompt tokens: the size of one Portal turn (its own instructions
+# and tools are about 6,000), where a split that spills shows.
+$script:ODSDesktopCalibrationPrompt = ('The memory controller schedules reads and writes across banks so that row activations overlap with data transfers. ' * 350) +
+    "`n`nIgnore the text above. Write one short sentence about memory."
+
+function Measure-ODSDesktopModelSpeed([int]$Port, [string]$ApiKey) {
+    # llama.cpp's own timings for one Portal-sized turn, or $null when the
+    # server failed it (a split that does not fit can run out of memory here).
+    $body = @{ model = 'calibrate'; max_tokens = 64; temperature = 0; cache_prompt = $false
+        messages = @(@{ role = 'user'; content = $script:ODSDesktopCalibrationPrompt }) } | ConvertTo-Json -Depth 4
+    try {
+        $reply = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$Port/v1/chat/completions" -Body $body -ContentType 'application/json' `
+            -Headers @{ Authorization = "Bearer $ApiKey" } -TimeoutSec 300
+    } catch [System.Net.WebException] {
+        return $null
+    }
+    if (-not $reply.timings) { return $null }
+    return [pscustomobject]@{ PromptTps = [double]$reply.timings.prompt_per_second; GenTps = [double]$reply.timings.predicted_per_second }
+}
+
+function Invoke-ODSDesktopGpuCalibration($Engine, $Selection, $Paths) {
+    <#
+    .SYNOPSIS
+        The GPU layer count for the opt-in NVIDIA route: the one saved for the
+        same model, context, GPU and llama.cpp, or one measured now (llama.cpp's
+        'auto' first, which also reports the model's layer count, then the
+        candidates of Get-ODSDesktopGpuLayerCandidates). The model is left
+        running with the last split tried; setup then starts the chosen one.
+    #>
+    $key = New-ODSDesktopGpuCalibrationKey ([string]$Selection.GgufFile) ([long]$Selection.ContextSize) `
+        ([string]$Engine.Qualification.Device.Description) ([string]$Engine.Runtime.ReleaseTag)
+    if (Test-Path -LiteralPath $Paths.GpuCalibration -PathType Leaf) {
+        $saved = Read-ODSNativeLlamaJson $Paths.GpuCalibration
+        if ([string]$saved.Key -ceq $key -and [string]$saved.Layers -cmatch '^(auto|[0-9]{1,4})$') {
+            Write-Host "         Using the GPU split measured before: $($saved.Layers) layers on the GPU."
+            return [string]$saved.Layers
+        }
+    }
+    Write-Host '         Measuring how many model layers run best on this GPU (once; a few minutes)...'
+    $apiKey = Get-ODSPortalApiKey
+    $log = Join-Path (Get-ODSPortalRuntimeDir) 'llama-server.log'
+    $queue = [Collections.Generic.Queue[string]]::new()
+    $queue.Enqueue('auto')
+    $results = @()
+    while ($queue.Count) {
+        $layers = $queue.Dequeue()
+        try {
+            $port = Start-ODSDesktopModel (Get-ODSPortalExistingRuntime) $Engine $Selection $Paths $layers
+        } catch [System.Management.Automation.RuntimeException] {
+            # Too many layers can fail to start at all (llama.cpp cannot reserve
+            # its compute buffers). main then restores the previous runtime and
+            # says so; that split simply does not fit. Any other failure,
+            # including a failed restore, still stops setup.
+            if (-not (Test-ODSDesktopSplitDidNotFit $_.Exception.Message)) { throw }
+            $results += [pscustomobject]@{ Layers = $layers; Correct = $false; PromptTps = 0; GenTps = 0 }
+            Write-Host ("           {0,4} layers: does not fit (llama.cpp could not start with them)" -f $layers)
+            continue
+        }
+        $correct = Test-ODSDesktopModelAnswer $port $apiKey
+        $speed = if ($correct) { Measure-ODSDesktopModelSpeed $port $apiKey } else { $null }
+        $result = [pscustomobject]@{ Layers = $layers; Correct = [bool]($correct -and $speed)
+            PromptTps = $(if ($speed) { [math]::Round($speed.PromptTps, 1) } else { 0 })
+            GenTps = $(if ($speed) { [math]::Round($speed.GenTps, 1) } else { 0 }) }
+        $results += $result
+        $line = if ($result.Correct) { '{0:N0} tok/s reading, {1:N1} tok/s writing' -f $result.PromptTps, $result.GenTps } else { 'no usable answer' }
+        Write-Host ("           {0,4} layers: {1}" -f $layers, $line)
+        if ($layers -ceq 'auto') {
+            $offload = Get-ODSDesktopOffloadedLayers @(Get-Content -LiteralPath $log -Encoding UTF8)
+            if (-not $offload) { throw "llama.cpp did not report its GPU layers in $log; run setup again, or with -Device cpu." }
+            foreach ($count in (Get-ODSDesktopGpuLayerCandidates $offload.Total)) {
+                if ($count -ne $offload.Offloaded) { $queue.Enqueue([string]$count) }
+            }
+        }
+    }
+    $chosen = Select-ODSDesktopGpuLayers $results
+    if (-not $chosen) { $chosen = 'auto' }
+    $record = [ordered]@{ Key = $key; Layers = $chosen; MeasuredAt = (Get-Date).ToUniversalTime().ToString('o'); Results = $results }
+    Write-ODSPrivateEnvFile -Path $Paths.GpuCalibration -Content ($record | ConvertTo-Json -Compress -Depth 4)
+    Write-Host "         Best split: $chosen layers on the GPU (saved; setup measures again only for a new model, context, GPU or llama.cpp)."
+    return $chosen
 }
 
 function Get-ODSDesktopApiTask {
@@ -334,7 +416,12 @@ function Install-ODSDesktop {
     }
 
     Write-ODSDesktopStage 5 'START THE MODEL' 'It starts by itself whenever you sign in to Windows.'
-    $llamaPort = Start-ODSDesktopModel $existing $engine $selection $paths
+    $gpuLayers = ''
+    if ($engine.Route -eq 'gpu' -and $recommendation.Gpu.Backend -eq 'nvidia') {
+        $gpuLayers = Invoke-ODSDesktopGpuCalibration $engine $selection $paths
+        $existing = Get-ODSPortalExistingRuntime
+    }
+    $llamaPort = Start-ODSDesktopModel $existing $engine $selection $paths $gpuLayers
     if ($engine.Route -eq 'gpu' -and $recommendation.Gpu.Backend -eq 'nvidia') {
         if (Test-ODSDesktopModelAnswer $llamaPort (Get-ODSPortalApiKey)) {
             Write-Host "         The model answers correctly on $($recommendation.Gpu.Name)."

@@ -22,6 +22,9 @@
 #           Get-ODSDesktopModelDownloadBytes,
 #           Resolve-ODSDesktopContextSize, Get-ODSDesktopRecommendation,
 #           Get-ODSDesktopEngineRoute, New-ODSDesktopLlamaOptions,
+#           Get-ODSDesktopGpuLayerCandidates, Get-ODSDesktopOffloadedLayers,
+#           Select-ODSDesktopGpuLayers, Test-ODSDesktopSplitDidNotFit,
+#           New-ODSDesktopGpuCalibrationKey,
 #           Assert-ODSDesktopRuntimeTakeover, New-ODSDesktopApiEnvironment,
 #           ConvertTo-ODSDesktopEnvText, ConvertFrom-ODSDesktopEnvText,
 #           Get-ODSDesktopAppFiles, Publish-ODSDesktopFolder,
@@ -79,6 +82,7 @@ function Get-ODSDesktopPaths([string]$Root = (Join-Path $env:LOCALAPPDATA 'ODS\d
         Ownership = Join-Path $Root 'api-ownership.json'
         Ready = Join-Path $Root 'api-ready.json'
         RuntimeOwner = Join-Path $Root 'runtime-owner.json'
+        GpuCalibration = Join-Path $Root 'gpu-calibration.json'
         StartPage = Join-Path $Root 'open.html'
         Icon = Join-Path $Root 'ods.ico'
     }
@@ -330,19 +334,81 @@ function Get-ODSDesktopEngineRoute($Recommendation, $Qualification) {
     return 'cpu'
 }
 
-function New-ODSDesktopLlamaOptions($Runtime, $Qualification, [string]$Route) {
+function New-ODSDesktopLlamaOptions($Runtime, $Qualification, [string]$Route, [string]$GpuLayers = '') {
     # main's Vulkan options: the qualified device with the layers llama.cpp
-    # fits ('auto'), or the explicit CPU route: --device none and no GPU
-    # layers, never llama.cpp's silent fallback.
+    # fits ('auto') or a measured count (-GpuLayers, see
+    # Select-ODSDesktopGpuLayers), or the explicit CPU route: --device none
+    # and no GPU layers, never llama.cpp's silent fallback.
     $options = New-ODSPortalRuntimeOptions $Runtime $Qualification
     if ($Route -ceq 'cpu') {
         $options.Device = 'none'
         $options.NGpuLayers = '0'
     } elseif ($Route -cne 'gpu' -or -not $Qualification.Device) {
         throw "Unknown Desktop model route '$Route', or the GPU route without a qualified Vulkan device."
+    } elseif ($GpuLayers) {
+        $options.NGpuLayers = $GpuLayers
     }
     Assert-ODSNativeLlamaOptions ([pscustomobject]$options)
     return $options
+}
+
+# --- GPU layer calibration (opt-in NVIDIA route) ------------------------------
+# llama.cpp's 'auto' keeps about 1 GiB of video memory free, which on a 4 GB
+# card puts only 13 of Qwen3.5-4B's 33 layers on the GPU (measured: 6 tok/s
+# writing on a 7K-token prompt, against 13 at 24 layers). Too many layers do
+# not fail either: Vulkan spills into shared memory and reading a prompt gets
+# several times slower (27 layers: 131 tok/s instead of 773). So setup
+# measures a few splits once, on a Portal-sized prompt, and keeps the fastest
+# correct one.
+
+$script:ODSDesktopGpuLayerFractions = @(1.0, 0.85, 0.7, 0.55)
+
+function Get-ODSDesktopGpuLayerCandidates([int]$Total) {
+    # Pure: the layer counts to measure, most first.
+    if ($Total -lt 1) { throw "The model reported $Total layers; a GPU split needs at least one." }
+    $counts = foreach ($fraction in $script:ODSDesktopGpuLayerFractions) { [int][math]::Max(1, [math]::Round($Total * $fraction)) }
+    return @($counts | Select-Object -Unique)
+}
+
+function Get-ODSDesktopOffloadedLayers([string[]]$LogLines) {
+    # Pure: llama.cpp's "offloaded N/T layers to GPU" line, or $null.
+    foreach ($line in $LogLines) {
+        if ($line -match 'offloaded ([0-9]+)/([0-9]+) layers to GPU') {
+            return [pscustomobject]@{ Offloaded = [int]$Matches[1]; Total = [int]$Matches[2] }
+        }
+    }
+    return $null
+}
+
+function Select-ODSDesktopGpuLayers([object[]]$Results) {
+    <#
+    .SYNOPSIS
+        Pure: from measured runs ({ Layers; Correct; PromptTps; GenTps }), the
+        Layers of the fastest writer among correct runs whose prompt reading
+        did not collapse (at least half the best reading speed, which rules out
+        a split spilling into shared memory). $null when none qualifies.
+    #>
+    $good = @($Results | Where-Object { $_.Correct -and $_.GenTps -gt 0 -and $_.PromptTps -gt 0 })
+    if (-not $good.Count) { return $null }
+    $bestRead = ($good | Measure-Object -Property PromptTps -Maximum).Maximum
+    $healthy = @($good | Where-Object { $_.PromptTps -ge ($bestRead / 2) })
+    $winner = $healthy | Sort-Object -Property @{ Expression = 'GenTps'; Descending = $true }, @{ Expression = 'PromptTps'; Descending = $true } |
+        Select-Object -First 1
+    return [string]$winner.Layers
+}
+
+function Test-ODSDesktopSplitDidNotFit([string]$Message) {
+    # Pure: main's cutover failure for a runtime that did not start while the
+    # previous one was restored (wsl-portal-amd.ps1). A failed restore has a
+    # different message and is never treated as "does not fit".
+    return $Message.StartsWith('The llama.cpp runtime did not start: ', [StringComparison]::Ordinal) -and
+        $Message.Contains('The previous ODS runtime was restored and is running again.')
+}
+
+function New-ODSDesktopGpuCalibrationKey([string]$GgufFile, [long]$ContextSize, [string]$Device, [string]$ReleaseTag) {
+    # Pure: a measured split is reused only for the same model, context, GPU
+    # and llama.cpp build; anything else measures again.
+    return (@($GgufFile, [string]$ContextSize, $Device, $ReleaseTag) -join '|')
 }
 
 function Assert-ODSDesktopRuntimeTakeover($Existing, [string]$OwnerPath) {

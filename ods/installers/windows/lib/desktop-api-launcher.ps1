@@ -15,7 +15,8 @@
 #          (ConvertFrom-ODSDesktopEnvText). setup copies all of them beside
 #          launch-api.ps1, so the task never runs from a checkout.
 # Provides: Get-ODSDesktopApiOwnedTree, Stop-ODSDesktopApi,
-#           New-ODSDesktopApiArguments, Invoke-ODSDesktopApi
+#           New-ODSDesktopApiArguments, Test-ODSDesktopModelNeedsRestart,
+#           Repair-ODSDesktopModelTask, Invoke-ODSDesktopApi
 # Modder notes: a recorded PID is trusted only while its executable path and
 #   start time still match; Windows reuses PIDs, and a reused one belongs to
 #   someone else. pythonw.exe needs stdout and stderr redirected: without a
@@ -23,6 +24,15 @@
 # ============================================================================
 
 $script:ODSDesktopApiStartupSeconds = 90
+# main's model task runs powershell.exe from the task (main checks that
+# command line, so Desktop cannot route it through conhost --headless like its
+# own task). With Windows Terminal as the default terminal that task opens a
+# window at sign-in, and closing it ends the task with STATUS_CONTROL_C_EXIT.
+# While the app runs, the launcher restarts the model task after exactly that
+# exit, never after a stop main's model controller made.
+$script:ODSDesktopConsoleClosedExit = [uint32]3221225786   # 0xC000013A
+$script:ODSDesktopModelWatchSeconds = 30
+$script:ODSDesktopModelRestartLimit = 5
 
 function Get-ODSDesktopApiOwnedTree([string]$OwnershipPath) {
     <#
@@ -93,6 +103,48 @@ function Wait-ODSDesktopApiHealth([int]$Port, $Process, [string]$ErrorLog, [int]
     throw ("The ODS app did not answer within $Seconds seconds." + (Get-ODSDesktopLogTail $ErrorLog))
 }
 
+function Test-ODSDesktopModelNeedsRestart([bool]$Wanted, [string]$State, [uint32]$LastResult) {
+    # Pure: restart only a wanted model task that a closed console window
+    # ended; a stopped, disabled or running task is left alone.
+    return $Wanted -and $State -cin @('Ready', 'Queued') -and $LastResult -eq $script:ODSDesktopConsoleClosedExit
+}
+
+function Repair-ODSDesktopModelTask($Paths) {
+    <#
+    .SYNOPSIS
+        Restarts main's model task when Test-ODSDesktopModelNeedsRestart says
+        so. Returns $true when it started the task.
+    #>
+    if (-not (Test-Path -LiteralPath $Paths.RuntimeOwner -PathType Leaf)) { return $false }
+    $owner = Read-ODSNativeLlamaJson $Paths.RuntimeOwner
+    $task = @(Get-ScheduledTask -TaskName ([string]$owner.Task) -TaskPath '\' -ErrorAction SilentlyContinue)
+    if ($task.Count -ne 1) { return $false }
+    $wanted = Test-ODSNativeLlamaWanted (Join-Path ([string]$owner.RuntimeDir) 'intent.json')
+    $info = $task[0] | Get-ScheduledTaskInfo
+    if (-not (Test-ODSDesktopModelNeedsRestart $wanted ([string]$task[0].State) ([uint32]$info.LastTaskResult))) { return $false }
+    Start-ScheduledTask -TaskName ([string]$owner.Task) -TaskPath '\'
+    return $true
+}
+
+function Wait-ODSDesktopApiExit($Process, $Paths) {
+    # Waits for the app to exit, checking the model task every 30 seconds.
+    $restarts = 0
+    while (-not $Process.WaitForExit($script:ODSDesktopModelWatchSeconds * 1000)) {
+        if ($restarts -ge $script:ODSDesktopModelRestartLimit) { continue }
+        try {
+            if (Repair-ODSDesktopModelTask $Paths) {
+                $restarts++
+                Add-Content -LiteralPath (Join-Path $Paths.Logs 'launch-api.log') -Encoding UTF8 `
+                    -Value ('{0:o} Restarted the model task after its console window was closed ({1} of {2}).' -f (Get-Date), $restarts, $script:ODSDesktopModelRestartLimit)
+            }
+        } catch [Microsoft.Management.Infrastructure.CimException] {
+            # Task Scheduler unavailable for a moment: the next check retries.
+            Add-Content -LiteralPath (Join-Path $Paths.Logs 'launch-api.log') -Encoding UTF8 `
+                -Value ('{0:o} Model task check failed (non-fatal): {1}' -f (Get-Date), $_.Exception.Message)
+        }
+    }
+}
+
 function Invoke-ODSDesktopApi($Paths) {
     <#
     .SYNOPSIS
@@ -132,7 +184,7 @@ function Invoke-ODSDesktopApi($Paths) {
         }
         $ready = [ordered]@{ ProcessId = $child.Id; Port = $port; StartedAt = $child.StartTime.ToUniversalTime().ToString('o') }
         Write-ODSPrivateEnvFile -Path $Paths.Ready -Content ($ready | ConvertTo-Json -Compress)
-        $child.WaitForExit()
+        Wait-ODSDesktopApiExit $child $Paths
         return $child.ExitCode
     } finally {
         $child.Dispose()

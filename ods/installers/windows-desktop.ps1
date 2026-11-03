@@ -212,7 +212,8 @@ function Publish-ODSDesktopLauncher($Paths) {
 function Register-ODSDesktopApiTask($Paths) {
     $shell = Get-Command pwsh.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     $shellPath = if ($shell) { $shell.Source } else { 'powershell.exe' }
-    $action = New-ScheduledTaskAction -Execute $shellPath -Argument (Get-ODSDesktopApiLauncherArguments $Paths) -WorkingDirectory $Paths.Launcher
+    $action = New-ScheduledTaskAction -Execute (Get-ODSDesktopConsoleHost) -Argument (Get-ODSDesktopApiLauncherArguments $Paths $shellPath) `
+        -WorkingDirectory $Paths.Launcher
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User (Get-ODSPortalUserSid)
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) `
         -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)

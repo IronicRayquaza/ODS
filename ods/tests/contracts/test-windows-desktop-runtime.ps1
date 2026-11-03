@@ -263,7 +263,17 @@ try {
     # --- Commands and shortcuts -------------------------------------------------
     Check ((Format-ODSDesktopCommand 'C:\Users\A B\ods\installers\windows-desktop.ps1' '-Repair') -ceq
         'powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\A B\ods\installers\windows-desktop.ps1" -Repair') 'printed commands run under the default execution policy'
-    Check ((Get-ODSDesktopApiLauncherArguments $paths) -ceq ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $paths.LauncherScript + '"')) 'the sign-in task runs the copied launcher hidden and policy-independent'
+    Check ((Get-ODSDesktopApiLauncherArguments $paths 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe') -ceq
+        ('--headless "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "' + $paths.LauncherScript + '"')) 'the sign-in task runs the copied launcher policy-independent under a headless console host'
+    Check ((Get-ODSDesktopConsoleHost) -ieq (Join-Path ([Environment]::GetFolderPath('System')) 'conhost.exe')) 'the console host is the system conhost.exe, never one found on PATH'
+    Check ((Get-Failure { Get-ODSDesktopApiLauncherArguments $paths '' }) -match 'needs a PowerShell path') 'the launcher arguments need a shell'
+    # The model task is restarted only after a closed console window ended it.
+    $closed = [uint32]3221225786
+    Check (Test-ODSDesktopModelNeedsRestart $true 'Ready' $closed) 'a wanted model task killed by a closed console window is restarted'
+    Check (-not (Test-ODSDesktopModelNeedsRestart $true 'Running' $closed)) 'a running model task is left alone'
+    Check (-not (Test-ODSDesktopModelNeedsRestart $false 'Ready' $closed)) 'a model the user turned off stays off'
+    Check (-not (Test-ODSDesktopModelNeedsRestart $true 'Disabled' $closed)) 'a disabled task (uninstall) is left alone'
+    Check (-not (Test-ODSDesktopModelNeedsRestart $true 'Ready' ([uint32]0)) -and -not (Test-ODSDesktopModelNeedsRestart $true 'Ready' ([uint32]0x41306))) 'a clean exit or a stop by the model controller is never undone'
     $arguments = New-ODSDesktopApiArguments $paths.AppSource 3101
     Check ($arguments -ceq ('-m uvicorn --app-dir "' + $paths.AppSource + '" main:app --host 127.0.0.1 --port 3101 --log-level warning --no-access-log')) 'uvicorn binds 127.0.0.1 with --app-dir (the ._pth makes Python isolated)'
     Check ((Get-Failure { New-ODSDesktopApiArguments 'C:\a"b' 3101 }) -match 'cannot be passed') 'a path that would break quoting is refused'

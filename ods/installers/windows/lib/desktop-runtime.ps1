@@ -512,8 +512,19 @@ function Format-ODSDesktopCommand([string]$Script, [string]$Arguments = '') {
     return $command
 }
 
-function Get-ODSDesktopApiLauncherArguments($Paths) {
-    return ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $Paths.LauncherScript + '"')
+function Get-ODSDesktopConsoleHost {
+    return (Join-Path ([Environment]::GetFolderPath('System')) 'conhost.exe')
+}
+
+function Get-ODSDesktopApiLauncherArguments($Paths, [string]$Shell) {
+    # The task runs conhost --headless <shell>, not the shell itself. With
+    # Windows Terminal as the default terminal ("Let Windows decide" on
+    # Windows 11), a console program started at sign-in opens in a Terminal
+    # window that -WindowStyle Hidden cannot hide; closing that window ends
+    # the launcher with 0xC000013A before the app starts. A headless console
+    # host never gets a window.
+    if (-not $Shell) { throw 'The ODS app launcher needs a PowerShell path.' }
+    return ('--headless "' + $Shell + '" -NoProfile -ExecutionPolicy Bypass -File "' + $Paths.LauncherScript + '"')
 }
 
 # The ODS window opens this page first. At sign-in the app needs a few

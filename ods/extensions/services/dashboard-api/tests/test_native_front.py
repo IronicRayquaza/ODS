@@ -161,6 +161,36 @@ def test_portal_previews_need_the_dashboard_sign_in_like_any_api(preview_app):
     assert get(gate, f"/pixel-preview/{SITE}/index.html", client=("192.168.1.20", 50123), headers=session).status_code == 200
 
 
+# What a sandboxed preview page (CSP sandbox without allow-same-origin) sends
+# for its own files: no cookie, Sec-Fetch-Site cross-site, and Origin null on
+# CORS-mode loads such as fonts. Every multi-file site needs these.
+@pytest.mark.parametrize("headers", [
+    {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Dest": "script"},
+    {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "font", "Origin": "null"},
+])
+def test_a_sandboxed_preview_page_can_load_its_own_files(preview_app, headers):
+    gate, seen = preview_app
+    response = get(gate, f"/pixel-preview/{SITE}/index.html", headers=headers)
+    assert response.status_code == 200 and response.content == b"<h1>game</h1>"
+    # The API keeps the stricter browser rule for the same request.
+    assert refused(get(gate, "/api/echo", headers=headers))
+
+
+@pytest.mark.parametrize("headers", [
+    {"Host": "evil.example:3101", "Sec-Fetch-Site": "cross-site"},      # DNS rebinding
+    {"X-Forwarded-For": "203.0.113.9", "Sec-Fetch-Site": "cross-site"},  # a proxy in front of localhost
+    {"Via": "1.1 tailscale"},
+])
+def test_previews_still_refuse_rebinding_and_proxied_requests(preview_app, headers):
+    gate, seen = preview_app
+    assert refused(get(gate, f"/pixel-preview/{SITE}/index.html", headers=headers)) and not seen
+
+
+def test_previews_accept_only_reads(preview_app):
+    gate, seen = preview_app
+    assert get(gate, f"/pixel-preview/{SITE}/index.html", method="POST").status_code == 404 and not seen
+
+
 @pytest.mark.parametrize("path", [
     f"/pixel-preview/{SITE}/%2e%2e/%2e%2e/v1/models", f"/pixel-preview/{SITE}/a%2fb", f"/pixel-preview/{SITE}/a%5cb",
     "/pixel-preview/not-a-site/index.html", "/pixel-preview/",

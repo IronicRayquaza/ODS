@@ -8,7 +8,10 @@ that boundary. It ports the stricter twin of nginx's gate, the Vite dev gate
 from a loopback peer, with a loopback Host naming this listener's port, no
 forwarding headers, no duplicated Host/Origin/Sec-Fetch-Site, and a same-origin
 (or absent) Origin and Sec-Fetch-Site. A page on another website that sends a
-request to localhost is therefore never trusted.
+request to localhost is therefore never trusted. Portal previews (read-only
+GET/HEAD under /pixel-preview/) use nginx's own rule instead, without the
+Origin and Sec-Fetch-Site checks, because a sandboxed preview page loads its
+own files as a cross-site, cookieless request.
 """
 
 from __future__ import annotations
@@ -77,23 +80,35 @@ def _loopback_peer(scope: Scope) -> bool:
     return len(parts) == 4 and parts[0] == "127" and all(part.isdigit() for part in parts)
 
 
-def trusted_local(scope: Scope) -> bool:
-    """Pure: the dev-api-access.js localRequest() rules for an ASGI scope."""
+def _local_listener(scope: Scope) -> Optional[tuple[dict[str, str], re.Match[str]]]:
+    """Pure: a loopback peer naming this listener directly with no proxy in
+    between, nginx's $ods_trusted_local. Returns the headers and the Host
+    match, or None."""
     if not _loopback_peer(scope):
-        return False
+        return None
     server = scope.get("server")
     headers = [(name.decode("latin-1").lower(), value.decode("latin-1")) for name, value in scope["headers"]]
     counts: dict[str, int] = {}
     for name, _ in headers:
         counts[name] = counts.get(name, 0) + 1
     if any(counts.get(name, 0) > 1 for name in ("host", "origin", "sec-fetch-site")):
-        return False
+        return None
     if any(name in ("forwarded", "via", "x-real-ip") or name.startswith("x-forwarded-") for name, _ in headers):
-        return False
+        return None
     values = dict(headers)
     authority = _LOOPBACK_HOST.match(values.get("host", ""))
     if not authority or not server or int(authority.group(2) or 80) != server[1]:
+        return None
+    return values, authority
+
+
+def trusted_local(scope: Scope) -> bool:
+    """Pure: the dev-api-access.js localRequest() rules for an ASGI scope."""
+    listener = _local_listener(scope)
+    if listener is None:
         return False
+    values, authority = listener
+    server = scope["server"]
     site = values.get("sec-fetch-site")
     if site is not None and site not in ("same-origin", "none"):
         return False
@@ -138,7 +153,12 @@ class DashboardGate:
         if self.preview is None or scope["type"] != "http" or scope["method"] not in ("GET", "HEAD") or not match:
             await Response(status_code=404)(scope, receive, send)
             return
-        if not (trusted_local(scope) or session_is_valid(_session_cookie(scope))):
+        # nginx's rule, not the stricter API one: a preview runs in a CSP
+        # sandbox without allow-same-origin, so the browser sends its own
+        # script, style and image requests as Sec-Fetch-Site: cross-site
+        # with no cookie. Requiring same-origin here broke every
+        # multi-file site. This route only reads published snapshots.
+        if not (_local_listener(scope) is not None or session_is_valid(_session_cookie(scope))):
             await Response(_SIGN_IN_BODY, status_code=401, media_type="application/json",
                            headers={"X-ODS-Sign-In": "required", "Cache-Control": "no-store"})(scope, receive, send)
             return

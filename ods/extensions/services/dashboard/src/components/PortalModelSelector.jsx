@@ -63,13 +63,16 @@ export default function PortalModelSelector(props) {
     && (!props.runtimeFingerprint || props.runtimeFingerprint===lastLabel.current.value?.fingerprint)
       ?lastLabel.current.value:null
   const unverified=props.availability==='available' && !confirmedSource && !props.activeModel
-  const qualifier=unverified?'unverified':'unavailable'
+  // Unavailable means Portal itself did not answer; the model may be fine, so
+  // the chip names Portal rather than the model.
+  const qualifier=unverified?'unverified':'Portal unavailable'
   const notice=unverified?'Model selection is not currently verified.':'Portal is unavailable. Model selection is not currently verified.'
+  const plainLabel=unverified?'Model unverified':'Portal unavailable'
   const unavailableLabel=props.availability==='unavailable' || unverified?{
-    text:remembered?`${modelDisplayName(remembered.model,true)} · ${qualifier}`:`Model ${qualifier}`,
+    text:remembered?`${modelDisplayName(remembered.model,true)} · ${qualifier}`:plainLabel,
     model:remembered?modelDisplayName(remembered.model,true):null,
     qualifier,notice,
-    label:remembered?`Last confirmed model: ${modelDisplayName(remembered.model,true)}; ${unverified?'model unverified':'Portal unavailable'}`:`Model ${qualifier}`,
+    label:remembered?`Last confirmed model: ${modelDisplayName(remembered.model,true)}; ${unverified?'model unverified':'Portal unavailable'}`:plainLabel,
     title:remembered?`Last confirmed model: ${modelDisplayName(remembered.model)}. ${notice}`:notice,
   }:null
   // Remember only which reads to suppress, even before the first menu opening.

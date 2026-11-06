@@ -898,7 +898,7 @@ describe('Pixel', () => {
     await act(async()=>{})
     expect(screen.getByText('Degraded')).toBeInTheDocument()
     expect(screen.getByRole('textbox')).toBeDisabled()
-    fireEvent.click(screen.getByRole('button',{name:'Model unavailable'}))
+    fireEvent.click(screen.getByRole('button',{name:'Portal unavailable'}))
     await act(async()=>{})
     const localReads = () => fetch.mock.calls.filter(([url])=>url.startsWith('/api/models')).length
     expect(localReads()).toBeGreaterThan(0)

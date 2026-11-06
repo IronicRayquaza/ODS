@@ -45,7 +45,7 @@ $script:ODSDesktopFreeSpaceHeadroomGB = 1.5
 $script:ODSDesktopLaunchScript = @'
 $ErrorActionPreference = 'Stop'
 try {
-    foreach ($name in @('native-llama-runtime.ps1', 'desktop-python.ps1', 'desktop-runtime.ps1', 'desktop-api-launcher.ps1')) {
+    foreach ($name in @('native-llama-runtime.ps1', 'desktop-python.ps1', 'desktop-runtime.ps1', 'desktop-api-launcher.ps1', 'desktop-portal.ps1')) {
         . (Join-Path $PSScriptRoot $name)
     }
     $paths = Get-ODSDesktopPaths (Split-Path -Parent $PSScriptRoot)

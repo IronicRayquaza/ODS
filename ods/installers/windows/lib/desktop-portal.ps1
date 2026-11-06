@@ -33,7 +33,9 @@ $script:ODSDesktopPortalMinContext = 16384
 $script:ODSDesktopPortalGatewayPort = 18789
 $script:ODSDesktopPortalEdgePort = 9595
 $script:ODSDesktopPortalPreviewPort = 18791
-$script:ODSDesktopPortalReadySeconds = 150
+# Above portal_supervisor.py's STARTUP_SECONDS (300), so setup waits for the
+# supervisor's own verdict instead of giving up first.
+$script:ODSDesktopPortalReadySeconds = 330
 # The ODS and OpenClaw tools Portal offers on Windows Desktop. In Sandbox mode
 # OpenClaw hides plugin tools unless a sandbox tool policy admits them. Linux
 # appends to its rendered allow list in pixel-runtime-budget.py; Desktop uses the

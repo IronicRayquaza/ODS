@@ -23,6 +23,10 @@ function Get-Failure([scriptblock]$Action) {
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('ods-desktop-portal-' + [guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $fixture
 try {
+    $supervisorText = [IO.File]::ReadAllText((Join-Path $root 'extensions/services/pixel-agent/windows/portal_supervisor.py'))
+    $startup = [int]([regex]::Match($supervisorText, '(?m)^STARTUP_SECONDS = (\d+)\r?$').Groups[1].Value)
+    Check ($startup -ge 240) 'the supervisor gives Portal minutes to start, enough for a slow first start right after sign-in'
+    Check ($script:ODSDesktopPortalReadySeconds -gt $startup) 'setup waits longer than the supervisor, so it reports the supervisor''s own reason'
     # --- Pins: Node from the Desktop receipt, OpenClaw from the Pixel manifest ---
     $pins = Get-ODSDesktopPortalPins $root
     $manifest = [IO.File]::ReadAllText((Join-Path $root 'vendor/pixel/RELEASE-MANIFEST.json')) | ConvertFrom-Json

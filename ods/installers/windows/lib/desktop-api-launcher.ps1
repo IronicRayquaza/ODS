@@ -12,11 +12,14 @@
 #          Write-ODSPortalProcessOwnership, Read-ODSNativeLlamaJson,
 #          Test-ODSNativeLlamaWanted), private-file.ps1, desktop-python.ps1
 #          (Test-ODSDesktopPythonInstall), desktop-runtime.ps1
-#          (ConvertFrom-ODSDesktopEnvText). setup copies all of them beside
-#          launch-api.ps1, so the task never runs from a checkout.
+#          (ConvertFrom-ODSDesktopEnvText), desktop-portal.ps1
+#          (Get-ODSDesktopPortalPaths, Get-ODSDesktopPortalTaskName). setup
+#          copies all of them beside launch-api.ps1, so the task never runs
+#          from a checkout.
 # Provides: Get-ODSDesktopApiOwnedTree, Stop-ODSDesktopApi,
 #           New-ODSDesktopApiArguments, Test-ODSDesktopModelNeedsRestart,
-#           Repair-ODSDesktopModelTask, Invoke-ODSDesktopApi
+#           Repair-ODSDesktopModelTask, Test-ODSDesktopPortalNeedsRestart,
+#           Repair-ODSDesktopPortalTask, Invoke-ODSDesktopApi
 # Modder notes: a recorded PID is trusted only while its executable path and
 #   start time still match; Windows reuses PIDs, and a reused one belongs to
 #   someone else. pythonw.exe needs stdout and stderr redirected: without a
@@ -33,6 +36,12 @@ $script:ODSDesktopApiStartupSeconds = 90
 $script:ODSDesktopConsoleClosedExit = [uint32]3221225786   # 0xC000013A
 $script:ODSDesktopModelWatchSeconds = 30
 $script:ODSDesktopModelRestartLimit = 5
+# Task Scheduler does not restart a task that exits with an error: RestartCount
+# covers only a failed launch (a probe task that exits 1 ran once in 150 s,
+# 2026-11-05). Without this, a slow first start after sign-in or a crash of the
+# gateway, ingress or edge leaves Portal down until the next sign-in.
+$script:ODSDesktopPortalRestartLimit = 5
+$script:ODSDesktopTaskNeverRan = [uint32]0x41303   # SCHED_S_TASK_HAS_NOT_RUN
 
 function Get-ODSDesktopApiOwnedTree([string]$OwnershipPath) {
     <#
@@ -126,21 +135,50 @@ function Repair-ODSDesktopModelTask($Paths) {
     return $true
 }
 
+function Test-ODSDesktopPortalNeedsRestart([bool]$Wanted, [string]$State, [uint32]$LastResult) {
+    # Pure: restart a wanted Portal task that ended with an error. A clean exit
+    # (0) means its intent said stopped; a task that never ran is left to its
+    # sign-in trigger; a running, queued or disabled task is left alone.
+    return $Wanted -and $State -ceq 'Ready' -and $LastResult -ne 0 -and $LastResult -ne $script:ODSDesktopTaskNeverRan
+}
+
+function Repair-ODSDesktopPortalTask($PortalPaths) {
+    <#
+    .SYNOPSIS
+        Restarts the Portal task when Test-ODSDesktopPortalNeedsRestart says
+        so. Returns $true when it started the task.
+    #>
+    $task = @(Get-ScheduledTask -TaskName (Get-ODSDesktopPortalTaskName) -TaskPath '\' -ErrorAction SilentlyContinue)
+    if ($task.Count -ne 1) { return $false }
+    $wanted = Test-ODSNativeLlamaWanted $PortalPaths.Intent
+    $info = $task[0] | Get-ScheduledTaskInfo
+    if (-not (Test-ODSDesktopPortalNeedsRestart $wanted ([string]$task[0].State) ([uint32]$info.LastTaskResult))) { return $false }
+    Start-ScheduledTask -TaskName $task[0].TaskName -TaskPath '\'
+    return $true
+}
+
+function Write-ODSDesktopLaunchLog($Paths, [string]$Message) {
+    Add-Content -LiteralPath (Join-Path $Paths.Logs 'launch-api.log') -Encoding UTF8 -Value ('{0:o} {1}' -f (Get-Date), $Message)
+}
+
 function Wait-ODSDesktopApiExit($Process, $Paths) {
-    # Waits for the app to exit, checking the model task every 30 seconds.
-    $restarts = 0
+    # Waits for the app to exit, checking the model and Portal tasks every 30 seconds.
+    $portalPaths = Get-ODSDesktopPortalPaths (Join-Path (Split-Path -Parent $Paths.Root) 'portal')
+    $modelRestarts = 0
+    $portalRestarts = 0
     while (-not $Process.WaitForExit($script:ODSDesktopModelWatchSeconds * 1000)) {
-        if ($restarts -ge $script:ODSDesktopModelRestartLimit) { continue }
         try {
-            if (Repair-ODSDesktopModelTask $Paths) {
-                $restarts++
-                Add-Content -LiteralPath (Join-Path $Paths.Logs 'launch-api.log') -Encoding UTF8 `
-                    -Value ('{0:o} Restarted the model task after its console window was closed ({1} of {2}).' -f (Get-Date), $restarts, $script:ODSDesktopModelRestartLimit)
+            if ($modelRestarts -lt $script:ODSDesktopModelRestartLimit -and (Repair-ODSDesktopModelTask $Paths)) {
+                $modelRestarts++
+                Write-ODSDesktopLaunchLog $Paths ('Restarted the model task after its console window was closed ({0} of {1}).' -f $modelRestarts, $script:ODSDesktopModelRestartLimit)
+            }
+            if ($portalRestarts -lt $script:ODSDesktopPortalRestartLimit -and (Repair-ODSDesktopPortalTask $portalPaths)) {
+                $portalRestarts++
+                Write-ODSDesktopLaunchLog $Paths ('Restarted Portal after it stopped with an error ({0} of {1}); the reason is in {2}.' -f $portalRestarts, $script:ODSDesktopPortalRestartLimit, $portalPaths.Ready)
             }
         } catch [Microsoft.Management.Infrastructure.CimException] {
             # Task Scheduler unavailable for a moment: the next check retries.
-            Add-Content -LiteralPath (Join-Path $Paths.Logs 'launch-api.log') -Encoding UTF8 `
-                -Value ('{0:o} Model task check failed (non-fatal): {1}' -f (Get-Date), $_.Exception.Message)
+            Write-ODSDesktopLaunchLog $Paths ('Model or Portal task check failed (non-fatal): ' + $_.Exception.Message)
         }
     }
 }

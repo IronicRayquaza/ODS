@@ -304,6 +304,27 @@ try {
     Check (-not (Test-ODSDesktopModelNeedsRestart $false 'Ready' $closed)) 'a model the user turned off stays off'
     Check (-not (Test-ODSDesktopModelNeedsRestart $true 'Disabled' $closed)) 'a disabled task (uninstall) is left alone'
     Check (-not (Test-ODSDesktopModelNeedsRestart $true 'Ready' ([uint32]0)) -and -not (Test-ODSDesktopModelNeedsRestart $true 'Ready' ([uint32]0x41306))) 'a clean exit or a stop by the model controller is never undone'
+    # Portal is restarted after any error exit while it is wanted: Task Scheduler
+    # does not restart a task that exits with an error.
+    Check (Test-ODSDesktopPortalNeedsRestart $true 'Ready' ([uint32]1)) 'a wanted Portal that timed out or crashed (exit 1) is restarted'
+    Check (-not (Test-ODSDesktopPortalNeedsRestart $true 'Running' ([uint32]1))) 'a running Portal is left alone'
+    Check (-not (Test-ODSDesktopPortalNeedsRestart $true 'Queued' ([uint32]1))) 'a Portal start already queued is not started twice'
+    Check (-not (Test-ODSDesktopPortalNeedsRestart $false 'Ready' ([uint32]1))) 'a Portal the owner stopped stays stopped'
+    Check (-not (Test-ODSDesktopPortalNeedsRestart $true 'Disabled' ([uint32]1))) 'a disabled Portal task (uninstall) is left alone'
+    Check (-not (Test-ODSDesktopPortalNeedsRestart $true 'Ready' ([uint32]0)) -and -not (Test-ODSDesktopPortalNeedsRestart $true 'Ready' ([uint32]0x41303))) 'a clean Portal exit or a task that never ran is not restarted'
+    & {
+        $started = [Collections.Generic.List[string]]::new()
+        function Get-ODSDesktopPortalTaskName { 'ODSPortal-S-1-5-21-test' }
+        function Get-ScheduledTask { [pscustomobject]@{ TaskName = 'ODSPortal-S-1-5-21-test'; State = 'Ready' } }
+        function Get-ScheduledTaskInfo { [pscustomobject]@{ LastTaskResult = 1 } }
+        function Start-ScheduledTask([string]$TaskName, [string]$TaskPath) { $started.Add($TaskName) }
+        $intent = Join-Path $fixture 'portal-intent.json'
+        [IO.File]::WriteAllText($intent, '{"State":"running"}')
+        $restarted = Repair-ODSDesktopPortalTask ([pscustomobject]@{ Intent = $intent })
+        [IO.File]::WriteAllText($intent, '{"State":"stopped"}')
+        $kept = Repair-ODSDesktopPortalTask ([pscustomobject]@{ Intent = $intent })
+        Check ($restarted -and -not $kept -and $started.Count -eq 1 -and $started[0] -ceq 'ODSPortal-S-1-5-21-test') 'the launcher restarts Portal after an error exit, never one the owner stopped'
+    }
     $arguments = New-ODSDesktopApiArguments $paths.AppSource 3101
     Check ($arguments -ceq ('-m uvicorn --app-dir "' + $paths.AppSource + '" main:app --host 127.0.0.1 --port 3101 --log-level warning --no-access-log')) 'uvicorn binds 127.0.0.1 with --app-dir (the ._pth makes Python isolated)'
     Check ((Get-Failure { New-ODSDesktopApiArguments 'C:\a"b' 3101 }) -match 'cannot be passed') 'a path that would break quoting is refused'
@@ -362,7 +383,8 @@ try {
     $copied = ($entryAst.FindAll({ param($node) $node -is [Management.Automation.Language.AssignmentStatementAst] -and
         [string]$node.Left -ceq '$script:ODSDesktopLauncherLibraries' }, $true) | Select-Object -First 1).Right.Extent.Text
     $sourced = @([regex]::Matches($launch, "'([a-z-]+\.ps1)'") | ForEach-Object { $_.Groups[1].Value })
-    Check ($sourced.Count -eq 4 -and -not ($sourced | Where-Object { -not $copied.Contains("'$_'") }) -and $copied.Contains("'private-file.ps1'")) 'the sign-in launcher loads only libraries setup copies beside it'
+    Check ($sourced.Count -eq 5 -and -not ($sourced | Where-Object { -not $copied.Contains("'$_'") }) -and $copied.Contains("'private-file.ps1'")) 'the sign-in launcher loads only libraries setup copies beside it'
+    Check ($sourced -ccontains 'desktop-portal.ps1') 'the sign-in launcher loads the Portal paths it needs to restart Portal'
 } finally {
     if (Test-Path -LiteralPath $fixture) { Remove-Item -LiteralPath $fixture -Recurse -Force }
 }

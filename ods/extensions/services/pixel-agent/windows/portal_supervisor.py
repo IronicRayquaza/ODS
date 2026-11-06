@@ -8,8 +8,11 @@ It joins a kill-on-close Job Object, then starts, in order and each proven
 before the next: the preview service (a per-user named pipe for publishing,
 127.0.0.1 for serving), the OpenClaw gateway (127.0.0.1), the ingress (a
 per-user named pipe) and the Pixel edge (127.0.0.1, bearer key). The outcome goes to
-portal-ready.json for setup to wait on. When any of them exits, this
-process exits, the job ends the others, and the task restarts the set.
+portal-ready.json for setup to wait on. When any of them exits, or one does
+not start in time, this process exits with an error and the job ends the
+others. Task Scheduler does not restart a task that exits with an error (its
+RestartCount covers only a failed launch), so the app launcher restarts the
+task (desktop-api-launcher.ps1, Repair-ODSDesktopPortalTask).
 Nothing listens on anything but loopback or a named pipe.
 """
 import http.client
@@ -23,7 +26,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import win_job  # noqa: E402
 
 CREATE_NO_WINDOW = 0x08000000
-STARTUP_SECONDS = 120
+# One budget for the whole start. The gateway is the slow part: 52 s with the
+# model already loaded, and more than 120 s right after sign-in, when the model,
+# the apps and the dashboard all start at once (RTX 3050 laptop, 2026-11-05).
+# desktop-portal.ps1's ODSDesktopPortalReadySeconds must stay above this.
+STARTUP_SECONDS = 300
 
 
 def read_env_file(path):
